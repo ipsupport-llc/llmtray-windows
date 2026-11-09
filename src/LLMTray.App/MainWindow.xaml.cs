@@ -66,7 +66,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(820, 680));
+        FitToScreen();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
@@ -214,6 +214,29 @@ public sealed partial class MainWindow : Window
     }
 
     void DownloadCancel_Click(object sender, RoutedEventArgs e) => App.Current.Downloads.CancelCurrent();
+
+    /// <summary>
+    /// 820 × 760 in DIPs (AppWindow sizes in physical pixels, so at 150 %
+    /// scaling a fixed size came out a third too small), no more than the
+    /// screen's work area, centred; and a minimum size.
+    /// </summary>
+    void FitToScreen()
+    {
+        var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
+        if (scale <= 0) scale = 1;
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+        var width = (int)Math.Min(820 * scale, area.Width * 0.95);
+        var height = (int)Math.Min(760 * scale, area.Height * 0.95);
+        AppWindow.MoveAndResize(new RectInt32(area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2, width, height));
+        if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = (int)Math.Min(640 * scale, area.Width);
+            presenter.PreferredMinimumHeight = (int)Math.Min(560 * scale, area.Height);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern uint GetDpiForWindow(IntPtr hwnd);
 
     void RenderState()
     {

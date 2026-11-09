@@ -13,6 +13,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -49,7 +50,24 @@
         </InfoBar>
 
         <!-- Status and API -->
-        <Border Grid.Row="2" Padding="16" CornerRadius="8"
+        <!-- Downloads: near the top, so a short window never hides them. -->
+        <Border x:Name="DownloadPanel" Grid.Row="2" Padding="16,12" CornerRadius="8" Visibility="Collapsed"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="6" VerticalAlignment="Center">
+                    <TextBlock x:Name="DownloadText" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="DownloadProgress" Maximum="1000" />
+                </StackPanel>
+                <Button x:Name="DownloadCancel" Grid.Column="1" Content="Cancel" Click="DownloadCancel_Click" />
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Padding="16" CornerRadius="8"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
             <StackPanel Spacing="10">
@@ -74,11 +92,10 @@
         </Border>
 
         <!-- Models -->
-        <Grid Grid.Row="3" RowSpacing="8">
+        <Grid Grid.Row="4" RowSpacing="8" MinHeight="160">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid ColumnSpacing="8">
@@ -109,26 +126,14 @@
                        VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
-            <Grid x:Name="DownloadPanel" Grid.Row="2" ColumnSpacing="8" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="4" VerticalAlignment="Center">
-                    <TextBlock x:Name="DownloadText" TextWrapping="Wrap" />
-                    <ProgressBar x:Name="DownloadProgress" Maximum="1000" />
-                </StackPanel>
-                <Button x:Name="DownloadCancel" Grid.Column="1" Content="Cancel" Click="DownloadCancel_Click" />
-            </Grid>
-
-            <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
                 <Button x:Name="LoadButton" Content="Load" Click="Load_Click" IsEnabled="False" />
                 <Button x:Name="StopButton" Content="Stop" Click="Stop_Click" IsEnabled="False" />
             </StackPanel>
         </Grid>
 
         <!-- Server log -->
-        <Expander x:Name="LogExpander" Grid.Row="4" Header="Server log" HorizontalAlignment="Stretch"
+        <Expander x:Name="LogExpander" Grid.Row="5" Header="Server log" HorizontalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch" Expanding="LogExpander_Expanding" Collapsed="LogExpander_Collapsed">
             <TextBox x:Name="LogText" IsReadOnly="True" FontFamily="Consolas" FontSize="12" Height="200"
                      TextWrapping="NoWrap" AcceptsReturn="True"

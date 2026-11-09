@@ -4,7 +4,9 @@
 #   pwsh scripts/smoke.ps1 -Model <name> -Out <folder>
 param(
     [Parameter(Mandatory)][string]$Model,
-    [Parameter(Mandatory)][string]$Out
+    [Parameter(Mandatory)][string]$Out,
+    # Also download a model from Kaggle through the window, as a user would.
+    [switch]$UiDownload
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -74,6 +76,44 @@ try {
     # package finds the published betas, so the window shows the update bar.
     Start-Sleep -Seconds 5
     Save-Screenshot '4-update'
+
+    if ($UiDownload) {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $A = [System.Windows.Automation.AutomationElement]
+        $Scope = [System.Windows.Automation.TreeScope]
+        $NameProp = [System.Windows.Automation.AutomationElement]::NameProperty
+        function Find-Named($root, [string]$name) {
+            $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($NameProp, $name)))
+        }
+        $window = $A::RootElement.FindFirst($Scope::Children, (New-Object System.Windows.Automation.PropertyCondition($NameProp, 'LLMTray')))
+        (Find-Named $window 'Get models…').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 10
+        (Find-Named $window 'Kaggle').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Start-Sleep -Seconds 2
+        # The list item holding the text "Gemma 4 E2B …".
+        $all = $window.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+        $text = $all | Where-Object { $_.Current.Name -like 'Gemma 4 E2B*' } | Select-Object -First 1
+        if (-not $text) { throw 'Gemma 4 E2B is not in the download window' }
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        $item = $text
+        while ($item -and $item.Current.ControlType -ne [System.Windows.Automation.ControlType]::ListItem) { $item = $walker.GetParent($item) }
+        if (-not $item) { throw 'no list item around Gemma 4 E2B' }
+        $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Start-Sleep -Seconds 1
+        Save-Screenshot '5-kaggle-chosen'
+        (Find-Named $window 'Download').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 15
+        Save-Screenshot '6-downloading'
+        $wanted = 'gemma-4-E2B-it-qat-phone-Q4_0'
+        $deadline = (Get-Date).AddMinutes(15)
+        do {
+            Start-Sleep -Seconds 10
+            $listed = (Invoke-RestMethod "$api/v1/models").data.id
+        } until (($listed -contains $wanted) -or (Get-Date) -gt $deadline)
+        Save-Screenshot '7-downloaded'
+        if ($listed -notcontains $wanted) { throw "the Kaggle download did not finish: models are $($listed -join ', ')" }
+        Write-Host "downloaded from Kaggle through the window: $wanted"
+    }
 
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
     $streamFile = Join-Path $Out 'stream.txt'
