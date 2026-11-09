@@ -23,6 +23,20 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        // A beta must not vanish on a bug: the error goes to the log and the app goes on.
+        UnhandledException += (_, e) =>
+        {
+            try
+            {
+                var log = Path.Combine(DataFolder.Length > 0 ? DataFolder : Path.GetTempPath(), "logs", "app-errors.log");
+                Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+                File.AppendAllText(log, $"{DateTime.Now:O} {e.Exception}\n\n");
+            }
+            catch (Exception)
+            {
+            }
+            e.Handled = true;
+        };
     }
 
     public static new App Current => (App)Application.Current;

@@ -80,6 +80,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
                 token = cancel.Token;
             }
             Raise();
+            var ok = false;
             try
             {
                 long done = 0;
@@ -94,22 +95,41 @@ public sealed class DownloadQueue(ModelDownloader downloader)
                     await downloader.DownloadAsync(item, progress, token).ConfigureAwait(false);
                     done += item.Size ?? new FileInfo(item.Destination).Length;
                 }
-                lock (sync) lastDone = job.Title;
-                Completed?.Invoke(job);
+                ok = true;
             }
             catch (OperationCanceledException)
             {
                 lock (sync) lastError = $"{job.Title}: cancelled. Download it again to resume.";
             }
-            catch (Exception e) when (e is DownloadException or HttpRequestException or IOException or UnauthorizedAccessException)
+            catch (Exception e)
             {
+                // Whatever went wrong is reported; the queue goes on.
                 lock (sync) lastError = $"{job.Title}: {e.Message}";
             }
-            lock (sync)
+            finally
             {
-                current = null;
-                cancel?.Dispose();
-                cancel = null;
+                lock (sync)
+                {
+                    current = null;
+                    cancel?.Dispose();
+                    cancel = null;
+                    if (ok)
+                    {
+                        lastDone = job.Title;
+                        lastError = null;
+                    }
+                }
+            }
+            if (ok)
+            {
+                // A subscriber's failure is not the download's.
+                try
+                {
+                    Completed?.Invoke(job);
+                }
+                catch (Exception)
+                {
+                }
             }
             Raise();
         }

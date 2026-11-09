@@ -52,6 +52,16 @@ dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
    `model` field picks the model: its file name without `.gguf` (see
    `GET /v1/models`). LLMTray loads it on the first request.
 
+### Behind a corporate firewall
+
+Downloads use the Windows proxy settings and pass your Windows sign-in to
+the proxy. The window checks which source this network reaches and
+switches to it. Files come from the source's storage, not only its
+website, so these hosts must be allowed:
+
+- Hugging Face: `huggingface.co`, `cdn-lfs.hf.co`, `cas-bridge.xethub.hf.co`
+- Kaggle: `www.kaggle.com`, `storage.googleapis.com`
+
 Releases: [RELEASING.md](RELEASING.md).
 
 ## License

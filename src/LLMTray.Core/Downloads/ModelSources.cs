@@ -22,6 +22,13 @@ public interface IModelSource
     /// <summary>The files of a repository (HF: <c>publisher/repo</c>; Kaggle: <c>owner/model/framework/variation[/version]</c>).</summary>
     Task<IReadOnlyList<RemoteFile>> ListAsync(string repository, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The repository at its current version (HF: <c>repo@commit</c>; Kaggle:
+    /// <c>…/variation/N</c>), so a listing and the downloads after it agree
+    /// even if a new version is published in between.
+    /// </summary>
+    Task<string> PinAsync(string repository, CancellationToken cancellationToken);
+
     /// <summary>The download URL of one file.</summary>
     Task<Uri> FileUrlAsync(string repository, string file, CancellationToken cancellationToken);
 
@@ -55,16 +62,32 @@ public sealed class HuggingFaceSource(HttpClient http, Uri? baseUri = null) : IM
     public async Task<IReadOnlyList<RemoteFile>> ListAsync(string repository, CancellationToken cancellationToken)
     {
         var (repo, revision) = Parse(repository);
-        var url = new Uri(root, $"api/models/{Escape(repo)}/tree/{Uri.EscapeDataString(revision)}?recursive=1");
-        var json = await GetJsonAsync(http, url, cancellationToken).ConfigureAwait(false);
-        return json.AsArray()
-            .OfType<JsonObject>()
-            .Where(f => f["type"]?.GetValue<string>() == "file")
-            .Select(f => new RemoteFile(
-                f["path"]!.GetValue<string>(),
-                f["size"]?.GetValue<long>() ?? 0,
-                f["lfs"]?["oid"]?.GetValue<string>()))
-            .ToList();
+        var files = new List<RemoteFile>();
+        Uri? url = new Uri(root, $"api/models/{Escape(repo)}/tree/{Uri.EscapeDataString(revision)}?recursive=1");
+        // The tree comes in pages, linked by the Link header's rel="next".
+        while (url is not null)
+        {
+            var (json, next) = await GetJsonPageAsync(http, url, cancellationToken).ConfigureAwait(false);
+            files.AddRange(Shape(url, () => json.AsArray()
+                .OfType<JsonObject>()
+                .Where(f => f["type"]?.GetValue<string>() == "file")
+                .Select(f => new RemoteFile(
+                    f["path"]!.GetValue<string>(),
+                    f["size"]?.GetValue<long>() ?? 0,
+                    f["lfs"]?["oid"]?.GetValue<string>())).ToList()));
+            url = next;
+        }
+        return files;
+    }
+
+    public async Task<string> PinAsync(string repository, CancellationToken cancellationToken)
+    {
+        var (repo, revision) = Parse(repository);
+        if (revision.Length == 40 && revision.All(Uri.IsHexDigit)) return $"{repo}@{revision}";
+        var info = await GetJsonAsync(http, new Uri(root, $"api/models/{Escape(repo)}/revision/{Uri.EscapeDataString(revision)}"), cancellationToken)
+            .ConfigureAwait(false);
+        var sha = Shape(root, () => info["sha"]?.GetValue<string>()) ?? throw new DownloadException("Hugging Face didn't name the repository's current commit");
+        return $"{repo}@{sha}";
     }
 
     public Task<Uri> FileUrlAsync(string repository, string file, CancellationToken cancellationToken)
@@ -76,22 +99,71 @@ public sealed class HuggingFaceSource(HttpClient http, Uri? baseUri = null) : IM
 
     public string LocalFolder(string repository) => Parse(repository).Repo;
 
+    /// <summary>An API answer of an unexpected shape is reported, not thrown as a crash.</summary>
+    internal static T Shape<T>(Uri url, Func<T> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception e) when (e is InvalidOperationException or NullReferenceException or FormatException)
+        {
+            throw Errors.NotTheApi(url);
+        }
+    }
+
     internal static string Escape(string path) => string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
 
     public Task<bool> IsReachableAsync(CancellationToken cancellationToken) =>
-        Reachability.CheckAsync(http, new Uri(root, "api/models/roman220220/LFM2.5-1.2B-Instruct-GGUF-jang-imatrix"), cancellationToken);
+        Reachability.CheckAsync(http, new Uri(root, "api/models?limit=1"), cancellationToken);
 
-    internal static async Task<JsonNode> GetJsonAsync(HttpClient http, Uri url, CancellationToken cancellationToken)
+    internal static async Task<JsonNode> GetJsonAsync(HttpClient http, Uri url, CancellationToken cancellationToken) =>
+        (await GetJsonPageAsync(http, url, cancellationToken).ConfigureAwait(false)).Json;
+
+    internal static async Task<(JsonNode Json, Uri? Next)> GetJsonPageAsync(HttpClient http, Uri url, CancellationToken cancellationToken)
     {
-        using var response = await http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.GetAsync(url, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new DownloadException($"{url.Host} didn't answer in 45 s (blocked by a firewall?). Try the other source.");
+        }
+        using var owned = response;
+        Errors.ThrowIfProxyAuth(response);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             throw new DownloadException("Not found. Check the name; private repositories aren't supported.");
         }
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonNode.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false)
-            ?? throw new DownloadException("empty answer");
+        Uri? next = null;
+        if (response.Headers.TryGetValues("Link", out var links))
+        {
+            foreach (var link in links.SelectMany(l => l.Split(',')))
+            {
+                var parts = link.Split(';');
+                if (parts.Length > 1 && parts.Skip(1).Any(p => p.Trim() == "rel=\"next\""))
+                {
+                    var target = parts[0].Trim().TrimStart('<').TrimEnd('>');
+                    if (Uri.TryCreate(url, target, out var resolved) && resolved.Host == url.Host) next = resolved;
+                }
+            }
+        }
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            var json = await JsonNode.ParseAsync(stream, cancellationToken: timeout.Token).ConfigureAwait(false)
+                ?? throw Errors.NotTheApi(url);
+            return (json, next);
+        }
+        catch (JsonException)
+        {
+            throw Errors.NotTheApi(url);
+        }
     }
 }
 
@@ -127,8 +199,16 @@ public sealed class KaggleSource(HttpClient http, Uri? baseUri = null) : IModelS
     {
         if (h.Version is int v) return $"{h.Instance}/{v}";
         var info = await HuggingFaceSource.GetJsonAsync(http, new Uri(root, $"{h.Instance}/get"), cancellationToken).ConfigureAwait(false);
-        var latest = info["versionNumber"]?.GetValue<int>() ?? throw new DownloadException("Kaggle didn't say which version is current");
+        var latest = HuggingFaceSource.Shape(root, () => info["versionNumber"]?.GetValue<int>()) ?? throw new DownloadException("Kaggle didn't say which version is current");
         return $"{h.Instance}/{latest}";
+    }
+
+    public async Task<string> PinAsync(string repository, CancellationToken cancellationToken)
+    {
+        var h = Parse(repository);
+        if (h.Version is not null) return $"{h.Owner}/{h.Model}/{h.Framework}/{h.Variation}/{h.Version}";
+        var versioned = await VersionedAsync(h, cancellationToken).ConfigureAwait(false);
+        return $"{h.Owner}/{h.Model}/{h.Framework}/{h.Variation}/{versioned[(versioned.LastIndexOf('/') + 1)..]}";
     }
 
     public async Task<IReadOnlyList<RemoteFile>> ListAsync(string repository, CancellationToken cancellationToken)
@@ -140,11 +220,9 @@ public sealed class KaggleSource(HttpClient http, Uri? baseUri = null) : IModelS
         {
             var url = new Uri(root, $"{versioned}/files" + (token is null ? "" : $"?page_token={Uri.EscapeDataString(token)}"));
             var page = await HuggingFaceSource.GetJsonAsync(http, url, cancellationToken).ConfigureAwait(false);
-            foreach (var f in page["files"]?.AsArray().OfType<JsonObject>() ?? [])
-            {
-                files.Add(new RemoteFile(f["name"]!.GetValue<string>(), f["size"]?.GetValue<long>() ?? 0));
-            }
-            token = page["nextPageToken"]?.GetValue<string>();
+            files.AddRange(HuggingFaceSource.Shape(url, () => (page["files"]?.AsArray().OfType<JsonObject>() ?? [])
+                .Select(f => new RemoteFile(f["name"]!.GetValue<string>(), f["size"]?.GetValue<long>() ?? 0)).ToList()));
+            token = HuggingFaceSource.Shape(url, () => page["nextPageToken"]?.GetValue<string>());
         }
         while (!string.IsNullOrEmpty(token));
         return files;
@@ -168,6 +246,10 @@ public sealed class KaggleSource(HttpClient http, Uri? baseUri = null) : IModelS
 
 static class Reachability
 {
+    /// <summary>
+    /// Reachable: the source's API answered, whatever the status, in JSON.
+    /// A firewall's page (HTML), a proxy sign-in (407) or silence is not.
+    /// </summary>
     public static async Task<bool> CheckAsync(HttpClient http, Uri url, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -175,7 +257,8 @@ static class Reachability
         try
         {
             using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            return response.IsSuccessStatusCode;
+            return response.StatusCode != HttpStatusCode.ProxyAuthenticationRequired
+                && response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) == true;
         }
         catch (Exception e) when (e is HttpRequestException or OperationCanceledException)
         {
@@ -185,3 +268,18 @@ static class Reachability
 }
 
 public sealed class DownloadException(string message) : Exception(message);
+
+static class Errors
+{
+    public static void ThrowIfProxyAuth(HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.ProxyAuthenticationRequired)
+        {
+            throw new DownloadException("The network's proxy asks for a sign-in LLMTray can't give (only Windows sign-in is passed on). Ask IT to allow the model hosts, or use the other source.");
+        }
+    }
+
+    /// <summary>Anything but JSON from an API is a firewall or proxy page.</summary>
+    public static DownloadException NotTheApi(Uri url) =>
+        new($"{url.Host} answered with something other than its API (a firewall or proxy page?). Try the other source.");
+}

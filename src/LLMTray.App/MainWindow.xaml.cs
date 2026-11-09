@@ -127,8 +127,17 @@ public sealed partial class MainWindow : Window
 
     async void GetModels_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new DownloadDialog { XamlRoot = Content.XamlRoot };
-        await dialog.ShowAsync();
+        try
+        {
+            var dialog = new DownloadDialog { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            // Another dialog already open, or the window closing: nothing to do but say so.
+            DownloadText.Text = ex.Message;
+            DownloadPanel.Visibility = Visibility.Visible;
+        }
     }
 
     void DownloadCancel_Click(object sender, RoutedEventArgs e) => App.Current.Downloads.CancelCurrent();

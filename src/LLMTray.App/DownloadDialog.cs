@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using LLMTray.Core.Downloads;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -8,18 +9,32 @@ namespace LLMTray.App;
 /// "Get models": our models, pinned per source, or any repository's GGUF
 /// files. Hugging Face or Kaggle, since some networks reach only one.
 /// </summary>
-sealed class DownloadDialog : ContentDialog
+sealed partial class DownloadDialog : ContentDialog
 {
     readonly RadioButtons sources = new() { MaxColumns = 2 };
     readonly TextBlock reach = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly ListView featured = new() { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 300 };
     readonly TextBox repository = new();
+    readonly Button list = new() { Content = "List files" };
     readonly ListView files = new() { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 200 };
     readonly CheckBox projector = new() { Content = "Also download the vision projector (mmproj)", IsChecked = true, Visibility = Visibility.Collapsed };
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly Dictionary<DownloadSource, bool?> reachable = new() { [DownloadSource.HuggingFace] = null, [DownloadSource.Kaggle] = null };
-    IReadOnlyList<RemoteFile> listed = [];
-    string listedRepository = "";
+    /// <summary>Cancelled when the dialog closes: nothing it started touches it afterwards.</summary>
+    readonly CancellationTokenSource closed = new();
+    /// <summary>Bumped by every listing and every change that makes a listing stale.</summary>
+    int generation;
+    bool userPickedSource;
+    Listing? listing;
+
+    /// <summary>A repository's files, pinned to the version they were listed at.</summary>
+    sealed record Listing(DownloadSource Source, string Pinned, IReadOnlyList<RemoteFile> Files);
+
+    /// <summary>One model in a listing: its file, or all shards of a split model.</summary>
+    sealed record ModelChoice(string Name, IReadOnlyList<RemoteFile> Parts)
+    {
+        public long Size => Parts.Sum(p => p.Size);
+    }
 
     public DownloadDialog()
     {
@@ -40,10 +55,11 @@ sealed class DownloadDialog : ContentDialog
             RenderFeatured();
             RenderReach();
         };
+        sources.PointerPressed += (_, _) => userPickedSource = true;
+        sources.KeyDown += (_, _) => userPickedSource = true;
 
         repository.TextChanged += (_, _) => ResetCustom();
-        var list = new Button { Content = "List files" };
-        list.Click += async (_, _) => await ListFilesAsync();
+        list.Click += async (_, _) => await Guard(ListFilesAsync);
         var repoRow = new Grid { ColumnSpacing = 8 };
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -85,22 +101,44 @@ sealed class DownloadDialog : ContentDialog
         Content = new ScrollViewer { Content = panel };
 
         PrimaryButtonClick += OnDownload;
+        Closed += (_, _) => closed.Cancel();
         RenderFeatured();
         RenderReach();
-        Opened += async (_, _) => await CheckReachAsync();
+        Opened += async (_, _) => await Guard(CheckReachAsync);
     }
 
     DownloadSource Source => sources.SelectedIndex == 1 ? DownloadSource.Kaggle : DownloadSource.HuggingFace;
 
+    /// <summary>
+    /// Every async handler goes through here: a failure is shown in the
+    /// dialog, never thrown into the UI thread (which would end the app).
+    /// </summary>
+    async Task Guard(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (OperationCanceledException) when (closed.IsCancellationRequested)
+        {
+        }
+        catch (Exception e)
+        {
+            if (!closed.IsCancellationRequested) status.Text = e.Message;
+        }
+    }
+
     async Task CheckReachAsync()
     {
-        var hf = App.Current.Sources[DownloadSource.HuggingFace].IsReachableAsync(CancellationToken.None);
-        var kaggle = App.Current.Sources[DownloadSource.Kaggle].IsReachableAsync(CancellationToken.None);
+        var hf = App.Current.Sources[DownloadSource.HuggingFace].IsReachableAsync(closed.Token);
+        var kaggle = App.Current.Sources[DownloadSource.Kaggle].IsReachableAsync(closed.Token);
         reachable[DownloadSource.HuggingFace] = await hf;
         reachable[DownloadSource.Kaggle] = await kaggle;
-        // The chosen source is blocked here and the other isn't: switch.
+        if (closed.IsCancellationRequested) return;
+        // The chosen source is blocked here and the other isn't: switch,
+        // unless the user has already picked one in this dialog.
         var other = Source == DownloadSource.HuggingFace ? DownloadSource.Kaggle : DownloadSource.HuggingFace;
-        if (reachable[Source] == false && reachable[other] == true)
+        if (!userPickedSource && reachable[Source] == false && reachable[other] == true)
         {
             sources.SelectedIndex = other == DownloadSource.Kaggle ? 1 : 0;
         }
@@ -133,9 +171,11 @@ sealed class DownloadDialog : ContentDialog
 
     void ResetCustom()
     {
+        generation++;
         files.Items.Clear();
-        listed = [];
+        listing = null;
         projector.Visibility = Visibility.Collapsed;
+        list.IsEnabled = true;
         UpdatePrimary();
     }
 
@@ -143,29 +183,50 @@ sealed class DownloadDialog : ContentDialog
     {
         var repo = repository.Text.Trim();
         if (repo.Length == 0) return;
-        status.Text = "Listing files…";
         ResetCustom();
+        var mine = generation;
+        var kind = Source;
+        var source = App.Current.Sources[kind];
+        status.Text = "Listing files…";
+        list.IsEnabled = false;
         try
         {
-            listed = await App.Current.Sources[Source].ListAsync(repo, CancellationToken.None);
-            listedRepository = repo;
+            // Pinned first: the files listed are the files downloaded.
+            var pinned = await source.PinAsync(repo, closed.Token);
+            var remote = await source.ListAsync(pinned, closed.Token);
+            if (mine != generation || closed.IsCancellationRequested) return;
+            listing = new Listing(kind, pinned, remote);
         }
-        catch (Exception e) when (e is ArgumentException or DownloadException or HttpRequestException or TaskCanceledException)
+        finally
         {
-            status.Text = e.Message;
-            return;
+            if (mine == generation) list.IsEnabled = true;
         }
-        var models = listed.Where(f => f.IsGguf && !f.IsProjector).OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        foreach (var file in models)
+        var choices = Choices(listing.Files);
+        foreach (var choice in choices)
         {
-            files.Items.Add(new ListViewItem { Content = $"{file.Name}   {MainWindow.FormatSize(file.Size)}", Tag = file });
+            var parts = choice.Parts.Count > 1 ? $" ({choice.Parts.Count} parts)" : "";
+            files.Items.Add(new ListViewItem { Content = $"{choice.Name}   {MainWindow.FormatSize(choice.Size)}{parts}", Tag = choice });
         }
-        projector.Visibility = listed.Any(f => f.IsGguf && f.IsProjector) ? Visibility.Visible : Visibility.Collapsed;
-        status.Text = models.Count == 0 ? "No GGUF models in this repository." : "";
+        projector.Visibility = listing.Files.Any(f => f.IsGguf && f.IsProjector) ? Visibility.Visible : Visibility.Collapsed;
+        status.Text = choices.Count == 0 ? "No GGUF models in this repository." : "";
+    }
+
+    /// <summary>The models in a listing: single files, and split models as one choice with all their shards.</summary>
+    static List<ModelChoice> Choices(IReadOnlyList<RemoteFile> remote)
+    {
+        var models = remote.Where(f => f.IsGguf && !f.IsProjector).ToList();
+        var choices = new List<ModelChoice>();
+        foreach (var group in models.GroupBy(f => Shard().Match(f.Name) is { Success: true } m ? f.Name[..m.Index] : f.Name))
+        {
+            var parts = group.OrderBy(f => f.Name, StringComparer.Ordinal).ToList();
+            var name = parts.Count > 1 || Shard().IsMatch(parts[0].Name) ? group.Key : Path.GetFileNameWithoutExtension(parts[0].Name);
+            choices.Add(new ModelChoice(name, parts));
+        }
+        return choices.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     void UpdatePrimary() =>
-        IsPrimaryButtonEnabled = featured.SelectedItem is ListViewItem { Tag: FeaturedModel } || files.SelectedItem is ListViewItem { Tag: RemoteFile };
+        IsPrimaryButtonEnabled = featured.SelectedItem is ListViewItem { Tag: FeaturedModel } || files.SelectedItem is ListViewItem { Tag: ModelChoice };
 
     async void OnDownload(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
@@ -178,15 +239,16 @@ sealed class DownloadDialog : ContentDialog
                 args.Cancel = true;
                 return;
             }
-            if (Free(job) is long free && job.TotalSize is long need && need > free)
+            var need = StillNeeded(job);
+            if (Free(job) is long free && need > free)
             {
-                status.Text = $"Not enough disk space: {MainWindow.FormatSize(need)} needed, {MainWindow.FormatSize(free)} free.";
+                status.Text = $"Not enough disk space: {MainWindow.FormatSize(need)} more needed, {MainWindow.FormatSize(free)} free.";
                 args.Cancel = true;
                 return;
             }
             App.Current.Downloads.Enqueue(job);
         }
-        catch (Exception e) when (e is ArgumentException or DownloadException or HttpRequestException or TaskCanceledException)
+        catch (Exception e)
         {
             status.Text = e.Message;
             args.Cancel = true;
@@ -199,35 +261,39 @@ sealed class DownloadDialog : ContentDialog
 
     async Task<DownloadJob?> BuildJobAsync()
     {
-        var source = App.Current.Sources[Source];
         var root = App.Current.ModelsFolder;
+        // Building URLs is quick (no network for pinned repositories); bounded anyway.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(closed.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
         if (featured.SelectedItem is ListViewItem { Tag: FeaturedModel model })
         {
+            var source = App.Current.Sources[Source];
             var repo = model.Repository(Source);
             var items = new List<DownloadItem>();
             foreach (var f in model.Projector is { } p ? new[] { model.File, p } : [model.File])
             {
-                var url = await source.FileUrlAsync(repo, f.Name, CancellationToken.None);
-                items.Add(new DownloadItem(url, Path.Combine(root, model.Folder, f.Name), f.Size, f.Sha256));
+                var url = await source.FileUrlAsync(repo, f.Name, timeout.Token);
+                items.Add(new DownloadItem(url, Inside(root, Path.Combine(model.Folder, f.Name)), f.Size, f.Sha256, $"{repo}/{f.Name}"));
             }
             return new DownloadJob(model.Title, items);
         }
-        if (files.SelectedItem is ListViewItem { Tag: RemoteFile file })
+        if (files.SelectedItem is ListViewItem { Tag: ModelChoice choice } && listing is { } l)
         {
-            var folder = source.LocalFolder(listedRepository);
-            var chosen = new List<RemoteFile> { file };
+            var source = App.Current.Sources[l.Source];
+            var folder = source.LocalFolder(l.Pinned);
+            var chosen = choice.Parts.ToList();
             if (projector.Visibility == Visibility.Visible && projector.IsChecked == true)
             {
                 // The smallest projector: usually the q8 one, as good as f16 for vision.
-                chosen.Add(listed.Where(f => f.IsGguf && f.IsProjector).OrderBy(f => f.Size).First());
+                chosen.Add(l.Files.Where(f => f.IsGguf && f.IsProjector).OrderBy(f => f.Size).First());
             }
             var items = new List<DownloadItem>();
             foreach (var f in chosen)
             {
-                var url = await source.FileUrlAsync(listedRepository, f.Name, CancellationToken.None);
-                items.Add(new DownloadItem(url, Inside(root, Path.Combine(folder, f.Name)), f.Size > 0 ? f.Size : null, f.Sha256));
+                var url = await source.FileUrlAsync(l.Pinned, f.Name, timeout.Token);
+                items.Add(new DownloadItem(url, Inside(root, Path.Combine(folder, f.Name)), f.Size > 0 ? f.Size : null, f.Sha256, $"{l.Pinned}/{f.Name}"));
             }
-            return new DownloadJob(Path.GetFileNameWithoutExtension(file.Name), items);
+            return new DownloadJob(choice.Name, items);
         }
         return null;
     }
@@ -244,6 +310,15 @@ sealed class DownloadDialog : ContentDialog
         return full;
     }
 
+    /// <summary>Bytes still to come: files already here and partial files count as had.</summary>
+    static long StillNeeded(DownloadJob job) => job.Items.Sum(item =>
+    {
+        var size = item.Size ?? 0;
+        if (File.Exists(item.Destination) && new FileInfo(item.Destination).Length == size) return 0;
+        var part = item.Destination + ".part";
+        return File.Exists(part) ? Math.Max(0, size - new FileInfo(part).Length) : size;
+    });
+
     static long? Free(DownloadJob job)
     {
         try
@@ -256,4 +331,7 @@ sealed class DownloadDialog : ContentDialog
             return null;
         }
     }
+
+    [GeneratedRegex(@"-\d{5}-of-\d{5}\.gguf\z", RegexOptions.IgnoreCase)]
+    private static partial Regex Shard();
 }

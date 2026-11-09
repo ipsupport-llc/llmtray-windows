@@ -38,15 +38,50 @@ public sealed class DownloadTests : IAsyncDisposable
             switch (path)
             {
                 case "/hf/api/models/pub/repo/tree/main":
+                    context.Response.ContentType = "application/json";
+                    if (!context.Request.Query.ContainsKey("cursor"))
+                    {
+                        // Page one links to page two, as the real API does.
+                        context.Response.Headers["Link"] = $"<{context.Request.Path}?recursive=1&cursor=2>; rel=\"next\"";
+                        await context.Response.WriteAsync(new JsonArray(
+                            new JsonObject { ["type"] = "file", ["path"] = "m-Q4.gguf", ["size"] = Payload.Length, ["lfs"] = new JsonObject { ["oid"] = PayloadSha } },
+                            new JsonObject { ["type"] = "directory", ["path"] = "docs" }).ToJsonString());
+                        return;
+                    }
                     await context.Response.WriteAsync(new JsonArray(
-                        new JsonObject { ["type"] = "file", ["path"] = "m-Q4.gguf", ["size"] = Payload.Length, ["lfs"] = new JsonObject { ["oid"] = PayloadSha } },
-                        new JsonObject { ["type"] = "file", ["path"] = "README.md", ["size"] = 10 },
-                        new JsonObject { ["type"] = "directory", ["path"] = "docs" }).ToJsonString());
+                        new JsonObject { ["type"] = "file", ["path"] = "README.md", ["size"] = 10 }).ToJsonString());
+                    return;
+                case "/hf/api/models/pub/repo/revision/main":
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsync(new JsonObject { ["sha"] = new string('a', 40) }.ToJsonString());
+                    return;
+                case "/hf/api/models/blocked/repo/tree/main":
+                    context.Response.ContentType = "text/html";
+                    await context.Response.WriteAsync("<html>Access denied by your organization</html>");
+                    return;
+                case "/blob/wrong-range.gguf":
+                    context.Response.StatusCode = 206;
+                    context.Response.Headers.ContentRange = $"bytes 0-{Payload.Length - 1}/{Payload.Length}";
+                    await context.Response.Body.WriteAsync(Payload);
+                    return;
+                case "/blob/zipped.gguf":
+                    context.Response.ContentType = "application/zip";
+                    using (var zipped = new MemoryStream())
+                    {
+                        using (var zip = new System.IO.Compression.ZipArchive(zipped, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+                        {
+                            await using var entry = zip.CreateEntry("m-Q4.gguf").Open();
+                            await entry.WriteAsync(Payload);
+                        }
+                        await context.Response.Body.WriteAsync(zipped.ToArray());
+                    }
                     return;
                 case "/kaggle/own/mod/gguf/var/get":
+                    context.Response.ContentType = "application/json";
                     await context.Response.WriteAsync("""{"versionNumber":3}""");
                     return;
                 case "/kaggle/own/mod/gguf/var/3/files":
+                    context.Response.ContentType = "application/json";
                     await context.Response.WriteAsync(context.Request.Query.ContainsKey("page_token")
                         ? """{"files":[{"name":"mmproj-f16.gguf","size":5}],"nextPageToken":""}"""
                         : """{"files":[{"name":"m-Q4.gguf","size":300000}],"nextPageToken":"p2"}""");
@@ -81,6 +116,7 @@ public sealed class DownloadTests : IAsyncDisposable
             }
             context.Response.StatusCode = 206;
             context.Response.ContentLength = data.Length - from;
+            context.Response.Headers.ContentRange = $"bytes {from}-{data.Length - 1}/{data.Length}";
             await context.Response.Body.WriteAsync(data.AsMemory((int)from));
             return;
         }
@@ -167,6 +203,7 @@ public sealed class DownloadTests : IAsyncDisposable
         Assert.Equal(PayloadSha, files[0].Sha256);
         Assert.Equal(new Uri(baseUri, "hf/pub/repo/resolve/abc123/m-Q4.gguf"), await hf.FileUrlAsync("pub/repo@abc123", "m-Q4.gguf", CancellationToken.None));
         Assert.Equal("pub/repo", hf.LocalFolder("pub/repo@abc123"));
+        Assert.Equal($"pub/repo@{new string('a', 40)}", await hf.PinAsync("pub/repo", CancellationToken.None));
         Assert.Throws<ArgumentException>(() => hf.LocalFolder("../x"));
         Assert.Throws<ArgumentException>(() => hf.LocalFolder("just-a-name"));
     }
@@ -178,12 +215,52 @@ public sealed class DownloadTests : IAsyncDisposable
         var files = await kaggle.ListAsync("own/mod/gguf/var", CancellationToken.None);
         Assert.Equal(["m-Q4.gguf", "mmproj-f16.gguf"], files.Select(f => f.Name));
         Assert.Equal("own/mod-var", kaggle.LocalFolder("own/mod/gguf/var/3"));
+        Assert.Equal("own/mod/gguf/var/3", await kaggle.PinAsync("own/mod/gguf/var", CancellationToken.None));
 
         var url = await kaggle.FileUrlAsync("own/mod/gguf/var", "m-Q4.gguf", CancellationToken.None);
         var item = Item() with { Url = url };
         await new ModelDownloader(http).DownloadAsync(item, null, CancellationToken.None);
         Assert.Equal(Payload, await File.ReadAllBytesAsync(item.Destination));
         Assert.Throws<ArgumentException>(() => kaggle.LocalFolder("own/mod"));
+    }
+
+    [Fact]
+    public async Task AFirewallPageIsReportedNotThrownAsJson()
+    {
+        var hf = new HuggingFaceSource(http, new Uri(baseUri, "hf/"));
+        var e = await Assert.ThrowsAsync<DownloadException>(() => hf.ListAsync("blocked/repo", CancellationToken.None));
+        Assert.Contains("firewall", e.Message);
+    }
+
+    [Fact]
+    public async Task AResumeAtTheWrongPlaceStartsOver()
+    {
+        var item = Item() with { Url = new Uri(baseUri, "blob/wrong-range.gguf") };
+        Directory.CreateDirectory(Path.GetDirectoryName(item.Destination)!);
+        await File.WriteAllBytesAsync(item.Destination + ".part", Payload[..100_000]);
+        await Assert.ThrowsAsync<DownloadException>(() => new ModelDownloader(http).DownloadAsync(item, null, CancellationToken.None));
+        Assert.False(File.Exists(item.Destination + ".part"));
+    }
+
+    [Fact]
+    public async Task APartialFileFromAnotherVersionIsNotResumed()
+    {
+        var item = Item() with { Identity = "pub/repo@v2/m-Q4.gguf" };
+        Directory.CreateDirectory(Path.GetDirectoryName(item.Destination)!);
+        // Junk from "v1" that a blind resume would keep in front of v2's tail.
+        await File.WriteAllBytesAsync(item.Destination + ".part", new byte[100_000]);
+        await File.WriteAllTextAsync(item.Destination + ".part.source", "pub/repo@v1/m-Q4.gguf");
+        await new ModelDownloader(http).DownloadAsync(item, null, CancellationToken.None);
+        Assert.Equal(Payload, await File.ReadAllBytesAsync(item.Destination));
+        Assert.False(File.Exists(item.Destination + ".part.source"));
+    }
+
+    [Fact]
+    public async Task AZippedFileIsUnpacked()
+    {
+        var item = Item() with { Url = new Uri(baseUri, "blob/zipped.gguf") };
+        await new ModelDownloader(http).DownloadAsync(item, null, CancellationToken.None);
+        Assert.Equal(Payload, await File.ReadAllBytesAsync(item.Destination));
     }
 
     [Fact]
