@@ -10,6 +10,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $pins = (Get-Content (Join-Path $root 'runtime-pins.json') -Raw | ConvertFrom-Json).'llama.cpp'
 $target = Join-Path $root 'src/LLMTray.App/runtime/llama'
 if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+New-Item -ItemType Directory -Force $target | Out-Null
 $cache = Join-Path ([IO.Path]::GetTempPath()) 'llmtray-llama'
 New-Item -ItemType Directory -Force $cache | Out-Null
 

@@ -8,7 +8,8 @@ namespace LLMTray.Core.Runtime;
 public enum HostStatus { Stopped, Loading, Running, Failed }
 
 /// <summary>What the host is doing, for the window and the tray icon.</summary>
-public sealed record HostState(HostStatus Status, ModelEntry? Model, string? Backend, string? Message, int ActiveRequests)
+/// <param name="Device">The GPU it runs on, when the backend is a GPU one and the probe named it.</param>
+public sealed record HostState(HostStatus Status, ModelEntry? Model, string? Backend, string? Message, int ActiveRequests, string? Device = null)
 {
     public static readonly HostState Stopped = new(HostStatus.Stopped, null, null, null, 0);
     public bool IsBusy => Status == HostStatus.Loading || ActiveRequests > 0;
@@ -32,6 +33,8 @@ public sealed class ModelHost : IAsyncDisposable
     readonly Func<IReadOnlyList<LlamaBackend>> backends;
     readonly Func<ServerOptions> options;
     readonly string logDirectory;
+    readonly Func<LlamaBackend, Task<IReadOnlyList<GpuDevice>?>> probeDevices;
+    readonly Dictionary<string, IReadOnlyList<GpuDevice>?> probed = [];
     readonly HttpClient health = new(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(2) };
     readonly object sync = new();
     readonly SemaphoreSlim gate = new(1, 1);
@@ -43,17 +46,21 @@ public sealed class ModelHost : IAsyncDisposable
     HostStatus status = HostStatus.Stopped;
     ModelEntry? statusModel;
     string? statusBackend;
+    string? statusDevice;
     string? message;
     string? workingBackend;
 
-    sealed record Running(ModelEntry Model, LlamaBackend Backend, IChildProcess Process, Uri BaseUri, string ApiKey);
+    sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey);
 
-    public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ServerOptions> options, string logDirectory)
+    /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
+    public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ServerOptions> options, string logDirectory,
+        Func<LlamaBackend, Task<IReadOnlyList<GpuDevice>?>>? probeDevices = null)
     {
         this.launcher = launcher;
         this.backends = backends;
         this.options = options;
         this.logDirectory = logDirectory;
+        this.probeDevices = probeDevices ?? LlamaDevices.ProbeAsync;
     }
 
     /// <summary>How long a model may take to load before the attempt is given up.</summary>
@@ -157,11 +164,29 @@ public sealed class ModelHost : IAsyncDisposable
         string? lastError = null;
         foreach (var backend in ordered)
         {
+            string? device = null;
+            if (backend.Name != "cpu")
+            {
+                // Probed once per backend: a GPU build that sees no GPU is
+                // skipped for the CPU build. An unknown answer is tried.
+                if (!probed.TryGetValue(backend.Name, out var devices))
+                {
+                    devices = await probeDevices(backend).ConfigureAwait(false);
+                    probed[backend.Name] = devices;
+                }
+                if (devices is { Count: 0 })
+                {
+                    lastError = $"llama.cpp {backend.Name} found no GPU.";
+                    continue;
+                }
+                device = devices?.FirstOrDefault()?.Description;
+            }
             lock (sync)
             {
                 status = HostStatus.Loading;
                 statusModel = model;
                 statusBackend = backend.Name;
+                statusDevice = device;
                 message = null;
             }
             Changed();
@@ -184,7 +209,7 @@ public sealed class ModelHost : IAsyncDisposable
             var error = await WaitHealthyAsync(process, baseUri, backend).ConfigureAwait(false);
             if (error is null)
             {
-                var r = new Running(model, backend, process, baseUri, key);
+                var r = new Running(model, backend, device, process, baseUri, key);
                 lock (sync)
                 {
                     running = r;
@@ -301,7 +326,9 @@ public sealed class ModelHost : IAsyncDisposable
 
     static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    HostState Snapshot() => new(status, running?.Model ?? statusModel, running?.Backend.Name ?? statusBackend, message, active);
+    HostState Snapshot() => running is { } r
+        ? new(status, r.Model, r.Backend.Name, message, active, r.Device)
+        : new(status, statusModel, statusBackend, message, active, statusDevice);
 
     void Changed()
     {

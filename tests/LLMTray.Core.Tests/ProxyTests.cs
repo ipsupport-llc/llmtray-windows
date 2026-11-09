@@ -153,6 +153,30 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SkipsAGpuBackendThatSeesNoGpu()
+    {
+        await using var counting = new FakeLauncher();
+        await using var h = new ModelHost(counting,
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], () => new ServerOptions(), Path.Combine(root, "logs3"),
+            _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([]));
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal("cpu", h.State.Backend);
+        Assert.Equal(1, counting.Starts);
+    }
+
+    [Fact]
+    public async Task NamesTheGpu()
+    {
+        await using var gpu = new FakeLauncher();
+        await using var h = new ModelHost(gpu,
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], () => new ServerOptions(), Path.Combine(root, "logs4"),
+            _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([new GpuDevice("Vulkan0", "Radeon RX 7800 XT", 16368, 15000)]));
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal("vulkan", h.State.Backend);
+        Assert.Equal("Radeon RX 7800 XT", h.State.Device);
+    }
+
+    [Fact]
     public async Task ReportsAServerThatDies()
     {
         await host.LoadAsync(catalog.Models[0]);

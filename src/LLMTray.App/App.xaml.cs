@@ -57,7 +57,9 @@ public partial class App : Application
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
         Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), () => new ServerOptions(Settings.ContextSize),
             Path.Combine(DataFolder, "logs"));
-        Host.StateChanged += state => dispatcher.TryEnqueue(() => OnHostChanged(state));
+        // The state is read again when the UI thread gets to it: events from
+        // different threads can arrive out of order.
+        Host.StateChanged += _ => dispatcher.TryEnqueue(() => OnHostChanged(Host.State));
 
         proxy = new ProxyServer(Host, Library);
         try

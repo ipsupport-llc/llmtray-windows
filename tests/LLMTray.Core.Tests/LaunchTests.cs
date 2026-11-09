@@ -40,4 +40,20 @@ public class LaunchTests
     {
         Assert.Equal("x " + expected, CommandLine.Join("x", [arg]));
     }
+
+    [Fact]
+    public void ParsesListDevices()
+    {
+        const string output = """
+            load_backend: loaded Vulkan backend from C:\app\ggml-vulkan.dll
+            Available devices:
+              Vulkan0: NVIDIA GeForce RTX 4070 (12282 MiB, 11034 MiB free)
+              Vulkan1: AMD Radeon(TM) Graphics (512 MiB, 400 MiB free)
+            """;
+        var devices = LlamaDevices.Parse(output);
+        Assert.Equal(2, devices.Count);
+        Assert.Equal(new GpuDevice("Vulkan0", "NVIDIA GeForce RTX 4070", 12282, 11034), devices[0]);
+        Assert.Equal("AMD Radeon(TM) Graphics", devices[1].Description);
+        Assert.Empty(LlamaDevices.Parse("Available devices:\n  (none)\n"));
+    }
 }

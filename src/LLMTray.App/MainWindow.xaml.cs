@@ -64,7 +64,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(760, 680));
+        AppWindow.Resize(new SizeInt32(760, 640));
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
@@ -106,7 +106,9 @@ public sealed partial class MainWindow : Window
         var details = new List<string>();
         if (state.Backend is { } backend && state.Status is HostStatus.Running or HostStatus.Loading)
         {
-            details.Add(backend == "vulkan" ? "On the GPU (Vulkan)" : "On the CPU");
+            details.Add(backend == "cpu" ? "On the CPU"
+                : state.Device is { } device ? $"On the GPU: {device} ({backend})"
+                : $"On the GPU ({backend})");
         }
         if (state.Message is { } message) details.Add(message);
         if (app.ProxyError is { } proxyError) details.Add(proxyError);
