@@ -49,6 +49,27 @@ try {
     if ([string]::IsNullOrWhiteSpace($text)) { throw 'empty answer' }
     Save-Screenshot '2-loaded'
 
+    # The download window, through UI Automation: opened, given time for
+    # its reachability check, photographed, closed.
+    try {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $auto = [System.Windows.Automation.AutomationElement]
+        $name = [System.Windows.Automation.AutomationElement]::NameProperty
+        $window = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition($name, 'LLMTray')))
+        $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition($name, 'Get models…')))
+        $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 10
+        Save-Screenshot '3-get-models'
+        $cancel = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition($name, 'Cancel')))
+        $cancel.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
+    catch {
+        Write-Host "download window not checked: $_"
+    }
+
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
     $streamFile = Join-Path $Out 'stream.txt'
     $stream | Set-Content -NoNewline (Join-Path $Out 'stream-request.json')
