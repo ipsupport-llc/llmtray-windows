@@ -35,4 +35,13 @@ The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
    pinned llama.cpp inside, signs them, and creates a GitHub pre-release
    with both packages and `LLMTray-signing.cer`.
 
+4. Bump the Scoop manifest (adr/0005) in a PR. Scoop's `checkver` reads the
+   new tag and fills in each ZIP's URL and the SHA-256 GitHub lists for it
+   (it downloads the ZIP only if GitHub lists none):
+
+   ```powershell
+   $env:SCOOP_GH_TOKEN = gh auth token   # GitHub's API allows 60 calls an hour without it
+   & "$(scoop prefix scoop)\bin\checkver.ps1" -App llmtray -Dir bucket -Update
+   ```
+
 Stable tags fail until there is a public certificate.

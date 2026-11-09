@@ -1,0 +1,46 @@
+{
+    "version": "0.1.0-beta.2",
+    "description": "Local AI runtime: runs GGUF models with llama.cpp and serves an OpenAI-compatible API at http://localhost:8765/v1, from the notification area.",
+    "homepage": "https://github.com/ipsupport-llc/llmtray-windows",
+    "license": "Apache-2.0",
+    "notes": [
+        "Settings and logs are in %LOCALAPPDATA%\\LLMTray, models in %USERPROFILE%\\.llmtray\\models; Scoop leaves both alone.",
+        "Update with 'scoop update llmtray' (quit LLMTray first), not the app's own updater, so Scoop keeps track of the version.",
+        "Betas are unsigned: if SmartScreen stops LLMTray, choose More info, then Run anyway."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v0.1.0-beta.2/LLMTray-0.1.0-beta.2-x64-portable.zip",
+            "hash": "0f894ac7f5100aecbe39bb60b9f3251b35a1b24032aa6967fff595d191b169ef"
+        },
+        "arm64": {
+            "url": "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v0.1.0-beta.2/LLMTray-0.1.0-beta.2-ARM64-portable.zip",
+            "hash": "3fa3fb6d23a04dd82328f1fdf440d7026f404147d778bc9033d3fd39d9b1ee93"
+        }
+    },
+    "extract_dir": "LLMTray",
+    "shortcuts": [
+        [
+            "LLMTray.exe",
+            "LLMTray"
+        ]
+    ],
+    "checkver": {
+        "url": "https://github.com/ipsupport-llc/llmtray-windows/releases.atom",
+        "regex": "/releases/tag/v([\\d.]+(?:-beta\\.\\d+)?)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v$version/LLMTray-$version-x64-portable.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v$version/LLMTray-$version-ARM64-portable.zip"
+            }
+        },
+        "hash": {
+            "url": "https://api.github.com/repos/ipsupport-llc/llmtray-windows/releases/tags/v$version",
+            "jsonpath": "$.assets[?(@.name == '$basename')].digest"
+        }
+    }
+}
