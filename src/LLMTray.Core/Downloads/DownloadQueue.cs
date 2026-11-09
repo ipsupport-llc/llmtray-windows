@@ -92,7 +92,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
                         lock (sync) received = before + p.Received;
                         Raise();
                     });
-                    await downloader.DownloadAsync(item, progress, token).ConfigureAwait(false);
+                    await WithRetriesAsync(() => downloader.DownloadAsync(item, progress, token), token).ConfigureAwait(false);
                     done += item.Size ?? new FileInfo(item.Destination).Length;
                 }
                 ok = true;
@@ -134,6 +134,27 @@ public sealed class DownloadQueue(ModelDownloader downloader)
             Raise();
         }
         Raise();
+    }
+
+    /// <summary>
+    /// A dropped connection (common on office and mobile networks) is tried
+    /// again from where it stopped, three times, before it counts as failed.
+    /// </summary>
+    public static async Task WithRetriesAsync(Func<Task> download, CancellationToken cancellationToken, int attempts = 4)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await download().ConfigureAwait(false);
+                return;
+            }
+            catch (Exception e) when (attempt < attempts && !cancellationToken.IsCancellationRequested
+                && e is HttpRequestException or IOException && e is not DownloadException)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2 * attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     DownloadState Snapshot() => new(current, received, total, pending.Count, lastError, lastDone);

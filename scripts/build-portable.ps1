@@ -14,11 +14,11 @@ $stage = Join-Path ([IO.Path]::GetTempPath()) "llmtray-portable-$Rid"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 $folder = Join-Path $stage 'LLMTray'
 
-# Its own intermediate folder: the packaged build's outputs must not leak in.
+# Run it in a clean checkout (CI does): a packaged build's outputs in obj/
+# would mix in.
 dotnet publish (Join-Path $root 'src/LLMTray.App') -c Release -r $Rid -p:Platform=$Platform `
     -p:WindowsPackageType=None -p:GenerateAppxPackageOnBuild=false `
     -p:LLMTrayRelease=$Release `
-    -p:BaseIntermediateOutputPath="$stage\obj\" -p:OutputPath="$stage\bin\" `
     -o $folder
 if ($LASTEXITCODE -ne 0) { throw 'publish failed' }
 foreach ($required in 'LLMTray.exe', 'runtime\llama\cpu\llama-server.exe', 'Assets\AppIcon.ico', 'NOTICE.md') {
