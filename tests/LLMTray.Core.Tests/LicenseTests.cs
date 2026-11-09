@@ -99,8 +99,9 @@ public sealed class LicenseTests : IDisposable
               "targets": {
                 "net10.0": {},
                 "net10.0-windows/win-x64": {
-                  "Some.Lib/1.2.3": { "type": "package" },
-                  "Other.Pkg/4.0.0": { "type": "package" },
+                  "Some.Lib/1.2.3": { "type": "package", "runtime": { "lib/net10.0/Some.Lib.dll": {} } },
+                  "Other.Pkg/4.0.0": { "type": "package", "native": { "runtimes/win-x64/native/other.dll": {} } },
+                  "Build.Only/1.0.0": { "type": "package", "build": { "build/Build.Only.targets": {} } },
                   "LLMTray.Core/1.0.0": { "type": "project" }
                 }
               },
@@ -111,6 +112,7 @@ public sealed class LicenseTests : IDisposable
             }
             """);
         var entries = NuGetLicenses.Read(assets, null, packages);
+        // Build.Only ships nothing: not listed.
         Assert.Equal(["Other.Pkg", "Some.Lib"], entries.Select(e => e.Name));
         Assert.Equal("Apache-2.0", entries[0].License);
         Assert.Contains("licenses.nuget.org/Apache-2.0", entries[0].Text);

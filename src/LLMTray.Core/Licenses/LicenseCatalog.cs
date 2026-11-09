@@ -64,6 +64,7 @@ public sealed record LicenseCatalog(IReadOnlyList<LicenseGroup> Groups)
         if (head.Contains("Permission is hereby granted, free of charge", StringComparison.Ordinal)) return "MIT";
         if (head.Contains("Apache License", StringComparison.Ordinal)) return "Apache-2.0";
         if (head.Contains("Redistribution and use in source and binary forms", StringComparison.Ordinal)) return "BSD";
+        if (head.Contains("MICROSOFT SOFTWARE LICENSE TERMS", StringComparison.OrdinalIgnoreCase)) return "Microsoft Software License Terms";
         return "see text";
     }
 }

@@ -22,6 +22,10 @@ public static class NuGetLicenses
         foreach (var (name, info) in targets[key]!.AsObject())
         {
             if (info?["type"]?.GetValue<string>() != "package") continue;
+            // Only what ships: a package with nothing for the output (build
+            // tools, analyzers, a meta-package) isn't in the app.
+            var assetsOf = info.AsObject().Select(p => p.Key);
+            if (!assetsOf.Any(k => k is "runtime" or "native" or "runtimeTargets" or "resource" or "contentFiles")) continue;
             var slash = name.IndexOf('/');
             var id = name[..slash];
             var version = name[(slash + 1)..];
