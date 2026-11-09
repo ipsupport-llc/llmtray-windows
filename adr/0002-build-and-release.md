@@ -52,7 +52,10 @@ Status: accepted (2026-11-09)
      self-signed builds once and install the new one; App Installer won't
      upgrade across publishers.
 
-   No stable release goes out with the self-signed certificate.
+   No stable release goes out with the self-signed certificate:
+   `release.yml` fails on a stable tag until a public certificate replaces
+   it. The workflow signs by thumbprint after importing the PFX, and checks
+   that the certificate's subject equals the manifest's `Publisher`.
 
 ## Why
 
@@ -67,6 +70,13 @@ Status: accepted (2026-11-09)
   public certificate arrives.
 
 ## Not yet
+
+- The Store build. Partner Center assigns the package `Name` and
+  `Publisher` (`CN=<account GUID>`), so the Store flavor gets them stamped
+  in CI like the version, is built with `UapAppxPackageBuildMode=StoreUpload`
+  unsigned, and goes up as `.msixupload` by the maintainer. Check then
+  whether the Store accepts a 0 major version; if not, the Store stamping
+  step adds an offset, and Direct keeps the mapping above.
 
 - `.appinstaller` update feeds (ADR 0001, Updates): with the app's first
   real features.

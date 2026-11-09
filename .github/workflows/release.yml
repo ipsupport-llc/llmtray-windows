@@ -78,6 +78,10 @@ jobs:
             Remove-Item $pfx -ErrorAction SilentlyContinue
           }
           "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          [xml]$m = Get-Content src/LLMTray.App/Package.appxmanifest
+          if ($cert.Subject -ne $m.Package.Identity.Publisher) {
+            throw "certificate subject '$($cert.Subject)' differs from the manifest Publisher '$($m.Package.Identity.Publisher)'"
+          }
           New-Item -ItemType Directory dist | Out-Null
           # The public part, once per release (both jobs hold the same certificate).
           if ('${{ matrix.platform }}' -eq 'x64') {
