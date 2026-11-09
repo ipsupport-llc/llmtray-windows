@@ -4,8 +4,8 @@ namespace LLMTray.Core.Licenses;
 
 /// <summary>
 /// Reads string values from a GGUF file's header metadata. Only the header
-/// is read; reading stops when every key asked for is found, or at the
-/// tokenizer's (large) arrays, which come after the general.* keys.
+/// is read (the tokenizer's large arrays are skipped over, not read), and
+/// reading stops once every key asked for is found.
 /// </summary>
 public static class GgufMetadata
 {
@@ -24,7 +24,6 @@ public static class GgufMetadata
             for (ulong i = 0; i < count && found.Count < keys.Count; i++)
             {
                 var key = ReadString(reader);
-                if (key.StartsWith("tokenizer.", StringComparison.Ordinal)) break;
                 var type = reader.ReadUInt32();
                 if (type == 8)
                 {

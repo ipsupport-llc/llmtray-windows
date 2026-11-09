@@ -36,17 +36,22 @@ sealed class PopoverWindow : Window
         presenter.SetBorderAndTitleBar(true, false);
         AppWindow.SetPresenter(presenter);
         AppWindow.IsShownInSwitchers = false;
-        Content = new Grid { Children = { root } };
+        var scroller = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Content = new Grid { Children = { scroller } };
+        scroller.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Escape) Hide();
+        };
 
         Activated += (_, e) =>
         {
             if (e.WindowActivationState == WindowActivationState.Deactivated) Hide();
         };
         root.SizeChanged += (_, _) => Place();
-        App.Current.HostChanged += _ => Render();
-        App.Current.ModelsChanged += Render;
-        App.Current.DownloadsChanged += _ => Render();
-        App.Current.Updater.Changed += Render;
+        App.Current.HostChanged += _ => RenderSoon();
+        App.Current.ModelsChanged += RenderSoon;
+        App.Current.DownloadsChanged += _ => RenderSoon();
+        App.Current.Updater.Changed += RenderSoon;
     }
 
     public bool IsOpen => AppWindow.IsVisible;
@@ -65,6 +70,7 @@ sealed class PopoverWindow : Window
         Place();
         AppWindow.Show();
         Activate();
+        picker?.Focus(FocusState.Programmatic);
     }
 
     void Hide()
@@ -81,12 +87,23 @@ sealed class PopoverWindow : Window
         if (scale <= 0) scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
         var cursor = anchor;
         var area = DisplayArea.GetFromPoint(new PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Primary).WorkArea;
-        var width = (int)(PanelWidth * scale);
-        var height = (int)Math.Max(120 * scale, (root.ActualHeight > 0 ? root.ActualHeight : 260) * scale);
+        var width = (int)Math.Min(PanelWidth * scale, area.Width - 16);
+        var area0 = DisplayArea.GetFromPoint(new PointInt32(anchor.X, anchor.Y), DisplayAreaFallback.Primary).WorkArea;
+        // Never taller than the screen: the rest scrolls.
+        var height = (int)Math.Min(area0.Height - 16, Math.Max(120 * scale, (root.ActualHeight > 0 ? root.ActualHeight : 260) * scale));
         var x = Math.Clamp(cursor.X - width / 2, area.X + 8, area.X + area.Width - width - 8);
         // The taskbar is usually at the bottom: above it; otherwise by the pointer.
         var y = cursor.Y > area.Y + area.Height / 2 ? area.Y + area.Height - height - 8 : Math.Max(area.Y + 8, cursor.Y + 8);
         AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
+    }
+
+    ComboBox? picker;
+
+    /// <summary>Not while the model list is open: that would close it under the pointer.</summary>
+    void RenderSoon()
+    {
+        if (picker is { IsDropDownOpen: true }) return;
+        Render();
     }
 
     void Render()
@@ -114,11 +131,13 @@ sealed class PopoverWindow : Window
 
             // The model picker and its eject button.
             var models = app.Library.Current.Models;
-            var picker = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, PlaceholderText = models.Count == 0 ? "No models yet" : "Choose a model" };
+            var picker = this.picker = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, PlaceholderText = models.Count == 0 ? "No models yet" : "Choose a model" };
             foreach (var model in models) picker.Items.Add(new ComboBoxItem { Content = model.Name, Tag = model });
             var current = state.Status is HostStatus.Running or HostStatus.Loading ? state.Model : null;
             picker.SelectedItem = picker.Items.OfType<ComboBoxItem>().FirstOrDefault(i => ((ModelEntry)i.Tag).FullPath == current?.FullPath);
             picker.IsEnabled = models.Count > 0;
+            picker.DropDownClosed += (_, _) => DispatcherQueue.TryEnqueue(Render);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, "Model");
             picker.SelectionChanged += (_, _) =>
             {
                 if (rendering || picker.SelectedItem is not ComboBoxItem { Tag: ModelEntry chosen }) return;

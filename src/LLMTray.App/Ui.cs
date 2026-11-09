@@ -26,16 +26,23 @@ static class Ui
     public static Brush CardBackground => Resource<Brush>("CardBackgroundFillColorDefaultBrush", new SolidColorBrush(Colors.White));
     public static Brush Accent => Resource<Brush>("AccentTextFillColorPrimaryBrush", new SolidColorBrush(Colors.SteelBlue));
 
-    public static readonly Brush Green = new SolidColorBrush(ColorHelper.FromArgb(255, 0x2E, 0xA0, 0x43));
-    public static readonly Brush Orange = new SolidColorBrush(ColorHelper.FromArgb(255, 0xD8, 0x7A, 0x00));
-    public static readonly Brush Red = new SolidColorBrush(ColorHelper.FromArgb(255, 0xD1, 0x34, 0x38));
-    public static readonly Brush Gray = new SolidColorBrush(Colors.Gray);
+    /// <summary>The app's theme now (the colours below follow it; pages render again on a change).</summary>
+    public static bool Dark => Application.Current.RequestedTheme == ApplicationTheme.Dark;
+
+    // Status colours, readable as 12 px text on a light or a dark card.
+    public static Brush Green => new SolidColorBrush(Dark ? ColorHelper.FromArgb(255, 0x4A, 0xC2, 0x6B) : ColorHelper.FromArgb(255, 0x1A, 0x7F, 0x37));
+    public static Brush Orange => new SolidColorBrush(Dark ? ColorHelper.FromArgb(255, 0xF0, 0xA0, 0x30) : ColorHelper.FromArgb(255, 0x9A, 0x5B, 0x00));
+    public static Brush Red => new SolidColorBrush(Dark ? ColorHelper.FromArgb(255, 0xFF, 0x6B, 0x6B) : ColorHelper.FromArgb(255, 0xC4, 0x2B, 0x1C));
+    public static Brush Gray => new SolidColorBrush(Colors.Gray);
+
+    /// <summary>The one padding every card row uses.</summary>
+    public static readonly Thickness RowPadding = new(16, 10, 16, 10);
 
     public static TextBlock Section(string title) => new()
     {
         Text = title,
         FontWeight = FontWeights.SemiBold,
-        Margin = new Thickness(4, 16, 0, 2),
+        Margin = new Thickness(4, 14, 0, 2),
     };
 
     /// <summary>A card: the rows with hairlines between them.</summary>
@@ -60,7 +67,7 @@ static class Ui
     /// <summary>"Title / help — control".</summary>
     public static Grid Row(string title, string? help, UIElement? right)
     {
-        var grid = new Grid { Padding = new Thickness(16, 11, 16, 11), ColumnSpacing = 16, MinHeight = 48 };
+        var grid = new Grid { Padding = RowPadding, ColumnSpacing = 16, MinHeight = 48 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2 };
@@ -104,15 +111,21 @@ static class Ui
         TextWrapping = TextWrapping.Wrap,
     };
 
-    public static TextBlock Value(string text, bool mono = false) => new()
+    /// <summary>A value on the right of a row; a long one is cut and shown whole in its tooltip.</summary>
+    public static TextBlock Value(string text, bool mono = false)
     {
-        Text = text,
-        Foreground = Secondary,
-        FontFamily = mono ? Mono : FontFamily.XamlAutoFontFamily,
-        TextTrimming = TextTrimming.CharacterEllipsis,
-        MaxWidth = 420,
-        IsTextSelectionEnabled = true,
-    };
+        var block = new TextBlock
+        {
+            Text = text,
+            Foreground = Secondary,
+            FontFamily = mono ? Mono : FontFamily.XamlAutoFontFamily,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 300,
+            IsTextSelectionEnabled = true,
+        };
+        ToolTipService.SetToolTip(block, text);
+        return block;
+    }
 
     public static Button Button(string text, Action click, bool accent = false)
     {
@@ -130,8 +143,18 @@ static class Ui
             Style = Resource<Style>("SubtleButtonStyle", null!),
         };
         ToolTipService.SetToolTip(button, tip);
+        // A glyph says nothing to a screen reader: the tip is its name.
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, tip);
         button.Click += (_, _) => click();
         return button;
+    }
+
+    public static ToggleSwitch Toggle(bool on, Action<bool> changed, string name)
+    {
+        var toggle = new ToggleSwitch { IsOn = on };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, name);
+        toggle.Toggled += (_, _) => changed(toggle.IsOn);
+        return toggle;
     }
 
     public static Ellipse Dot(Brush brush, double size = 9) => new() { Width = size, Height = size, Fill = brush, VerticalAlignment = VerticalAlignment.Center };

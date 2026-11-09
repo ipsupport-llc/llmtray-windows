@@ -36,12 +36,13 @@
                 </StackPanel>
                 <TextBlock x:Name="DetailText" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="ErrorText" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                <Button x:Name="StopButton" Click="Stop_Click" ToolTipService.ToolTip="Unload the model" Style="{StaticResource SubtleButtonStyle}">
+                <Button x:Name="StopButton" Click="Stop_Click" ToolTipService.ToolTip="Unload the model" AutomationProperties.Name="Unload the model" Style="{StaticResource SubtleButtonStyle}">
                     <FontIcon Glyph="&#xE71A;" FontSize="14" />
                 </Button>
-                <Button Click="OpenLog_Click" ToolTipService.ToolTip="Server log" Style="{StaticResource SubtleButtonStyle}">
+                <Button Click="OpenLog_Click" ToolTipService.ToolTip="Server log" AutomationProperties.Name="Server log" Style="{StaticResource SubtleButtonStyle}">
                     <FontIcon Glyph="&#xE756;" FontSize="14" />
                 </Button>
             </StackPanel>

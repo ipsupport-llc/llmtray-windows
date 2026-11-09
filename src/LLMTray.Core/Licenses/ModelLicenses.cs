@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using LLMTray.Core.Models;
 
 namespace LLMTray.Core.Licenses;
@@ -9,7 +8,7 @@ namespace LLMTray.Core.Licenses;
 /// from the GGUF's own metadata (general.license) or the model card
 /// (README.md front matter) beside it.
 /// </summary>
-public static partial class ModelLicenses
+public static class ModelLicenses
 {
     public static LicenseEntry Of(ModelEntry model)
     {
@@ -21,8 +20,9 @@ public static partial class ModelLicenses
         {
             if (File.Exists(readme)) card = File.ReadAllText(readme);
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            // An unreadable card: the GGUF's own metadata still counts.
         }
         var license = meta.GetValueOrDefault("general.license.name") ?? meta.GetValueOrDefault("general.license")
             ?? (card is null ? null : FromCard(card)) ?? "not stated";
@@ -37,16 +37,26 @@ public static partial class ModelLicenses
         return new LicenseEntry(model.Folder.Length > 0 ? model.Folder : model.Name, null, license, link, text.ToString());
     }
 
-    /// <summary>"license: apache-2.0" in a Hugging Face card's YAML front matter.</summary>
+    /// <summary>
+    /// The license in a Hugging Face card's YAML front matter:
+    /// "license: apache-2.0", or a list ("license:" then "- mit" lines).
+    /// </summary>
     public static string? FromCard(string card)
     {
         if (!card.StartsWith("---", StringComparison.Ordinal)) return null;
         var end = card.IndexOf("\n---", 3, StringComparison.Ordinal);
         if (end < 0) return null;
-        var m = CardLicense().Match(card[..end]);
-        return m.Success ? m.Groups["license"].Value.Trim().Trim('"', '\'') : null;
+        var lines = card[..end].Replace("\r", "").Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].StartsWith("license:", StringComparison.Ordinal)) continue;
+            var value = lines[i]["license:".Length..].Trim().Trim('"', '\'');
+            if (value.StartsWith('[')) return string.Join(", ", value.Trim('[', ']').Split(',').Select(v => v.Trim().Trim('"', '\'')));
+            if (value.Length > 0) return value;
+            var items = lines.Skip(i + 1).TakeWhile(l => l.TrimStart().StartsWith("- ", StringComparison.Ordinal))
+                .Select(l => l.TrimStart()[2..].Trim().Trim('"', '\'')).ToList();
+            return items.Count > 0 ? string.Join(", ", items) : null;
+        }
+        return null;
     }
-
-    [GeneratedRegex(@"^license:\s*(?<license>\S.*)$", RegexOptions.Multiline)]
-    private static partial Regex CardLicense();
 }

@@ -41,9 +41,9 @@ public sealed class LicenseTests : IDisposable
             ("general.architecture", "lfm2"),
             ("general.context_length", 4096u),
             ("general.tags", new[] { "a", "b" }),
+            ("tokenizer.ggml.tokens", new[] { "x", "y" }),
             ("general.license", "apache-2.0"),
-            ("general.name", "Tiny"),
-            ("tokenizer.ggml.tokens", new[] { "x", "y" })));
+            ("general.name", "Tiny")));
         var meta = GgufMetadata.ReadStrings(path, ["general.license", "general.name", "general.license.link"]);
         Assert.Equal("apache-2.0", meta["general.license"]);
         Assert.Equal("Tiny", meta["general.name"]);
@@ -62,6 +62,8 @@ public sealed class LicenseTests : IDisposable
         File.WriteAllText(Path.Combine(dir, "README.md"), "---\nlibrary_name: x\nlicense: other\nlicense_name: lfm1.0\n---\n# Card\nlicense: not this one");
         Assert.Equal("other", ModelLicenses.Of(new ModelEntry("m", "pub/repo/m.gguf", path, null, 1)).License);
         Assert.Null(ModelLicenses.FromCard("# no front matter\nlicense: mit"));
+        Assert.Equal("mit, apache-2.0", ModelLicenses.FromCard("---\nlicense:\n  - mit\n  - apache-2.0\ntags: [x]\n---\n"));
+        Assert.Equal("mit, cc-by-4.0", ModelLicenses.FromCard("---\nlicense: [mit, \"cc-by-4.0\"]\n---\n"));
     }
 
     [Fact]

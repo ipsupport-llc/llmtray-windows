@@ -57,7 +57,7 @@ sealed class LogWindow : Window
         ToolTipService.SetToolTip(more, "Copy, save or open");
         var menu = new MenuFlyout();
         menu.Items.Add(Item("Copy shown", () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
-        menu.Items.Add(Item("Copy the whole log", () => Copy(ReadTail())));
+        menu.Items.Add(Item("Copy the whole log", () => Copy(ReadAll())));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item("Open logs folder", () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
         menu.Items.Add(Item("Open the previous run's log", () => Ui.Open(Path.Combine(App.Current.DataFolder, "logs", "llama-server.previous.log"))));
@@ -153,6 +153,20 @@ sealed class LogWindow : Window
         var parsed = LlamaLog.Parse(ReadTail().Split('\n'));
         entries = parsed.Count > MaxEntries ? parsed.Skip(parsed.Count - MaxEntries).ToList() : parsed;
         Render();
+    }
+
+    static string ReadAll()
+    {
+        try
+        {
+            using var stream = new FileStream(App.Current.Host.LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return "";
+        }
     }
 
     static string ReadTail()

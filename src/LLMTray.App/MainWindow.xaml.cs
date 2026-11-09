@@ -59,18 +59,18 @@ public sealed partial class MainWindow : Window
             else _ = App.Current.QuitAsync();
         };
 
-        App.Current.ModelsChanged += () => { if (page == "models") RenderPage(); };
+        App.Current.ModelsChanged += () => { if (page == "models") RenderPageSoon(); };
         App.Current.HostChanged += s =>
         {
             state = s;
             RenderHeader();
-            if (page is "models" or "server") RenderPage();
+            if (page is "models" or "server") RenderPageSoon();
         };
         App.Current.DownloadsChanged += RenderDownloads;
         App.Current.Updater.Changed += () =>
         {
             RenderUpdateBar();
-            if (page == "updates") RenderPage();
+            if (page == "updates") RenderPageSoon();
         };
 
         state = App.Current.Host.State;
@@ -82,7 +82,18 @@ public sealed partial class MainWindow : Window
         if (Content is FrameworkElement content)
         {
             content.Loaded += (_, _) => content.XamlRoot.Changed += (root, _) => SetMinimumSize(root.RasterizationScale);
+            // The status colours are picked per theme: draw again on a switch.
+            content.ActualThemeChanged += (_, _) =>
+            {
+                RenderHeader();
+                RenderPage();
+            };
         }
+        // A render that waited for the user to leave a field.
+        PageContent.LosingFocus += (_, _) => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (pendingRender && !HasFocusInPage()) RenderPage();
+        });
     }
 
     /// <summary>Opens a tab ("models", "server", "general", "updates").</summary>
@@ -110,12 +121,11 @@ public sealed partial class MainWindow : Window
         StatusText.Text = text;
         StatusDot.Fill = color;
         Loading.IsActive = state.Status == HostStatus.Loading;
-        var details = new List<string>();
-        if (Status.Device(state) is { } device) details.Add(device);
-        if (state.Message is { } message) details.Add(message);
-        if (App.Current.ProxyError is { } proxyError) details.Add(proxyError);
-        if (state.Status == HostStatus.Stopped && details.Count == 0) details.Add($"API at {AppInfo.ApiBaseUrl}. A request that names a model loads it.");
-        DetailText.Text = string.Join(" · ", details);
+        DetailText.Text = Status.Device(state) ?? $"API at {AppInfo.ApiBaseUrl}";
+        var errors = new[] { state.Message, App.Current.ProxyError }.Where(m => m is not null).ToList();
+        ErrorText.Text = string.Join("\n", errors);
+        ErrorText.Foreground = Ui.Red;
+        ErrorText.Visibility = errors.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         StopButton.IsEnabled = state.Status is HostStatus.Running or HostStatus.Loading;
     }
 
@@ -209,8 +219,37 @@ public sealed partial class MainWindow : Window
 
     // MARK: Pages
 
+    bool pendingRender;
+
+    /// <summary>
+    /// State changes render the page again, but not while the user is in one
+    /// of its fields (a half-typed context size, an open list): then later.
+    /// </summary>
+    void RenderPageSoon()
+    {
+        if (HasFocusInPage())
+        {
+            pendingRender = true;
+            return;
+        }
+        RenderPage();
+    }
+
+    bool HasFocusInPage()
+    {
+        if (Content?.XamlRoot is not { } root) return false;
+        var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(root) as DependencyObject;
+        if (focused is not (TextBox or NumberBox or ComboBox or ComboBoxItem)) return false;
+        for (var node = focused; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node == PageContent) return true;
+        }
+        return focused is ComboBoxItem;
+    }
+
     void RenderPage()
     {
+        pendingRender = false;
         PageContent.Children.Clear();
         var parts = page switch
         {
@@ -253,7 +292,7 @@ public sealed partial class MainWindow : Window
     UIElement ModelRow(ModelEntry model)
     {
         var mine = state.Model?.FullPath == model.FullPath;
-        var grid = new Grid { Padding = new Thickness(16, 10, 12, 10), ColumnSpacing = 12 };
+        var grid = new Grid { Padding = Ui.RowPadding, ColumnSpacing = 12 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -307,7 +346,7 @@ public sealed partial class MainWindow : Window
         var app = App.Current;
         yield return Ui.Section("API");
         yield return Ui.Card(
-            Ui.Row("Address", "OpenAI-compatible (/v1/chat/completions, /v1/models, /v1/responses) and Anthropic (/v1/messages). Point your apps and coding agents here.",
+            Ui.Row("Address", "Point your apps and coding agents here: it speaks the OpenAI and Anthropic APIs.",
                 Ui.Horizontal(Ui.Value(AppInfo.ApiBaseUrl, mono: true), Ui.Button("Copy", () => Copy(AppInfo.ApiBaseUrl)))),
             Ui.Row("Port", app.ProxyError ?? "Only this PC can connect.", Ui.Value(AppInfo.ProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
@@ -331,7 +370,7 @@ public sealed partial class MainWindow : Window
         yield return Ui.Card(
             Ui.Row("Context size", "Tokens a request can hold. Empty: the model's own, cut to fit the memory. Takes effect at the next load.", context),
             Ui.Row("Runs on", "Vulkan when this PC has a GPU it can use, otherwise the CPU.",
-                Ui.Value(Status.Device(state) ?? "Shown while a model is loaded")));
+                Ui.Value(Status.Device(state) ?? "—")));
 
         yield return Ui.Section("Diagnostics");
         yield return Ui.Card(
@@ -343,15 +382,10 @@ public sealed partial class MainWindow : Window
     {
         var app = App.Current;
         yield return Ui.Section("Startup");
-        var signIn = new ToggleSwitch { IsOn = signInStartup == true, IsEnabled = signInStartup is not null, OnContent = "", OffContent = "", MinWidth = 0 };
-        signIn.Toggled += async (_, _) =>
-        {
-            if (signIn.IsOn == signInStartup) return;
-            signInError = await SignInStartup.SetAsync(signIn.IsOn);
-            await LoadSignInStateAsync();
-        };
-        var loadLast = new ToggleSwitch { IsOn = app.Settings.LoadLastModelOnStart, OnContent = "", OffContent = "", MinWidth = 0 };
-        loadLast.Toggled += (_, _) => app.UpdateSettings(app.Settings with { LoadLastModelOnStart = loadLast.IsOn });
+        var signIn = Ui.Toggle(signInStartup == true, on => _ = SetSignInAsync(on), "Start LLMTray when you sign in");
+        signIn.IsEnabled = signInStartup is not null;
+        var loadLast = Ui.Toggle(app.Settings.LoadLastModelOnStart, on => app.UpdateSettings(app.Settings with { LoadLastModelOnStart = on }),
+            "Load the last model when LLMTray starts");
         yield return Ui.Card(
             Ui.Row("Start LLMTray when you sign in", signInError ?? "It starts in the notification area, without opening this window.", signIn),
             Ui.Row("Load the last model when LLMTray starts", "So it's ready before the first request.", loadLast));
@@ -371,8 +405,8 @@ public sealed partial class MainWindow : Window
             yield return Ui.Card(Ui.Row("Updates are off", "This is a development build: it has no release to compare.", null));
             yield break;
         }
-        var auto = new ToggleSwitch { IsOn = app.Settings.CheckForUpdates, OnContent = "", OffContent = "", MinWidth = 0 };
-        auto.Toggled += (_, _) => app.UpdateSettings(app.Settings with { CheckForUpdates = auto.IsOn });
+        var auto = Ui.Toggle(app.Settings.CheckForUpdates, on => app.UpdateSettings(app.Settings with { CheckForUpdates = on }),
+            "Check for updates automatically");
         var channel = new ComboBox { Width = 140 };
         channel.Items.Add("Stable");
         channel.Items.Add("Beta");
@@ -430,7 +464,7 @@ public sealed partial class MainWindow : Window
         var disclaimer = new InfoBar
         {
             IsOpen = true,
-            IsClosable = false,
+            IsClosable = true,
             Severity = InfoBarSeverity.Warning,
             Title = "A model is a tool, not an authority",
             Message = "It can be wrong and make things up: check anything that matters. It is not a doctor, lawyer, psychologist or friend. You use its answers at your own risk.",
@@ -455,7 +489,7 @@ public sealed partial class MainWindow : Window
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             FontFamily = Ui.Mono,
-            FontSize = 12,
+            FontSize = 13,
             Text = "Select a component to see its license.",
         };
         ScrollViewer.SetVerticalScrollBarVisibility(text, ScrollBarVisibility.Auto);
@@ -482,7 +516,9 @@ public sealed partial class MainWindow : Window
                     var row = new StackPanel { Padding = new Thickness(0, 3, 0, 3) };
                     row.Children.Add(new TextBlock { Text = entry.Title, TextTrimming = TextTrimming.CharacterEllipsis });
                     row.Children.Add(Ui.Caption(entry.License));
-                    list.Items.Add(new ListViewItem { Content = row, Tag = entry });
+                    var item = new ListViewItem { Content = row, Tag = entry };
+                    ToolTipService.SetToolTip(item, $"{entry.Title} — {entry.License}");
+                    list.Items.Add(item);
                 }
             }
             if (scanning) list.Items.Add(new ListViewItem { Content = Ui.Caption("Reading the models on this PC…"), IsEnabled = false });
@@ -518,7 +554,8 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(text, 2);
         right.Children.Add(text);
 
-        var split = new Grid { Height = 460 };
+        // As tall as the window allows, at least enough for a dozen entries.
+        var split = new Grid { Height = Math.Max(320, (Content as FrameworkElement)?.ActualHeight - 330 ?? 420) };
         split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
         split.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -539,6 +576,13 @@ public sealed partial class MainWindow : Window
     }
 
     // MARK: Actions
+
+    async Task SetSignInAsync(bool on)
+    {
+        if (on == signInStartup) return;
+        signInError = await SignInStartup.SetAsync(on);
+        await LoadSignInStateAsync();
+    }
 
     async Task LoadSignInStateAsync()
     {
