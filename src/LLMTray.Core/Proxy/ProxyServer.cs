@@ -25,9 +25,31 @@ public sealed class ProxyServer : IAsyncDisposable
         "Host", "Content-Length", "Authorization",
     };
 
+    /// <summary>
+    /// The llama-server routes clients may reach through the proxy. Others
+    /// (/props, /slots, /metrics, …) stay private: they show file paths and
+    /// let a client change the server.
+    /// </summary>
+    static readonly HashSet<string> ForwardedPosts = new(StringComparer.Ordinal)
+    {
+        "/v1/chat/completions", "/chat/completions",
+        "/v1/completions", "/completions",
+        "/v1/responses",
+        "/v1/messages", "/v1/messages/count_tokens",
+        "/v1/embeddings", "/embeddings",
+        "/tokenize", "/detokenize", "/apply-template",
+    };
+
+    static readonly HashSet<string> ForwardedGets = new(StringComparer.Ordinal) { "/health", "/v1/health" };
+
     readonly ModelHost host;
     readonly ModelLibrary library;
-    readonly HttpClient upstream = new(new SocketsHttpHandler { UseProxy = false, AutomaticDecompression = DecompressionMethods.None })
+    readonly HttpClient upstream = new(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+    })
     {
         Timeout = Timeout.InfiniteTimeSpan,
     };
@@ -42,6 +64,9 @@ public sealed class ProxyServer : IAsyncDisposable
 
     public int Port { get; }
 
+    /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
+    public const long MaxBodyBytes = 256L * 1024 * 1024;
+
     /// <summary>Starts listening. Throws <see cref="IOException"/> when the port is taken.</summary>
     public async Task StartAsync()
     {
@@ -51,7 +76,7 @@ public sealed class ProxyServer : IAsyncDisposable
         {
             // Loopback only (127.0.0.1 and ::1).
             k.ListenLocalhost(Port);
-            k.Limits.MaxRequestBodySize = 512L * 1024 * 1024;
+            k.Limits.MaxRequestBodySize = MaxBodyBytes;
         });
         app = builder.Build();
         app.Run(HandleAsync);
@@ -80,14 +105,22 @@ public sealed class ProxyServer : IAsyncDisposable
             return;
         }
 
+        var forwarded = HttpMethods.IsPost(request.Method) ? ForwardedPosts.Contains(path)
+            : HttpMethods.IsGet(request.Method) && ForwardedGets.Contains(path);
+        if (!forwarded)
+        {
+            await SendErrorAsync(context, StatusCodes.Status404NotFound, $"{request.Method} {path} is not part of LLMTray's API").ConfigureAwait(false);
+            return;
+        }
+
         var body = await ReadBodyAsync(request, context.RequestAborted).ConfigureAwait(false);
         ModelEntry? wanted = null;
-        if (body.Length > 0)
+        if (body.Count > 0)
         {
             JsonObject? json;
             try
             {
-                json = JsonNode.Parse(body) as JsonObject;
+                json = JsonNode.Parse(body.AsSpan()) as JsonObject;
             }
             catch (JsonException)
             {
@@ -139,14 +172,28 @@ public sealed class ProxyServer : IAsyncDisposable
         }
     }
 
-    async Task ForwardAsync(HttpContext context, ModelHost.Lease lease, byte[] body)
+    async Task ForwardAsync(HttpContext context, ModelHost.Lease lease, ArraySegment<byte> body)
     {
         var request = context.Request;
-        var target = new Uri(lease.BaseUri, request.Path.Value + request.QueryString.Value);
-        using var message = new HttpRequestMessage(new HttpMethod(request.Method), target);
-        if (body.Length > 0)
+        // Scheme, host and port are llama-server's, whatever the path says
+        // (a path such as "//elsewhere/x" must not become another host).
+        var target = new UriBuilder(lease.BaseUri)
         {
-            message.Content = new ByteArrayContent(body);
+            Path = request.Path.ToUriComponent(),
+            Query = request.QueryString.HasValue ? request.QueryString.Value![1..] : "",
+        }.Uri;
+        if (target.Authority != lease.BaseUri.Authority)
+        {
+            await SendErrorAsync(context, StatusCodes.Status400BadRequest, "bad request path").ConfigureAwait(false);
+            return;
+        }
+        // The request ends when the client goes or the server it talks to stops.
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lease.ServerGone);
+        var cancellation = linked.Token;
+        using var message = new HttpRequestMessage(new HttpMethod(request.Method), target);
+        if (body.Count > 0)
+        {
+            message.Content = new ByteArrayContent(body.Array!, body.Offset, body.Count);
         }
         foreach (var (key, values) in request.Headers)
         {
@@ -162,10 +209,14 @@ public sealed class ProxyServer : IAsyncDisposable
         HttpResponseMessage response;
         try
         {
-            response = await upstream.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted).ConfigureAwait(false);
+            response = await upstream.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
+            if (!context.RequestAborted.IsCancellationRequested)
+            {
+                await SendErrorAsync(context, StatusCodes.Status503ServiceUnavailable, "the model was stopped or switched").ConfigureAwait(false);
+            }
             return;
         }
         catch (HttpRequestException e)
@@ -186,18 +237,20 @@ public sealed class ProxyServer : IAsyncDisposable
             context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
             try
             {
-                await using var stream = await response.Content.ReadAsStreamAsync(context.RequestAborted).ConfigureAwait(false);
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
                 var buffer = new byte[16 * 1024];
                 int read;
-                while ((read = await stream.ReadAsync(buffer, context.RequestAborted).ConfigureAwait(false)) > 0)
+                while ((read = await stream.ReadAsync(buffer, cancellation).ConfigureAwait(false)) > 0)
                 {
-                    await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), context.RequestAborted).ConfigureAwait(false);
-                    await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
+                    await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellation).ConfigureAwait(false);
+                    await context.Response.Body.FlushAsync(cancellation).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
             {
-                // The client went away: the upstream request is cancelled with it.
+                // The client went away (the upstream request goes with it),
+                // or the server stopped: the answer is cut off.
+                if (!context.RequestAborted.IsCancellationRequested) context.Abort();
             }
             catch (IOException)
             {
@@ -265,11 +318,12 @@ public sealed class ProxyServer : IAsyncDisposable
         await context.Response.WriteAsync(body.ToJsonString(), context.RequestAborted).ConfigureAwait(false);
     }
 
-    static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken cancellationToken)
+    /// <summary>The whole body, in one buffer (no second copy).</summary>
+    static async Task<ArraySegment<byte>> ReadBodyAsync(HttpRequest request, CancellationToken cancellationToken)
     {
-        using var buffer = new MemoryStream();
+        var buffer = new MemoryStream(request.ContentLength is > 0 and < MaxBodyBytes ? (int)request.ContentLength.Value : 0);
         await request.Body.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        return buffer.ToArray();
+        return new ArraySegment<byte>(buffer.GetBuffer(), 0, (int)buffer.Length);
     }
 
     public async ValueTask DisposeAsync()

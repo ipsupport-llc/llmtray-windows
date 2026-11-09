@@ -49,8 +49,11 @@ public sealed class ModelHost : IAsyncDisposable
     string? statusDevice;
     string? message;
     string? workingBackend;
+    bool disposed;
 
-    sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey);
+    /// <param name="Lifetime">Cancelled when this server stops or dies: requests to it end with it.</param>
+    sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
+        CancellationTokenSource Lifetime);
 
     /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
     public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ServerOptions> options, string logDirectory,
@@ -105,10 +108,17 @@ public sealed class ModelHost : IAsyncDisposable
                 try
                 {
                     await drained.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    StopRunning();
+                    await StopRunningAsync().ConfigureAwait(false);
                     // Not the client's token: a load once begun finishes, so
                     // the next request for this model finds it ready.
                     await StartAsync(wanted).ConfigureAwait(false);
+                    // The request that waited for the load is served first,
+                    // before another switch can take the model away.
+                    lock (sync)
+                    {
+                        switching = false;
+                        if (running is { } loaded && Matches(loaded, wanted)) return Take(loaded);
+                    }
                 }
                 finally
                 {
@@ -128,26 +138,26 @@ public sealed class ModelHost : IAsyncDisposable
         using var lease = await AcquireAsync(model, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Stops the server; requests in flight end with it.</summary>
+    /// <summary>
+    /// Stops the server at once; requests in flight end with it. Doesn't
+    /// wait for a switch in progress: a request that asked for another
+    /// model still gets it loaded.
+    /// </summary>
     public async Task StopAsync()
     {
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
+        await StopRunningAsync().ConfigureAwait(false);
+        lock (sync)
         {
-            StopRunning();
-            lock (sync)
+            if (running is null && !switching)
             {
                 status = HostStatus.Stopped;
                 statusModel = null;
                 statusBackend = null;
+                statusDevice = null;
                 message = null;
             }
-            Changed();
         }
-        finally
-        {
-            gate.Release();
-        }
+        Changed();
     }
 
     async Task StartAsync(ModelEntry model)
@@ -164,6 +174,7 @@ public sealed class ModelHost : IAsyncDisposable
         string? lastError = null;
         foreach (var backend in ordered)
         {
+            if (Volatile.Read(ref disposed)) throw new ModelLoadException("LLMTray is quitting.");
             string? device = null;
             if (backend.Name != "cpu")
             {
@@ -209,9 +220,15 @@ public sealed class ModelHost : IAsyncDisposable
             var error = await WaitHealthyAsync(process, baseUri, backend).ConfigureAwait(false);
             if (error is null)
             {
-                var r = new Running(model, backend, device, process, baseUri, key);
+                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource());
                 lock (sync)
                 {
+                    if (disposed)
+                    {
+                        process.Kill();
+                        process.Dispose();
+                        throw new ModelLoadException("LLMTray is quitting.");
+                    }
                     running = r;
                     status = HostStatus.Running;
                     message = null;
@@ -221,8 +238,7 @@ public sealed class ModelHost : IAsyncDisposable
                 Changed();
                 return;
             }
-            process.Kill();
-            process.Dispose();
+            await KillAsync(process).ConfigureAwait(false);
             lastError = error;
         }
         Fail(model, null, lastError ?? "llama-server didn't start.");
@@ -260,11 +276,12 @@ public sealed class ModelHost : IAsyncDisposable
             status = HostStatus.Failed;
             message = $"llama-server stopped unexpectedly (exit code {code}). See the server log.";
         }
+        r.Lifetime.Cancel();
         r.Process.Dispose();
         Changed();
     }
 
-    void StopRunning()
+    async Task StopRunningAsync()
     {
         Running? r;
         lock (sync)
@@ -273,8 +290,27 @@ public sealed class ModelHost : IAsyncDisposable
             running = null;
         }
         if (r is null) return;
-        r.Process.Kill();
-        r.Process.Dispose();
+        r.Lifetime.Cancel();
+        await KillAsync(r.Process).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Ends a process and waits for it to be gone, so the next server never
+    /// starts beside the old one (TerminateProcess only starts the end).
+    /// </summary>
+    static async Task KillAsync(IChildProcess process)
+    {
+        process.Kill();
+        try
+        {
+            await process.Exited.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Still there after 15 s: the job object ends it with the app.
+            return;
+        }
+        process.Dispose();
     }
 
     void Fail(ModelEntry model, string? backend, string text)
@@ -302,7 +338,7 @@ public sealed class ModelHost : IAsyncDisposable
     Lease Take(Running r)
     {
         active++;
-        var lease = new Lease(this, r.Model, r.BaseUri, r.ApiKey);
+        var lease = new Lease(this, r.Model, r.BaseUri, r.ApiKey, r.Lifetime.Token);
         ThreadPool.QueueUserWorkItem(_ => Changed());
         return lease;
     }
@@ -347,9 +383,8 @@ public sealed class ModelHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await gate.WaitAsync().ConfigureAwait(false);
-        try { StopRunning(); }
-        finally { gate.Release(); }
+        lock (sync) disposed = true;
+        await StopRunningAsync().ConfigureAwait(false);
         health.Dispose();
     }
 
@@ -359,17 +394,21 @@ public sealed class ModelHost : IAsyncDisposable
         readonly ModelHost host;
         int disposed;
 
-        internal Lease(ModelHost host, ModelEntry model, Uri baseUri, string apiKey)
+        internal Lease(ModelHost host, ModelEntry model, Uri baseUri, string apiKey, CancellationToken serverGone)
         {
             this.host = host;
             Model = model;
             BaseUri = baseUri;
             ApiKey = apiKey;
+            ServerGone = serverGone;
         }
 
         public ModelEntry Model { get; }
         public Uri BaseUri { get; }
         public string ApiKey { get; }
+
+        /// <summary>Cancelled when the server this lease talks to stops or dies.</summary>
+        public CancellationToken ServerGone { get; }
 
         public void Dispose()
         {

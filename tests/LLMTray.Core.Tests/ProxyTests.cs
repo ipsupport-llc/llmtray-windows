@@ -131,6 +131,39 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ForwardsOnlyTheApi()
+    {
+        await proxy.StartAsync();
+        await host.LoadAsync(catalog.Models[0]);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync("/props", Chat(null))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/slots")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
+
+        // A path that looks like another host never leaves for it.
+        using var tcp = new System.Net.Sockets.TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, proxy.Port);
+        var stream = tcp.GetStream();
+        var raw = "POST //example.invalid/v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(raw));
+        var reply = await new StreamReader(stream).ReadLineAsync();
+        Assert.StartsWith("HTTP/1.1 404", reply);
+    }
+
+    [Fact]
+    public async Task StopDoesNotWaitForASwitch()
+    {
+        var first = await host.AcquireAsync(catalog.Models[0], CancellationToken.None);
+        var switching = host.AcquireAsync(catalog.Models[1], CancellationToken.None);
+        await Task.Delay(100);
+        await host.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(first.ServerGone.IsCancellationRequested);
+        first.Dispose();
+        using var second = await switching.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("beta-Q4", second.Model.Name);
+        Assert.Equal(1, launcher.Running);
+    }
+
+    [Fact]
     public async Task AnswersCorsPreflight()
     {
         await proxy.StartAsync();
