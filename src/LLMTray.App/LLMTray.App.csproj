@@ -19,11 +19,16 @@
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <Content Include="Assets\*.png" />
-    <Content Include="Assets\AppIcon.ico" />
-    <Content Include="..\..\NOTICE.md" Link="NOTICE.md" />
+    <!-- Copied to the output too: the portable ZIP is the output folder (adr/0004). -->
+    <Content Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\NOTICE.md" Link="NOTICE.md" CopyToOutputDirectory="PreserveNewest" />
     <!-- llama.cpp, put here by scripts/fetch-llama.ps1 (CPU and Vulkan, adr/0001). -->
-    <Content Include="runtime\**\*" />
+    <Content Include="runtime\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(LLMTrayRelease)' != ''">
+    <!-- The release a portable build is (adr/0004); a package knows its version from its identity. -->
+    <AssemblyMetadata Include="LLMTrayRelease" Value="$(LLMTrayRelease)" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />

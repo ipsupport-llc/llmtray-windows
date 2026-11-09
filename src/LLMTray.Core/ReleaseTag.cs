@@ -35,6 +35,19 @@ public sealed partial record ReleaseTag(int Major, int Minor, int Patch, int? Be
             ? string.Create(CultureInfo.InvariantCulture, $"{Major}.{Minor}.{Patch}-beta.{n}")
             : string.Create(CultureInfo.InvariantCulture, $"{Major}.{Minor}.{Patch}");
 
+    /// <summary>The tag a package version came from (the inverse of <see cref="PackageVersion"/>).</summary>
+    public static ReleaseTag? FromPackageVersion(Version version)
+    {
+        if (version.Major < 0 || version.Minor < 0 || version.Build < 0) return null;
+        var patch = version.Build / 1000;
+        var slot = version.Build % 1000;
+        if (patch > MaxPatch || slot == 0) return null;
+        return new ReleaseTag(version.Major, version.Minor, patch, slot == StableSlot ? null : slot);
+    }
+
+    /// <summary>Release order (the package version's order).</summary>
+    public Version SortKey => Version.Parse(PackageVersion);
+
     public static ReleaseTag Parse(string tag) =>
         TryParse(tag, out var result, out var error)
             ? result

@@ -44,8 +44,8 @@ answer.
 
 5. **One package format, MSIX, for both distributions.** One build flag
    separates the two, as with the Mac's App Store build (Mac ADR 0018):
-   - **Direct**: a signed MSIX with an `.appinstaller` update feed from GitHub
-     Releases.
+   - **Direct**: a signed MSIX on GitHub Releases that updates itself
+     (ADR 0003).
    - **Store**: the same MSIX through the Microsoft Store.
 
    Both builds have package identity, so OCR, the CLI alias, notifications
@@ -165,7 +165,7 @@ feature without a settled Windows path stays on the list as open work.
 | Thinking display, tok/s, sampling | Same; `reasoning_content` where the template provides it | 1 |
 | Server log window | Same | 1 |
 | Responses API (0029), Anthropic Messages | Conversion in the proxy | 1 |
-| Updates (0004) | Direct: `.appinstaller` feeds, one per channel (stable, beta) and architecture, checked at launch; Store: Store updates | 1 |
+| Updates (0004) | Direct: the app checks GitHub Releases itself, stable and beta channels, at start, every 12 h and on request (ADR 0003; replaces `.appinstaller` feeds); Store: Store updates | 1 |
 | Localization (0008) | `.resw` generated from the Mac app's `Localizable.strings` and `.stringsdict` by a script. The script converts format specifiers (`%@`, `%1$@`) and turns plural rules into ICU MessageFormat, so wording stays in one place | 1 |
 | Chat tools (0007): web, weather, calculator | Port to Core; same tool names and outputs | 2 |
 | First-run wizard (0013) | Same steps, plus GPU probing and backend choice | 2 |
@@ -190,11 +190,8 @@ feature without a settled Windows path stays on the list as open work.
 
 ### Direct
 
-- A signed MSIX per architecture (or a bundle), plus `.appinstaller` files
-  on GitHub Releases' permanent `latest/download` URLs: one feed for stable,
-  one for beta.
-- App Installer handles install and updates. No admin rights are needed.
-  Sideloading is on by default in Windows 11.
+- A signed MSIX per architecture on GitHub Releases. The app updates
+  itself from there (ADR 0003). Sideloading is on by default in Windows 11.
 - **Velopack was considered and rejected.** It installs unpackaged apps. That
   would split the app into two behaviours:
   - no package identity, so no OCR and no execution alias;

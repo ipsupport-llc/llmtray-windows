@@ -60,6 +60,7 @@ public partial class App : Application
     public HttpClient Web { get; } = CreateWebClient();
     public IReadOnlyDictionary<DownloadSource, IModelSource> Sources { get; private set; } = null!;
     public DownloadQueue Downloads { get; private set; } = null!;
+    internal AppUpdater Updater { get; private set; } = null!;
 
     public event Action? ModelsChanged;
     public event Action<DownloadState>? DownloadsChanged;
@@ -85,6 +86,8 @@ public partial class App : Application
         Downloads = new DownloadQueue(new ModelDownloader(Web));
         Downloads.Changed += _ => dispatcher.TryEnqueue(() => DownloadsChanged?.Invoke(Downloads.State));
         Downloads.Completed += _ => Library.Rescan();
+
+        Updater = new AppUpdater(dispatcher, Web, DataFolder);
 
         launcher = new JobObjectLauncher();
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
@@ -112,6 +115,7 @@ public partial class App : Application
         window = new MainWindow();
         window.Activate();
         ListenForSecondLaunch();
+        Updater.Start();
 
         if (Settings.LoadLastModelOnStart && Settings.LastModel is { } last && Library.Current.Resolve(last) is { } model)
         {
@@ -183,7 +187,7 @@ public partial class App : Application
         HostChanged?.Invoke(state);
     }
 
-    void UpdateSettings(AppSettings settings)
+    internal void UpdateSettings(AppSettings settings)
     {
         Settings = settings;
         try
@@ -207,6 +211,12 @@ public partial class App : Application
         if (models.Count == 0) items.Add(new("No models in the models folder", Enabled: false));
         items.Add(TrayMenuItem.Separator);
         items.Add(new("Stop the model", () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
+        if (Updater.CanUpdate)
+        {
+            items.Add(Updater.Available is { } update
+                ? new($"Install LLMTray {update.Tag.DisplayVersion}", () => _ = Updater.InstallAsync(), Enabled: !Updater.Busy)
+                : new("Check for updates", () => { ShowWindow(); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
+        }
         items.Add(new("Quit LLMTray", () => _ = QuitAsync()));
         return items;
     }

@@ -12,22 +12,44 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
-        <StackPanel Orientation="Horizontal" Spacing="12">
-            <Image Source="Assets/Square44x44Logo.png" Width="36" Height="36" />
-            <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="LLMTray" Style="{StaticResource SubtitleTextBlockStyle}" />
-                <TextBlock Text="Local AI Runtime for Windows" Style="{StaticResource CaptionTextBlockStyle}"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" Spacing="12">
+                <Image Source="Assets/Square44x44Logo.png" Width="36" Height="36" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="LLMTray" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Local AI Runtime for Windows" Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
             </StackPanel>
-        </StackPanel>
+            <TextBlock x:Name="VersionText" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <ComboBox x:Name="ChannelBox" Grid.Column="2" VerticalAlignment="Center" SelectionChanged="ChannelBox_SelectionChanged">
+                <x:String>Stable</x:String>
+                <x:String>Beta</x:String>
+            </ComboBox>
+            <Button x:Name="CheckUpdatesButton" Grid.Column="3" Content="Check for updates" Click="CheckUpdates_Click" />
+        </Grid>
+
+        <InfoBar x:Name="UpdateBar" Grid.Row="1" IsClosable="True" IsOpen="False" Closed="UpdateBar_Closed">
+            <InfoBar.ActionButton>
+                <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
 
         <!-- Status and API -->
-        <Border Grid.Row="1" Padding="16" CornerRadius="8"
+        <Border Grid.Row="2" Padding="16" CornerRadius="8"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
             <StackPanel Spacing="10">
@@ -52,7 +74,7 @@
         </Border>
 
         <!-- Models -->
-        <Grid Grid.Row="2" RowSpacing="8">
+        <Grid Grid.Row="3" RowSpacing="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -106,7 +128,7 @@
         </Grid>
 
         <!-- Server log -->
-        <Expander x:Name="LogExpander" Grid.Row="3" Header="Server log" HorizontalAlignment="Stretch"
+        <Expander x:Name="LogExpander" Grid.Row="4" Header="Server log" HorizontalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch" Expanding="LogExpander_Expanding" Collapsed="LogExpander_Collapsed">
             <TextBox x:Name="LogText" IsReadOnly="True" FontFamily="Consolas" FontSize="12" Height="200"
                      TextWrapping="NoWrap" AcceptsReturn="True"

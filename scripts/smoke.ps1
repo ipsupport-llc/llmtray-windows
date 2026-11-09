@@ -70,6 +70,11 @@ try {
         Write-Host "download window not checked: $_"
     }
 
+    # By now (15 s after start) the update check has run: this dev-versioned
+    # package finds the published betas, so the window shows the update bar.
+    Start-Sleep -Seconds 5
+    Save-Screenshot '4-update'
+
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
     $streamFile = Join-Path $Out 'stream.txt'
     $stream | Set-Content -NoNewline (Join-Path $Out 'stream-request.json')

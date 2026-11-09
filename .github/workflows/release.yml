@@ -116,8 +116,36 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  portable:
+    needs: version
+    name: portable (${{ matrix.platform }})
+    strategy:
+      matrix:
+        include:
+          - { platform: x64, rid: win-x64, runner: windows-latest }
+          - { platform: ARM64, rid: win-arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Fetch llama.cpp
+        shell: pwsh
+        run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the portable ZIP
+        shell: pwsh
+        env:
+          DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
+        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release $env:DISPLAY_VERSION -Zip "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}-portable.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msix-portable-${{ matrix.platform }}
+          path: dist/*.zip
+          if-no-files-found: error
+
   publish:
-    needs: [version, package]
+    needs: [version, package, portable]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -136,11 +164,15 @@ jobs:
           cat > notes.md <<'NOTES'
           Builds for Windows 11 (22H2 or later): `x64` for most PCs, `ARM64` for Snapdragon laptops.
 
-          These packages are signed with a self-signed certificate until the app gets a public one. Before the first install:
+          **Installer (`.msix`).** Signed with a self-signed certificate until the app gets a public one, so the first install needs administrator rights:
 
           1. Download `LLMTray-signing.cer`, open it, and choose **Install Certificate**.
           2. Pick **Local Machine**, then **Place all certificates in the following store**, **Trusted People**.
           3. Open the `.msix` for your PC and choose **Install**.
+
+          **Portable (`-portable.zip`).** No installation and no administrator rights: unpack it anywhere you can write to and run `LLMTray\LLMTray.exe`. If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
+
+          Both update themselves: the app checks for new releases at start and on **Check for updates**.
           NOTES
           flags=()
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)

@@ -27,6 +27,8 @@ if (file is null)
 var sha = args.Length == 5 ? args[4] : file.Sha256;
 var url = await source.FileUrlAsync(args[1], file.Name, CancellationToken.None);
 var started = DateTime.UtcNow;
-await new ModelDownloader(http).DownloadAsync(new DownloadItem(url, Path.GetFullPath(args[3]), file.Size, sha), null, CancellationToken.None);
+await DownloadQueue.WithRetriesAsync(
+    () => new ModelDownloader(http).DownloadAsync(new DownloadItem(url, Path.GetFullPath(args[3]), file.Size, sha), null, CancellationToken.None),
+    CancellationToken.None);
 Console.WriteLine($"{args[0]} {args[1]}/{file.Name}: {file.Size:N0} bytes in {(DateTime.UtcNow - started).TotalSeconds:0.0} s{(sha is null ? "" : ", SHA-256 checked")}");
 return 0;
