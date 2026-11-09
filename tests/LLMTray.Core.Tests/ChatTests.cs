@@ -25,6 +25,16 @@ public class SseTests
         Assert.Equal([new SseEvent.Error("boom")], SseDecoder.Events("data: {\"error\":{\"message\":\"boom\"}}").ToList());
         Assert.Empty(SseDecoder.Events(": comment"));
     }
+
+    [Fact]
+    public void StandardFramingAndOddValues()
+    {
+        var d = new SseDecoder();
+        // No space after the colon, and one event's JSON over two data lines.
+        var events = d.Feed("data:{\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\ndata: {\"choices\":\ndata: [{\"delta\":{\"content\":\"b\"}}]}\n\n");
+        Assert.Equal([new SseEvent.Content("a"), new SseEvent.Content("b")], events);
+        Assert.Empty(SseDecoder.Events("data: {\"error\":null,\"usage\":{\"completion_tokens\":null},\"choices\":[null]}"));
+    }
 }
 
 public sealed class ChatFileTests : IDisposable
@@ -191,6 +201,17 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.Equal(["user", "assistant"], chat.Messages.Select(m => m.Role));
     }
 
+    [Fact]
+    public async Task ASwitchKeepsTheTurnInProgress()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        await chat.SendAsync("first", new ChatOptions(null));
+        var id = chat.Id!.Value;
+        chat.New();
+        Assert.Equal(["user", "assistant"], store.Load(id)!.Messages.Select(m => m.Role));
+    }
+
     [Theory]
     [InlineData("\"A Title\"", "A Title")]
     [InlineData("Title: Weather in Kyiv.", "Weather in Kyiv")]
@@ -220,6 +241,13 @@ public class MarkdownTests
         Assert.Equal(["a", "b"], table.Header);
         Assert.Equal(["1", "2"], table.Rows[0]);
         Assert.IsType<Block.Rule>(blocks[7]);
+    }
+
+    [Fact]
+    public void OddNumeralsAreText()
+    {
+        var blocks = Markdown.Parse("١. item\n99999999999. big");
+        Assert.All(blocks, b => Assert.IsNotType<Block.List>(b));
     }
 
     [Fact]

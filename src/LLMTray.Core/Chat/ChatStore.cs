@@ -44,13 +44,26 @@ public sealed class ChatStore(string folder)
         return list.OrderByDescending(c => c.UpdatedAt).ToList();
     }
 
+    readonly object writing = new();
+
+    /// <summary>One write at a time, each through its own temporary file, moved into place.</summary>
     public void Save(ChatSessionFile file)
     {
-        Directory.CreateDirectory(Folder);
-        var path = PathOf(file.Id);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(file, ChatJson.Default.ChatSessionFile));
-        File.Move(temp, path, overwrite: true);
+        lock (writing)
+        {
+            Directory.CreateDirectory(Folder);
+            var path = PathOf(file.Id);
+            var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(temp, JsonSerializer.Serialize(file, ChatJson.Default.ChatSessionFile));
+                File.Move(temp, path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
         Changed?.Invoke(file.Id);
     }
 

@@ -56,7 +56,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
 
     public void New(bool temporary = false)
     {
-        Stop();
+        KeepCurrentTurn();
         lock (sync)
         {
             epoch++;
@@ -73,7 +73,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     public bool Load(Guid id)
     {
         if (store.Load(id) is not { } file) return false;
-        Stop();
+        KeepCurrentTurn();
         lock (sync)
         {
             epoch++;
@@ -121,6 +121,22 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             if (Messages.Count == 0 || Messages[^1].Role != "user") return Task.CompletedTask;
         }
         return AnswerAsync(options);
+    }
+
+    /// <summary>
+    /// Before another chat replaces this one: an answer still coming is
+    /// stopped and saved as far as it got, with the question.
+    /// </summary>
+    void KeepCurrentTurn()
+    {
+        bool busy;
+        lock (sync)
+        {
+            busy = Busy;
+            turn?.Cancel();
+            foreach (var m in Messages.Where(m => m.Streaming)) m.Streaming = false;
+        }
+        if (busy) Save();
     }
 
     /// <summary>Ends the answer being written; what came so far stays.</summary>
@@ -195,6 +211,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             answer.Error = $"The answer was cut off: {e.Message}";
         }
+        catch (Exception e)
+        {
+            answer.Error = $"The answer failed: {e.Message}";
+        }
+        finally
+        {
+            // Whatever happened, the turn ends: never a chat stuck busy.
+            answer.Streaming = false;
+            lock (sync)
+            {
+                Busy = false;
+                turn?.Dispose();
+                turn = null;
+            }
+        }
 
         if (first is DateTimeOffset f)
         {
@@ -211,13 +242,6 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Requests = [request],
             TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
         };
-        answer.Streaming = false;
-        lock (sync)
-        {
-            Busy = false;
-            turn?.Dispose();
-            turn = null;
-        }
         if (mine != epoch) return;
         Save();
         Changed?.Invoke();
@@ -279,10 +303,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         catch (Exception e) when (e is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException or InvalidOperationException)
         {
         }
-        if (mine != epoch) return;
         lock (sync)
         {
-            if (Title.Length > 0) return;
+            // Checked here, under the lock: a chat switched to meanwhile keeps its own title.
+            if (mine != epoch || Title.Length > 0) return;
             Title = title ?? FirstWords(Messages.FirstOrDefault(m => m.Role == "user")?.Content ?? "");
         }
         Save();
@@ -348,8 +372,19 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             : $"The API answered {(int)response.StatusCode} {response.ReasonPhrase}.";
     }
 
-    /// <summary>Writes the chat (not a temporary one, not one with nothing said).</summary>
+    readonly object saving = new();
+
+    /// <summary>
+    /// Writes the chat (not a temporary one, not one with nothing said).
+    /// Snapshot and write happen in order, so an older snapshot never lands
+    /// after a newer one.
+    /// </summary>
     void Save()
+    {
+        lock (saving) SaveNow();
+    }
+
+    void SaveNow()
     {
         ChatSessionFile file;
         lock (sync)

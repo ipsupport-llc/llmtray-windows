@@ -106,7 +106,8 @@ public sealed record ChatSessionFile
 /// <summary>Swift writes UUIDs in upper case.</summary>
 sealed class UpperGuidConverter : JsonConverter<Guid>
 {
-    public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => Guid.Parse(reader.GetString()!);
+    public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        Guid.TryParse(reader.GetString(), out var id) ? id : throw new JsonException("not a UUID");
     public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString("D").ToUpperInvariant());
 }
 
@@ -114,7 +115,9 @@ sealed class UpperGuidConverter : JsonConverter<Guid>
 sealed class SwiftDateConverter : JsonConverter<DateTimeOffset>
 {
     public override DateTimeOffset Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        DateTimeOffset.Parse(reader.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
+        DateTimeOffset.TryParse(reader.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var date)
+            ? date
+            : throw new JsonException("not a date");
     public override void Write(Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
 }

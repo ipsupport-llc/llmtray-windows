@@ -105,15 +105,16 @@ public static partial class Markdown
             if (ListItem().Match(line) is { Success: true } item)
             {
                 Flush();
-                var ordered = char.IsDigit(item.Groups["mark"].Value[0]);
-                var start = ordered ? int.Parse(item.Groups["mark"].Value.TrimEnd('.', ')'), System.Globalization.CultureInfo.InvariantCulture) : 1;
+                var ordered = char.IsAsciiDigit(item.Groups["mark"].Value[0]);
+                var start = ordered && int.TryParse(item.Groups["mark"].Value.TrimEnd('.', ')'), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 1;
                 var items = new List<IReadOnlyList<Run>>();
                 var current = new StringBuilder(item.Groups["text"].Value);
                 i++;
                 while (i < lines.Length)
                 {
                     var next = lines[i];
-                    if (ListItem().Match(next) is { Success: true } more && char.IsDigit(more.Groups["mark"].Value[0]) == ordered)
+                    if (ListItem().Match(next) is { Success: true } more && char.IsAsciiDigit(more.Groups["mark"].Value[0]) == ordered)
                     {
                         items.Add(Inline(current.ToString()));
                         current.Clear().Append(more.Groups["text"].Value);
@@ -226,7 +227,7 @@ public static partial class Markdown
     [GeneratedRegex(@"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")]
     private static partial Regex TableRule();
 
-    [GeneratedRegex(@"^\s{0,3}(?<mark>[-*+]|\d{1,9}[.)])\s+(?<text>.*)$")]
+    [GeneratedRegex(@"^\s{0,3}(?<mark>[-*+]|[0-9]{1,9}[.)])\s+(?<text>.*)$")]
     private static partial Regex ListItem();
 
     [GeneratedRegex(@"\[(?<text>[^\]]+)\]\((?<url>[^)\s]+)\)")]

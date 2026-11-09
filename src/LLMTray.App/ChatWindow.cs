@@ -49,6 +49,10 @@ sealed class ChatWindow : Window
     readonly ToggleButton thinking = new() { IsChecked = true, Content = "Thinking" };
     readonly Button send = new();
     bool rendering;
+    /// <summary>Keep the newest in view: on after sending, off when the user scrolls up.</summary>
+    bool follow = true;
+    /// <summary>Thought process blocks the user opened, by message, kept across redraws.</summary>
+    readonly HashSet<ChatMessage> openThoughts = [];
     bool renderQueued;
     int renderedCount = -1;
     int renderedEpoch = -1;
@@ -71,6 +75,7 @@ sealed class ChatWindow : Window
         {
             if (rendering || chats.SelectedItem is not ListViewItem { Tag: ChatSummary summary }) return;
             if (summary.Id != chat.Id) chat.Load(summary.Id);
+            input.Focus(FocusState.Programmatic);
         };
         ToolTipService.SetToolTip(temporary, "Temporary chat: not saved");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(temporary, "Temporary chat");
@@ -98,10 +103,44 @@ sealed class ChatWindow : Window
             sender.Hide();
         };
 
+        // Keys: Ctrl+N a new chat, Ctrl+F search, Esc stops an answer.
+        AddKey(VirtualKey.N, VirtualKeyModifiers.Control, NewChat);
+        AddKey(VirtualKey.F, VirtualKeyModifiers.Control, () => search.Focus(FocusState.Keyboard));
+        AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, () => { if (chat.Busy) chat.Stop(); });
+        Activated += (_, e) =>
+        {
+            if (e.WindowActivationState != WindowActivationState.Deactivated) input.Focus(FocusState.Programmatic);
+        };
+        if (Content is FrameworkElement root)
+        {
+            // Colours are picked per theme: draw everything again on a switch.
+            root.ActualThemeChanged += (_, _) =>
+            {
+                renderedEpoch = -1;
+                Render();
+                RenderChats();
+            };
+        }
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(search, "Search chats");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(chats, "Chats");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(stats, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+
         RenderModels();
         RenderStatus();
         RenderChats();
         Render();
+    }
+
+    void AddKey(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
+    {
+        var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        accelerator.Invoked += (_, e) =>
+        {
+            action();
+            e.Handled = true;
+        };
+        (Content as UIElement)?.KeyboardAccelerators.Add(accelerator);
     }
 
     public void NewChat()
@@ -127,6 +166,7 @@ sealed class ChatWindow : Window
         var text = input.Text;
         if (string.IsNullOrWhiteSpace(text)) return;
         input.Text = "";
+        follow = true;
         _ = chat.SendAsync(text, Options());
     }
 
@@ -169,6 +209,11 @@ sealed class ChatWindow : Window
         header.Children.Add(state);
 
         scroller.Content = messages;
+        // Scrolling up to read stops following the answer; back at the end follows again.
+        scroller.ViewChanged += (_, e) =>
+        {
+            if (!e.IsIntermediate) follow = scroller.VerticalOffset >= scroller.ScrollableHeight - 40;
+        };
 
         // Above the composer: Regenerate and the numbers.
         var bar = new Grid { Padding = new Thickness(20, 4, 20, 0) };
@@ -233,7 +278,6 @@ sealed class ChatWindow : Window
     {
         title.Text = chat.Temporary ? "Temporary chat" : chat.Title.Length > 0 ? chat.Title : "New chat";
         temporary.IsChecked = chat.Temporary;
-        var nearEnd = scroller.VerticalOffset >= scroller.ScrollableHeight - 80;
 
         if (chat.Messages.Count == 0)
         {
@@ -269,7 +313,7 @@ sealed class ChatWindow : Window
         send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? "Stop" : "Send");
         ToolTipService.SetToolTip(send, chat.Busy ? "Stop" : "Send (Enter)");
-        if (nearEnd || chat.Busy) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true));
+        if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true));
         RenderChatsSelection();
     }
 
@@ -292,6 +336,11 @@ sealed class ChatWindow : Window
                     Foreground = Ui.Resource<Brush>("TextOnAccentFillColorPrimaryBrush", Ui.CardBackground),
                 },
             };
+            var copyMenu = new MenuFlyout();
+            var copyItem = new MenuFlyoutItem { Text = "Copy" };
+            copyItem.Click += (_, _) => Copy(message.Content);
+            copyMenu.Items.Add(copyItem);
+            bubble.ContextFlyout = copyMenu;
             var you = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Right };
             you.Children.Add(new TextBlock { Text = "You", FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
             you.Children.Add(bubble);
@@ -315,13 +364,17 @@ sealed class ChatWindow : Window
                 FontSize = 13,
             };
             var thinkingNow = message.Streaming && message.Content.Length == 0;
-            stack.Children.Add(new Expander
+            var expander = new Expander
             {
                 Header = thinkingNow ? "Thinking…" : "Thought process",
                 Content = thought,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            });
+                IsExpanded = openThoughts.Contains(message),
+            };
+            expander.Expanding += (_, _) => openThoughts.Add(message);
+            expander.Collapsed += (_, _) => openThoughts.Remove(message);
+            stack.Children.Add(expander);
         }
 
         if (message.Content.Length > 0 || (message.Streaming && message.Reasoning.Length == 0))
@@ -410,7 +463,15 @@ sealed class ChatWindow : Window
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 grid.Children.Add(Ui.Caption(c.Language.Length > 0 ? c.Language : "code"));
                 grid.Children.Add(copy);
-                var scroll = new ScrollViewer { Content = code, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Auto };
+                // A long block scrolls inside itself instead of filling the conversation.
+                var scroll = new ScrollViewer
+                {
+                    Content = code,
+                    MaxHeight = 480,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollMode = ScrollMode.Auto,
+                };
                 Grid.SetRow(scroll, 1);
                 grid.Children.Add(scroll);
                 return new Border
