@@ -74,6 +74,6 @@ public sealed partial record ReleaseTag(int Major, int Minor, int Patch, int? Be
     static bool TryPart(string text, int max, out int value) =>
         int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value) && value <= max;
 
-    [GeneratedRegex(@"^v(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(?:-beta\.(?<beta>[1-9][0-9]*))?$")]
+    [GeneratedRegex(@"\Av(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(?:-beta\.(?<beta>[1-9][0-9]*))?\z")]
     private static partial Regex TagPattern();
 }
