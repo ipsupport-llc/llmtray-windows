@@ -55,6 +55,15 @@ sealed class AppUpdater
 
     public InstallKind Kind { get; }
 
+    /// <summary>
+    /// The portable copy installed by Scoop (adr/0005): Scoop keeps its own
+    /// install.json and manifest.json beside the app. Updates are found as
+    /// usual but installed with "scoop update llmtray", so Scoop's record
+    /// and the files never disagree.
+    /// </summary>
+    public bool ScoopManaged { get; } =
+        File.Exists(Path.Combine(AppContext.BaseDirectory, "install.json")) && File.Exists(Path.Combine(AppContext.BaseDirectory, "manifest.json"));
+
     /// <summary>The running release; null in a development build.</summary>
     public ReleaseTag? Current { get; }
     public string Architecture { get; }
@@ -117,6 +126,12 @@ sealed class AppUpdater
     public async Task InstallAsync()
     {
         if (Available is not { } update || Busy) return;
+        if (ScoopManaged)
+        {
+            Status = $"LLMTray was installed with Scoop: quit LLMTray, then run \"scoop update llmtray\" to get {update.Tag.DisplayVersion}.";
+            Raise();
+            return;
+        }
         Busy = true;
         Status = $"Downloading LLMTray {update.Tag.DisplayVersion}…";
         Raise();

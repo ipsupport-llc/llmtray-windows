@@ -149,8 +149,9 @@ public sealed partial class MainWindow : Window
             UpdateBar.Severity = InfoBarSeverity.Success;
             UpdateBar.Title = $"LLMTray {update.Tag.DisplayVersion} is available";
             UpdateBar.Message = updater.Status ?? $"{Ui.Size(update.Package.Size)}. LLMTray closes, updates and opens again.";
-            InstallUpdateButton.Visibility = Visibility.Visible;
+            InstallUpdateButton.Visibility = updater.ScoopManaged ? Visibility.Collapsed : Visibility.Visible;
             InstallUpdateButton.IsEnabled = !updater.Busy;
+            if (updater.ScoopManaged && updater.Status is null) UpdateBar.Message = "Installed with Scoop: quit LLMTray, then run \"scoop update llmtray\".";
             UpdateBar.IsOpen = true;
         }
         else if (updater.Status is { } status && page != "updates")
@@ -216,6 +217,8 @@ public sealed partial class MainWindow : Window
     void Stop_Click(object sender, RoutedEventArgs e) => _ = App.Current.StopAsync();
 
     void OpenLog_Click(object sender, RoutedEventArgs e) => App.Current.ShowLog();
+
+    void Chat_Click(object sender, RoutedEventArgs e) => App.Current.ShowChat();
 
     // MARK: Pages
 
@@ -419,7 +422,7 @@ public sealed partial class MainWindow : Window
         };
         var check = Ui.Button("Check Now", () => _ = updater.CheckAsync(manual: true));
         check.IsEnabled = !updater.Busy;
-        var kind = updater.Kind == InstallKind.Portable ? "portable" : "installed";
+        var kind = updater.ScoopManaged ? "Scoop" : updater.Kind == InstallKind.Portable ? "portable" : "installed";
         yield return Ui.Card(
             Ui.Row("Version", $"The {kind} copy, for {updater.Architecture}.", Ui.Value(updater.Current!.DisplayVersion)),
             Ui.Row("Check for updates automatically", "When LLMTray starts and every 12 hours. Nothing installs without your click.", auto),

@@ -64,6 +64,12 @@ public partial class App : Application
     public DownloadQueue Downloads { get; private set; } = null!;
     internal AppUpdater Updater { get; private set; } = null!;
 
+    /// <summary>The saved chats (sessions/, the Mac app's layout).</summary>
+    public LLMTray.Core.Chat.ChatStore Chats { get; private set; } = null!;
+
+    /// <summary>For the app's own requests to its local API: no proxy, no timeout (answers stream).</summary>
+    public HttpClient Local { get; } = new(new SocketsHttpHandler { UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
+
     public event Action? ModelsChanged;
     public event Action<DownloadState>? DownloadsChanged;
     public event Action<HostState>? HostChanged;
@@ -90,6 +96,7 @@ public partial class App : Application
         Downloads.Completed += _ => Library.Rescan();
 
         Updater = new AppUpdater(dispatcher, Web, DataFolder);
+        Chats = new LLMTray.Core.Chat.ChatStore(Path.Combine(DataFolder, "sessions"));
 
         launcher = new JobObjectLauncher();
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
@@ -140,6 +147,18 @@ public partial class App : Application
         window.Activate();
         if (page is not null) window.ShowPage(page);
         if (getModels) _ = window.GetModelsAsync();
+    }
+
+    ChatWindow? chatWindow;
+
+    /// <summary>The chat window; a new chat in it when asked.</summary>
+    public void ShowChat(bool newChat = false)
+    {
+        if (Quitting) return;
+        chatWindow ??= new ChatWindow();
+        chatWindow.AppWindow.Show();
+        chatWindow.Activate();
+        if (newChat) chatWindow.NewChat();
     }
 
     public void ShowLog()
@@ -221,7 +240,7 @@ public partial class App : Application
     IReadOnlyList<TrayMenuItem> TrayMenu()
     {
         var state = Host.State;
-        var items = new List<TrayMenuItem> { new("Open LLMTray", ShowWindow), TrayMenuItem.Separator };
+        var items = new List<TrayMenuItem> { new("Chat", () => ShowChat()), new("Open LLMTray", ShowWindow), TrayMenuItem.Separator };
         var models = Library.Rescan().Models;
         foreach (var model in models.Take(20))
         {
@@ -259,6 +278,7 @@ public partial class App : Application
             launcher?.Dispose();
             popover?.Close();
             log?.Close();
+            chatWindow?.Close();
             window?.Close();
             Exit();
         }
