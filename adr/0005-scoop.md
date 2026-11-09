@@ -24,8 +24,11 @@ ARM64.
   published out of order would need the manifest fixed by hand.
 - **Data.** Settings, logs and models live outside the app folder
   (ADR 0004), so the manifest persists nothing and an update keeps them.
-- **The bump** is a PR after each release (RELEASING.md), because `main`
-  changes only through PRs.
+- **The bump** is automatic: after publishing a release, `release.yml`
+  writes the ZIPs' SHA-256 into the manifest (`scripts/bump-scoop.ps1`)
+  and the Actions bot commits it to `main`. The main ruleset lets the bot
+  past for this; `checkver`/`autoupdate` stay for running Scoop's tools
+  by hand.
 
 ## Costs
 
