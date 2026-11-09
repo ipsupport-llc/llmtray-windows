@@ -54,11 +54,25 @@ public sealed class UpdateChecker(HttpClient http, string repository = "ipsuppor
             ? $"LLMTray-{tag.DisplayVersion}-{architecture}-portable.zip"
             : $"LLMTray-{tag.DisplayVersion}-{architecture}.msix";
 
+    /// <summary>Every release, page by page (GitHub's Link rel="next"), at most 10 pages.</summary>
     async Task<IReadOnlyList<Release>> FetchAsync(CancellationToken cancellationToken)
+    {
+        var all = new List<Release>();
+        Uri? url = new Uri(api, $"repos/{repository}/releases?per_page=100");
+        for (var page = 0; url is not null && page < 10; page++)
+        {
+            var (releases, next) = await FetchPageAsync(url, cancellationToken).ConfigureAwait(false);
+            all.AddRange(releases);
+            url = next;
+        }
+        return all;
+    }
+
+    async Task<(IReadOnlyList<Release> Releases, Uri? Next)> FetchPageAsync(Uri url, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(api, $"repos/{repository}/releases?per_page=50"));
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         HttpResponseMessage response;
         try
@@ -83,11 +97,25 @@ public sealed class UpdateChecker(HttpClient http, string repository = "ipsuppor
             {
                 throw new UpdateCheckException($"GitHub answered {(int)response.StatusCode} {response.ReasonPhrase}.");
             }
+            Uri? next = null;
+            if (response.Headers.TryGetValues("Link", out var links))
+            {
+                foreach (var link in links.SelectMany(l => l.Split(',')))
+                {
+                    var parts = link.Split(';');
+                    if (parts.Skip(1).Any(p => p.Trim() == "rel=\"next\"")
+                        && Uri.TryCreate(url, parts[0].Trim().TrimStart('<').TrimEnd('>'), out var target)
+                        && target.Host == api.Host)
+                    {
+                        next = target;
+                    }
+                }
+            }
             await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
             try
             {
                 var json = await JsonNode.ParseAsync(stream, cancellationToken: timeout.Token).ConfigureAwait(false);
-                return Parse(json);
+                return (Parse(json), next);
             }
             catch (Exception e) when (e is JsonException or InvalidOperationException or NullReferenceException or FormatException)
             {

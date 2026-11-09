@@ -83,26 +83,34 @@ sealed class AppUpdater
         timer.Start();
     }
 
+    int generation;
+
     public async Task CheckAsync(bool manual)
     {
         if (!CanUpdate || Busy) return;
         Busy = true;
+        var mine = ++generation;
+        var channel = Channel;
         if (manual) Status = "Checking for updates…";
         Raise();
         try
         {
-            Available = await checker.CheckAsync(Current!, Channel, Architecture, Kind, CancellationToken.None);
-            Status = Available is null && manual ? $"LLMTray {Current!.DisplayVersion} is the newest {Word(Channel)} release." : null;
+            var found = await checker.CheckAsync(Current!, channel, Architecture, Kind, CancellationToken.None);
+            // A channel switch while checking: this answer is for the old one.
+            if (mine != generation || channel != Channel) return;
+            Available = found;
+            Status = found is null && manual ? $"LLMTray {Current!.DisplayVersion} is the newest {Word(channel)} release." : null;
         }
-        catch (UpdateCheckException e)
+        catch (Exception e)
         {
             // A failed automatic check stays quiet; the next one may get through.
-            if (manual) Status = e.Message;
+            if (manual && mine == generation) Status = e is UpdateCheckException ? e.Message : $"The update check failed: {e.Message}";
         }
         finally
         {
             Busy = false;
             Raise();
+            if (mine != generation || channel != Channel) _ = CheckAsync(manual: true);
         }
     }
 
@@ -137,14 +145,16 @@ sealed class AppUpdater
             return;
         }
 
-        Status = $"Installing LLMTray {update.Tag.DisplayVersion}; it restarts by itself…";
+        Status = $"Installing LLMTray {update.Tag.DisplayVersion}…";
         Raise();
-        // Windows restarts an app registered for restart after updating it.
-        _ = RegisterApplicationRestart(null, 0);
         try
         {
-            var result = await new PackageManager().AddPackageByUriAsync(new Uri(file), new AddPackageOptions { ForceAppShutdown = true });
-            if (result.ExtendedErrorCode is { } error) throw error;
+            // Staged while the app runs; Windows finishes it once the app has
+            // exited. The app then quits the normal way and a small script
+            // starts the new version.
+            var result = await new PackageManager().AddPackageByUriAsync(new Uri(file),
+                new AddPackageOptions { DeferRegistrationWhenPackagesAreInUse = true });
+            if (result.ExtendedErrorCode is { HResult: not 0 } error) throw error;
         }
         catch (Exception e)
         {
@@ -161,7 +171,47 @@ sealed class AppUpdater
                 Status = $"The update is downloaded to {file}. Open it to install.";
                 Raise();
             }
+            return;
         }
+        await RestartAsync(update, $"start \"\" \"shell:AppsFolder\\{Package.Current.Id.FamilyName}!App\"");
+    }
+
+    /// <summary>
+    /// Quits and has a script start the app again once this process is gone
+    /// (and, for the portable copy, copy the new files in first).
+    /// </summary>
+    async Task RestartAsync(UpdateInfo update, params string[] afterExit)
+    {
+        try
+        {
+            var pid = Environment.ProcessId;
+            var script = Path.Combine(folder, "restart.cmd");
+            var lines = new List<string>
+            {
+                "@echo off",
+                "rem LLMTray update: wait for the app to exit, then finish the update and start it.",
+                ":wait",
+                $"tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul",
+                "if not errorlevel 1 (",
+                "  timeout /t 1 /nobreak >nul",
+                "  goto wait",
+                ")",
+                "timeout /t 2 /nobreak >nul",
+            };
+            lines.AddRange(afterExit);
+            await File.WriteAllTextAsync(script, string.Join("\r\n", lines) + "\r\n");
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"") { UseShellExecute = false, CreateNoWindow = true });
+        }
+        catch (Exception e)
+        {
+            Status = $"LLMTray {update.Tag.DisplayVersion} is ready; quit and start LLMTray to finish ({e.Message}).";
+            Busy = false;
+            Raise();
+            return;
+        }
+        Status = $"Restarting into LLMTray {update.Tag.DisplayVersion}…";
+        Raise();
+        await App.Current.QuitAsync();
     }
 
     /// <summary>
@@ -180,35 +230,17 @@ sealed class AppUpdater
             // The ZIP holds one LLMTray folder.
             var root = File.Exists(Path.Combine(unpacked, "LLMTray.exe")) ? unpacked : Path.Combine(unpacked, "LLMTray");
             if (!File.Exists(Path.Combine(root, "LLMTray.exe"))) throw new IOException("the update has no LLMTray.exe");
-            var pid = Environment.ProcessId;
             var exe = Path.Combine(appDir, "LLMTray.exe");
-            var script = Path.Combine(folder, "update.cmd");
-            var lines = new[]
-            {
-                "@echo off",
-                "rem LLMTray portable update: wait for the app to exit, copy the new version over it, start it.",
-                ":wait",
-                $"tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul",
-                "if not errorlevel 1 (",
-                "  timeout /t 1 /nobreak >nul",
-                "  goto wait",
-                ")",
+            await RestartAsync(update,
                 $"robocopy \"{root}\" \"{appDir}\" /E /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
-                $"start \"\" \"{exe}\"",
-            };
-            await File.WriteAllTextAsync(script, string.Join("\r\n", lines) + "\r\n");
-            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"") { UseShellExecute = false, CreateNoWindow = true });
+                $"start \"\" \"{exe}\"");
         }
         catch (Exception e)
         {
             Status = $"The update didn't install: {e.Message}. The new version is in {unpacked}.";
             Busy = false;
             Raise();
-            return;
         }
-        Status = $"Restarting into LLMTray {update.Tag.DisplayVersion}…";
-        Raise();
-        await App.Current.QuitAsync();
     }
 
     public void SetChannel(UpdateChannel channel)
@@ -217,13 +249,11 @@ sealed class AppUpdater
         Available = null;
         Status = null;
         Raise();
+        // A check in flight re-runs for the new channel when it ends.
         _ = CheckAsync(manual: true);
     }
 
     public static string Word(UpdateChannel channel) => channel == UpdateChannel.Beta ? "beta" : "stable";
 
     void Raise() => dispatcher.TryEnqueue(() => Changed?.Invoke());
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    static extern int RegisterApplicationRestart(string? commandLine, int flags);
 }

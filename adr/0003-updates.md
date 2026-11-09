@@ -21,12 +21,20 @@ like the Mac app's Sparkle feed (Mac ADR 0004), with the same rules:
   menu. A found update shows in the window and the tray menu. Nothing
   installs without the user's click.
 - **Install.** The app downloads `LLMTray-<version>-<arch>.msix` from the
-  release into its data folder. It checks the size and the SHA-256 GitHub
-  lists for the asset, registers for restart (`RegisterApplicationRestart`),
-  and installs over itself with `PackageManager.AddPackageByUriAsync`
-  (`ForceAppShutdown`). Windows restarts it on the new version. If that call
-  fails, the downloaded package opens in the Windows installer, where the
-  user chooses Update.
+  release into its data folder and checks the size and the SHA-256 GitHub
+  lists for the asset. It stages the package with
+  `PackageManager.AddPackageByUriAsync`
+  (`DeferRegistrationWhenPackagesAreInUse`); Windows finishes the update
+  once the app has exited. The app then quits the normal way (models
+  unloaded, children ended), and a small script waits for the process to
+  end and starts the app again (`shell:AppsFolder\<family>!App`). The
+  first design (`ForceAppShutdown` plus `RegisterApplicationRestart`) was
+  dropped: Windows restarts only apps that have run for 60 seconds, so an
+  early install could leave the app closed. If staging fails, the
+  downloaded package opens in the Windows installer, where the user
+  chooses Update.
+- **The release list** is read page by page, so the highest version is
+  found even past the first hundred releases.
 - **Store build:** no updater. The Store updates it.
 
 ## Why not `.appinstaller` feeds

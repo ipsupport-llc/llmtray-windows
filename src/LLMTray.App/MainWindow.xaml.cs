@@ -129,16 +129,38 @@ public sealed partial class MainWindow : Window
     }
 
     bool renderingUpdates;
+    string? dismissedUpdate;
+    string? lastStatus;
 
     void RenderUpdates()
     {
         var updater = App.Current.Updater;
         renderingUpdates = true;
-        VersionText.Text = updater.Current is { } current ? $"Version {current.DisplayVersion}" : "Development build";
-        ChannelBox.SelectedIndex = updater.Channel == UpdateChannel.Beta ? 1 : 0;
-        ChannelBox.Visibility = CheckUpdatesButton.Visibility = updater.CanUpdate ? Visibility.Visible : Visibility.Collapsed;
-        CheckUpdatesButton.IsEnabled = !updater.Busy;
-        renderingUpdates = false;
+        try
+        {
+            VersionText.Text = updater.Current is { } current ? $"Version {current.DisplayVersion}" : "Development build";
+            var index = updater.Channel == UpdateChannel.Beta ? 1 : 0;
+            if (ChannelBox.SelectedIndex != index) ChannelBox.SelectedIndex = index;
+            ChannelBox.Visibility = CheckUpdatesButton.Visibility = updater.CanUpdate ? Visibility.Visible : Visibility.Collapsed;
+            ChannelBox.IsEnabled = CheckUpdatesButton.IsEnabled = !updater.Busy;
+        }
+        finally
+        {
+            renderingUpdates = false;
+        }
+
+        // Closed by the user: stays closed until something new happens.
+        var key = $"{updater.Available?.Tag.DisplayVersion}|{(updater.Busy ? "busy" : updater.Status)}";
+        if (key != lastStatus)
+        {
+            lastStatus = key;
+            dismissedUpdate = null;
+        }
+        if (dismissedUpdate == key)
+        {
+            UpdateBar.IsOpen = false;
+            return;
+        }
 
         if (updater.Available is { } update)
         {
@@ -162,6 +184,8 @@ public sealed partial class MainWindow : Window
             UpdateBar.IsOpen = false;
         }
     }
+
+    void UpdateBar_Closed(InfoBar sender, InfoBarClosedEventArgs args) => dismissedUpdate = lastStatus;
 
     void ChannelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {

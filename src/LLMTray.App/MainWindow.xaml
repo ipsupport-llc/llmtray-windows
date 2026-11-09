@@ -42,7 +42,7 @@
             <Button x:Name="CheckUpdatesButton" Grid.Column="3" Content="Check for updates" Click="CheckUpdates_Click" />
         </Grid>
 
-        <InfoBar x:Name="UpdateBar" Grid.Row="1" IsClosable="True" IsOpen="False">
+        <InfoBar x:Name="UpdateBar" Grid.Row="1" IsClosable="True" IsOpen="False" Closed="UpdateBar_Closed">
             <InfoBar.ActionButton>
                 <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" />
             </InfoBar.ActionButton>
