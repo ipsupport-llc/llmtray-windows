@@ -51,6 +51,17 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         Raise();
     }
 
+    /// <summary>Forgets the last result (the user closed its notice).</summary>
+    public void Dismiss()
+    {
+        lock (sync)
+        {
+            lastError = null;
+            lastDone = null;
+        }
+        Raise();
+    }
+
     /// <summary>Cancels the current download; its partial file stays for a resume.</summary>
     public void CancelCurrent()
     {

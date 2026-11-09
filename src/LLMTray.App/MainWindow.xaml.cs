@@ -171,6 +171,7 @@ public sealed partial class MainWindow : Window
             DownloadProgress.IsIndeterminate = d.Total is null;
             DownloadProgress.Value = d.Total is long all && all > 0 ? 1000.0 * d.Received / all : 0;
             DownloadProgress.Visibility = Visibility.Visible;
+            DownloadCancel.Content = "Cancel";
             DownloadCancel.Visibility = Visibility.Visible;
             DownloadPanel.Visibility = Visibility.Visible;
         }
@@ -178,14 +179,16 @@ public sealed partial class MainWindow : Window
         {
             DownloadText.Text = error;
             DownloadProgress.Visibility = Visibility.Collapsed;
-            DownloadCancel.Visibility = Visibility.Collapsed;
+            DownloadCancel.Content = "Close";
+            DownloadCancel.Visibility = Visibility.Visible;
             DownloadPanel.Visibility = Visibility.Visible;
         }
         else if (d.LastDone is { } done)
         {
             DownloadText.Text = $"{done} is downloaded. Choose Load, or name it in a request.";
             DownloadProgress.Visibility = Visibility.Collapsed;
-            DownloadCancel.Visibility = Visibility.Collapsed;
+            DownloadCancel.Content = "Close";
+            DownloadCancel.Visibility = Visibility.Visible;
             DownloadPanel.Visibility = Visibility.Visible;
         }
         else
@@ -194,7 +197,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    void DownloadCancel_Click(object sender, RoutedEventArgs e) => App.Current.Downloads.CancelCurrent();
+    void DownloadCancel_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Current.Downloads.State.IsActive) App.Current.Downloads.CancelCurrent();
+        else App.Current.Downloads.Dismiss();
+    }
 
     void Stop_Click(object sender, RoutedEventArgs e) => _ = App.Current.StopAsync();
 

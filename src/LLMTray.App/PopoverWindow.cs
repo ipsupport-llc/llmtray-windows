@@ -127,7 +127,7 @@ sealed class PopoverWindow : Window
                     _ = app.LoadAsync(chosen);
                 }
             };
-            var eject = Ui.IconButton("", "Unload the model", () => _ = app.StopAsync());
+            var eject = Ui.IconButton("\uE71A", "Unload the model", () => _ = app.StopAsync());
             eject.IsEnabled = current is not null;
             var pickRow = new Grid { ColumnSpacing = 6 };
             pickRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
