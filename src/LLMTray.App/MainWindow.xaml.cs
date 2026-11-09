@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using LLMTray.Core;
 using LLMTray.Core.Downloads;
+using LLMTray.Core.Updates;
 using LLMTray.Core.Models;
 using LLMTray.Core.Runtime;
 using Microsoft.UI;
@@ -65,7 +66,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(760, 640));
+        AppWindow.Resize(new SizeInt32(820, 680));
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
@@ -86,6 +87,8 @@ public sealed partial class MainWindow : Window
             RenderModels();
         };
         App.Current.DownloadsChanged += RenderDownloads;
+        App.Current.Updater.Changed += RenderUpdates;
+        RenderUpdates();
         state = App.Current.Host.State;
         RenderState();
         RenderModels();
@@ -124,6 +127,52 @@ public sealed partial class MainWindow : Window
             DownloadPanel.Visibility = Visibility.Collapsed;
         }
     }
+
+    bool renderingUpdates;
+
+    void RenderUpdates()
+    {
+        var updater = App.Current.Updater;
+        renderingUpdates = true;
+        VersionText.Text = updater.Current is { } current ? $"Version {current.DisplayVersion}" : "Development build";
+        ChannelBox.SelectedIndex = updater.Channel == UpdateChannel.Beta ? 1 : 0;
+        ChannelBox.Visibility = CheckUpdatesButton.Visibility = updater.CanUpdate ? Visibility.Visible : Visibility.Collapsed;
+        CheckUpdatesButton.IsEnabled = !updater.Busy;
+        renderingUpdates = false;
+
+        if (updater.Available is { } update)
+        {
+            UpdateBar.Severity = InfoBarSeverity.Success;
+            UpdateBar.Title = $"LLMTray {update.Tag.DisplayVersion} is available";
+            UpdateBar.Message = updater.Status ?? $"{MainWindow.FormatSize(update.Package.Size)}. The app closes, updates and opens again.";
+            InstallUpdateButton.Visibility = Visibility.Visible;
+            InstallUpdateButton.IsEnabled = !updater.Busy;
+            UpdateBar.IsOpen = true;
+        }
+        else if (updater.Status is { } status)
+        {
+            UpdateBar.Severity = InfoBarSeverity.Informational;
+            UpdateBar.Title = "Updates";
+            UpdateBar.Message = status;
+            InstallUpdateButton.Visibility = Visibility.Collapsed;
+            UpdateBar.IsOpen = true;
+        }
+        else
+        {
+            UpdateBar.IsOpen = false;
+        }
+    }
+
+    void ChannelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (renderingUpdates) return;
+        var channel = ChannelBox.SelectedIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
+        if (channel != App.Current.Updater.Channel) App.Current.Updater.SetChannel(channel);
+    }
+
+    void CheckUpdates_Click(object sender, RoutedEventArgs e) => _ = App.Current.Updater.CheckAsync(manual: true);
+
+    void InstallUpdate_Click(object sender, RoutedEventArgs e) => _ = App.Current.Updater.InstallAsync();
 
     async void GetModels_Click(object sender, RoutedEventArgs e)
     {

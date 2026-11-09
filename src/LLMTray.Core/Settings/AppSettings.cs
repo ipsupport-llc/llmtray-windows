@@ -17,6 +17,12 @@ public sealed record AppSettings
     /// <summary>Where the download window gets models: some networks reach only one source.</summary>
     public Downloads.DownloadSource DownloadSource { get; init; } = Downloads.DownloadSource.HuggingFace;
 
+    /// <summary>null: beta when running a beta, else stable (the Mac app's default).</summary>
+    public Updates.UpdateChannel? UpdateChannel { get; init; }
+
+    /// <summary>Check at start and every 12 hours.</summary>
+    public bool CheckForUpdates { get; init; } = true;
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }

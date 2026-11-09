@@ -7,7 +7,7 @@
   something there needs changing, say so.
 - **The plan is [adr/0001](adr/0001-windows-app.md)**: .NET 10 + WinUI 3,
   `llama-server.exe` as a pinned child process behind our own proxy on 8765,
-  one MSIX package shipped directly (`.appinstaller` updates) and through the
+  one MSIX package shipped directly (self-updating, adr/0003) and through the
   Store, and phases 1–3. A change to
   any of that needs a new ADR first.
 - **Logic goes in `LLMTray.Core`**: no Windows types, tested with
