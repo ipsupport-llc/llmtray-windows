@@ -1,6 +1,6 @@
 # 0005. A Scoop bucket for the portable ZIP
 
-Status: proposed (2026-11-10).
+Status: accepted (2026-11-10).
 
 ## Decision
 
@@ -15,11 +15,13 @@ ARM64.
 - **Integrity.** The manifest pins each ZIP's SHA-256, and Scoop checks it
   on download. `autoupdate` copies the hash from the `digest` GitHub's API
   lists for the release asset (`releases/tags/v<version>`). Scoop computes
-  a hash itself only when GitHub lists none.
+  a hash itself when GitHub lists none or its API can't be reached.
 - **Versions.** `checkver` reads the newest tag from the releases Atom feed.
   The feed lists betas, which `releases/latest` skips, and it isn't subject
   to the API's rate limit. The manifest follows the newest release, beta or
-  stable.
+  stable, in the order they were published, not by version number (unlike
+  ADR 0003). Releases go out in version order, so the two agree; a release
+  published out of order would need the manifest fixed by hand.
 - **Data.** Settings, logs and models live outside the app folder
   (ADR 0004), so the manifest persists nothing and an update keeps them.
 - **The bump** is a PR after each release (RELEASING.md), because `main`
@@ -27,11 +29,11 @@ ARM64.
 
 ## Costs
 
-- **Two updaters.** The app's own updater (ADR 0003) still runs in a Scoop
-  install. Its robocopy would put the new version into Scoop's folder for
-  the old one. The manifest's notes tell users to update through Scoop.
-  The app could switch its updater off when it runs from a Scoop folder:
-  that needs its own change.
+- **Two updaters.** The app's own updater (ADR 0003) would put a new
+  version into Scoop's folder for the old one. The app therefore checks
+  for Scoop's `install.json` and `manifest.json` beside itself. Under
+  Scoop it still says when a new version is out, but points to
+  `scoop update llmtray` instead of installing it.
 - **Beta and stable together.** Scoop has one channel per manifest. A
   stable-only `llmtray.json` beside an `llmtray-beta.json` can come with
   the first stable release.
