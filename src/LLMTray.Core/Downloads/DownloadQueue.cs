@@ -1,0 +1,133 @@
+namespace LLMTray.Core.Downloads;
+
+/// <summary>A model to download: its files, in order (the weights, then a projector).</summary>
+public sealed record DownloadJob(string Title, IReadOnlyList<DownloadItem> Items)
+{
+    public long? TotalSize => Items.All(i => i.Size is not null) ? Items.Sum(i => i.Size!.Value) : null;
+}
+
+public sealed record DownloadState(DownloadJob? Current, long Received, long? Total, int Queued, string? LastError, string? LastDone)
+{
+    public static readonly DownloadState Idle = new(null, 0, null, 0, null, null);
+    public bool IsActive => Current is not null;
+}
+
+/// <summary>
+/// Downloads models one at a time. Raises <see cref="Changed"/> on any
+/// thread; <see cref="Completed"/> after each finished model.
+/// </summary>
+public sealed class DownloadQueue(ModelDownloader downloader)
+{
+    readonly object sync = new();
+    readonly Queue<DownloadJob> pending = new();
+    DownloadJob? current;
+    CancellationTokenSource? cancel;
+    long received;
+    long? total;
+    string? lastError;
+    string? lastDone;
+    bool running;
+
+    public event Action<DownloadState>? Changed;
+    public event Action<DownloadJob>? Completed;
+
+    public DownloadState State
+    {
+        get { lock (sync) return Snapshot(); }
+    }
+
+    public void Enqueue(DownloadJob job)
+    {
+        lock (sync)
+        {
+            pending.Enqueue(job);
+            lastError = null;
+            if (!running)
+            {
+                running = true;
+                _ = Task.Run(RunAsync);
+            }
+        }
+        Raise();
+    }
+
+    /// <summary>Cancels the current download; its partial file stays for a resume.</summary>
+    public void CancelCurrent()
+    {
+        lock (sync) cancel?.Cancel();
+    }
+
+    async Task RunAsync()
+    {
+        while (true)
+        {
+            DownloadJob job;
+            CancellationToken token;
+            lock (sync)
+            {
+                if (pending.Count == 0)
+                {
+                    running = false;
+                    current = null;
+                    cancel = null;
+                    break;
+                }
+                job = pending.Dequeue();
+                current = job;
+                received = 0;
+                total = job.TotalSize;
+                cancel = new CancellationTokenSource();
+                token = cancel.Token;
+            }
+            Raise();
+            try
+            {
+                long done = 0;
+                foreach (var item in job.Items)
+                {
+                    var before = done;
+                    var progress = new SyncProgress(p =>
+                    {
+                        lock (sync) received = before + p.Received;
+                        Raise();
+                    });
+                    await downloader.DownloadAsync(item, progress, token).ConfigureAwait(false);
+                    done += item.Size ?? new FileInfo(item.Destination).Length;
+                }
+                lock (sync) lastDone = job.Title;
+                Completed?.Invoke(job);
+            }
+            catch (OperationCanceledException)
+            {
+                lock (sync) lastError = $"{job.Title}: cancelled. Download it again to resume.";
+            }
+            catch (Exception e) when (e is DownloadException or HttpRequestException or IOException or UnauthorizedAccessException)
+            {
+                lock (sync) lastError = $"{job.Title}: {e.Message}";
+            }
+            lock (sync)
+            {
+                current = null;
+                cancel?.Dispose();
+                cancel = null;
+            }
+            Raise();
+        }
+        Raise();
+    }
+
+    DownloadState Snapshot() => new(current, received, total, pending.Count, lastError, lastDone);
+
+    void Raise()
+    {
+        DownloadState s;
+        lock (sync) s = Snapshot();
+        Changed?.Invoke(s);
+    }
+
+    /// <summary>Reports on the calling thread (Progress&lt;T&gt; would post to a context).</summary>
+    sealed class SyncProgress(Action<DownloadProgress> report) : IProgress<DownloadProgress>
+    {
+        public void Report(DownloadProgress value) => report(value);
+    }
+}

@@ -1,0 +1,55 @@
+[
+  {
+    "title": "LFM2.5 1.2B Instruct",
+    "note": "Small and fast; runs well on the CPU.",
+    "folder": "roman220220/LFM2.5-1.2B-Instruct-GGUF-jang-imatrix",
+    "license": "LFM Open License",
+    "file": { "name": "lfm2.5-1.2b-instruct-jang.gguf", "size": 837575616, "sha256": "e7d276710fc157d104ca0079694baacc4903cd3c7f2f8710139a90223ba6f63c" },
+    "huggingFace": { "repo": "roman220220/LFM2.5-1.2B-Instruct-GGUF-jang-imatrix", "revision": "536077886ff3305cbbfdf258e32ba1a224400093" }
+  },
+  {
+    "title": "LFM2.5 1.2B Thinking",
+    "note": "The same size, reasons before it answers.",
+    "folder": "roman220220/LFM2.5-1.2B-Thinking-GGUF-jang-imatrix",
+    "license": "LFM Open License",
+    "file": { "name": "lfm2.5-1.2b-thinking-jang.gguf", "size": 837575520, "sha256": "747b61b032bcd54ff12685c8f45e02f7f7dde0c12d035906ac848dae3cae4ab6" },
+    "huggingFace": { "repo": "roman220220/LFM2.5-1.2B-Thinking-GGUF-jang-imatrix", "revision": "224174632587910a11b9c77f0e12c35d75e5c34e" }
+  },
+  {
+    "title": "LFM2.5 2.6B",
+    "note": "A step up in quality, still light.",
+    "folder": "roman220220/LFM2.5-2.6B-GGUF-jang-imatrix",
+    "license": "LFM Open License",
+    "file": { "name": "lfm2.5-2.6b-jang.gguf", "size": 1873963456, "sha256": "24ca3858bfa9ec931781f7ca87a90e580874107b8d5b6968fe8c70c6623dfec2" },
+    "huggingFace": { "repo": "roman220220/LFM2.5-2.6B-GGUF-jang-imatrix", "revision": "f362bead5a498da3a907a6456357ec430bfeb8c9" }
+  },
+  {
+    "title": "Gemma 4 E2B (QAT, phone size)",
+    "note": "Text and images.",
+    "folder": "roman220220/gemma-4-E2B-it-qat-phone-GGUF",
+    "license": "Apache 2.0",
+    "file": { "name": "gemma-4-E2B-it-qat-phone-Q4_0.gguf", "size": 2858192864, "sha256": "90066a15411a3e9f0de3e5464f1e0788f7fdf73903b836ba1b4b594f54bc7665" },
+    "projector": { "name": "gemma-4-E2B-it-mmproj.gguf", "size": 986833664, "sha256": "021059cce659fe7f9170d5599761d7bbaf644b798dab9503aca30dc43e6beb14" },
+    "huggingFace": { "repo": "roman220220/gemma-4-E2B-it-qat-phone-GGUF", "revision": "3aa3b25c21a19ec5bb58f6bb2e4ecaf374fc0b6a" },
+    "kaggle": { "handle": "romanromenskyi/gemma-4-e2b-it-ipsupport/gguf/qat-phone/1" }
+  },
+  {
+    "title": "FrogNano 4B",
+    "note": "Text and images.",
+    "folder": "roman220220/FrogNano-4B-2609-GGUF-jang-imatrix",
+    "license": "Apache 2.0",
+    "file": { "name": "frognano-4b-jang.gguf", "size": 3059865280, "sha256": "ead000b582ed4ac9c39205f5a44687b1bdad6273189d9d777fef975778f91442" },
+    "projector": { "name": "mmproj-frognano-4b-q8.gguf", "size": 363748416, "sha256": "70812e0b0f3cab0df68537be62b487289b269d92e9345340af292e2fe308f439" },
+    "huggingFace": { "repo": "roman220220/FrogNano-4B-2609-GGUF-jang-imatrix", "revision": "ed3622143baabf55ab34410df3308fdb3508642f" }
+  },
+  {
+    "title": "Gemma 4 26B A4B",
+    "note": "Text and images. Needs 16 GB of GPU or system memory.",
+    "folder": "roman220220/gemma-4-26B-A4B-it-GGUF-jang-imatrix",
+    "license": "Apache 2.0",
+    "file": { "name": "gemma4-26b-a4b-jang-iq3s.gguf", "size": 12531304256, "sha256": "ce25d4c72e6b0d7c5959c88d1789a588c1a52eb891c4821e9d17c5e78ebb7a0f" },
+    "projector": { "name": "mmproj-gemma4-26b-q8.gguf", "size": 806408416, "sha256": "27ccacd8d27f3ebbf4bfb84b24882f8fcc6f6d0661d1adde81f64c7c4448816f" },
+    "huggingFace": { "repo": "roman220220/gemma-4-26B-A4B-it-GGUF-jang-imatrix", "revision": "30ee6a5ca4399a2c808cb272bfc3e89fb0373d18" },
+    "kaggle": { "handle": "romanromenskyi/gemma-4-26b-a4b-it-ipsupport/gguf/jang-imatrix/1" }
+  }
+]

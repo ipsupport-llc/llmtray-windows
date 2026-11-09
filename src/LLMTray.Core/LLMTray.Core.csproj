@@ -9,6 +9,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Downloads\featured-models.json" LogicalName="LLMTray.Core.featured-models.json" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="LLMTray.Core.Tests" />
   </ItemGroup>
 </Project>

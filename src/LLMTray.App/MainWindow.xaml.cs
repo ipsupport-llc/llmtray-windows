@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using LLMTray.Core;
+using LLMTray.Core.Downloads;
 using LLMTray.Core.Models;
 using LLMTray.Core.Runtime;
 using Microsoft.UI;
@@ -84,10 +85,53 @@ public sealed partial class MainWindow : Window
             RenderState();
             RenderModels();
         };
+        App.Current.DownloadsChanged += RenderDownloads;
         state = App.Current.Host.State;
         RenderState();
         RenderModels();
+        RenderDownloads(App.Current.Downloads.State);
     }
+
+    void RenderDownloads(DownloadState d)
+    {
+        if (d.Current is { } job)
+        {
+            var total = d.Total is long t && t > 0 ? $" of {FormatSize(t)}" : "";
+            var queued = d.Queued > 0 ? $" ({d.Queued} more queued)" : "";
+            DownloadText.Text = $"Downloading {job.Title}: {FormatSize(d.Received)}{total}{queued}";
+            DownloadProgress.IsIndeterminate = d.Total is null;
+            DownloadProgress.Value = d.Total is long all && all > 0 ? 1000.0 * d.Received / all : 0;
+            DownloadProgress.Visibility = Visibility.Visible;
+            DownloadCancel.Visibility = Visibility.Visible;
+            DownloadPanel.Visibility = Visibility.Visible;
+        }
+        else if (d.LastError is { } error)
+        {
+            DownloadText.Text = error;
+            DownloadProgress.Visibility = Visibility.Collapsed;
+            DownloadCancel.Visibility = Visibility.Collapsed;
+            DownloadPanel.Visibility = Visibility.Visible;
+        }
+        else if (d.LastDone is { } done)
+        {
+            DownloadText.Text = $"{done} is downloaded. Select it and choose Load, or name it in a request.";
+            DownloadProgress.Visibility = Visibility.Collapsed;
+            DownloadCancel.Visibility = Visibility.Collapsed;
+            DownloadPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            DownloadPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    async void GetModels_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new DownloadDialog { XamlRoot = Content.XamlRoot };
+        await dialog.ShowAsync();
+    }
+
+    void DownloadCancel_Click(object sender, RoutedEventArgs e) => App.Current.Downloads.CancelCurrent();
 
     void RenderState()
     {
@@ -130,7 +174,7 @@ public sealed partial class MainWindow : Window
         var rows = app.Library.Current.Models.Select(m => new ModelRow(m, Badge(m))).ToList();
         ModelsList.ItemsSource = rows;
         ModelsList.SelectedItem = rows.FirstOrDefault(r => r.Model.FullPath == selected);
-        EmptyText.Text = $"No GGUF models yet.\nPut .gguf files in {app.ModelsFolder}\n(one folder per model: publisher\\repo\\file.gguf), then Refresh.";
+        EmptyText.Text = $"No GGUF models yet.\nChoose Get models…, or put .gguf files in {app.ModelsFolder}\n(one folder per model: publisher\\repo\\file.gguf), then Refresh.";
         EmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         UpdateLoadButton();
     }

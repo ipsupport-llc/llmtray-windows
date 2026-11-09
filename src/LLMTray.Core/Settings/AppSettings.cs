@@ -14,6 +14,9 @@ public sealed record AppSettings
 
     public bool LoadLastModelOnStart { get; init; } = true;
 
+    /// <summary>Where the download window gets models: some networks reach only one source.</summary>
+    public Downloads.DownloadSource DownloadSource { get; init; } = Downloads.DownloadSource.HuggingFace;
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }
