@@ -60,6 +60,11 @@ public sealed record AnswerStats
 /// <summary>One message of a saved chat (the Mac app's PersistedMessage; fields it has that this app doesn't use yet stay as they are read).</summary>
 public sealed record PersistedMessage
 {
+    [JsonConstructor]
+    public PersistedMessage()
+    {
+    }
+
     public string Role { get; init; } = "user";
     public string Content { get; init; } = "";
     public string Reasoning { get; init; } = "";
@@ -81,6 +86,11 @@ public sealed record PersistedMessage
 /// <summary>A chat: one JSON file per chat, sessions/&lt;UUID&gt;.json (Mac adr/0006).</summary>
 public sealed record ChatSessionFile
 {
+    [JsonConstructor]
+    public ChatSessionFile()
+    {
+    }
+
     [JsonConverter(typeof(UpperGuidConverter))]
     public Guid Id { get; init; }
     public string Title { get; init; } = "";
