@@ -50,6 +50,8 @@ public sealed class ModelHost : IAsyncDisposable
     string? message;
     string? workingBackend;
     bool disposed;
+    /// <summary>The last kill in progress: a new server starts only after it.</summary>
+    Task lastKill = Task.CompletedTask;
 
     /// <param name="Lifetime">Cancelled when this server stops or dies: requests to it end with it.</param>
     sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
@@ -217,7 +219,17 @@ public sealed class ModelHost : IAsyncDisposable
                 continue;
             }
             var baseUri = new Uri($"http://127.0.0.1:{port}");
-            var error = await WaitHealthyAsync(process, baseUri, backend).ConfigureAwait(false);
+            string? error;
+            try
+            {
+                error = await WaitHealthyAsync(process, baseUri, backend).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The host was disposed meanwhile, or worse: never leave the child behind.
+                await KillAsync(process).ConfigureAwait(false);
+                throw;
+            }
             if (error is null)
             {
                 var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource());
@@ -250,6 +262,7 @@ public sealed class ModelHost : IAsyncDisposable
         var deadline = DateTime.UtcNow + LoadTimeout;
         while (DateTime.UtcNow < deadline)
         {
+            if (Volatile.Read(ref disposed)) return "LLMTray is quitting.";
             if (process.Exited.IsCompleted)
             {
                 return $"llama-server ({backend.Name}) exited with code {process.Exited.Result} while loading. See the server log.";
@@ -262,6 +275,7 @@ public sealed class ModelHost : IAsyncDisposable
             }
             catch (HttpRequestException) { }
             catch (TaskCanceledException) { }
+            catch (ObjectDisposedException) { return "LLMTray is quitting."; }
             await Task.WhenAny(process.Exited, Task.Delay(250)).ConfigureAwait(false);
         }
         return $"llama-server ({backend.Name}) didn't finish loading in {LoadTimeout.TotalMinutes:0} minutes.";
@@ -281,17 +295,26 @@ public sealed class ModelHost : IAsyncDisposable
         Changed();
     }
 
+    /// <summary>
+    /// Stops the running server and waits until it's gone. With nothing
+    /// running it still waits for a kill another caller started, so no
+    /// load ever starts beside a server that is still exiting.
+    /// </summary>
     async Task StopRunningAsync()
     {
-        Running? r;
+        Task kill;
         lock (sync)
         {
-            r = running;
+            var r = running;
             running = null;
+            if (r is not null)
+            {
+                r.Lifetime.Cancel();
+                lastKill = KillAsync(r.Process);
+            }
+            kill = lastKill;
         }
-        if (r is null) return;
-        r.Lifetime.Cancel();
-        await KillAsync(r.Process).ConfigureAwait(false);
+        await kill.ConfigureAwait(false);
     }
 
     /// <summary>
