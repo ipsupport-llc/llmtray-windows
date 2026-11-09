@@ -217,6 +217,8 @@ public sealed partial class MainWindow : Window
 
     void OpenLog_Click(object sender, RoutedEventArgs e) => App.Current.ShowLog();
 
+    void Chat_Click(object sender, RoutedEventArgs e) => App.Current.ShowChat();
+
     // MARK: Pages
 
     bool pendingRender;

@@ -138,6 +138,44 @@ try {
         Remove-Item $gemma -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # The chat: opened from the window, a question typed and sent, the
+    # answer streamed in and the chat saved with its title.
+    try {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $np = [System.Windows.Automation.AutomationElement]::NameProperty
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        $main = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
+        $main.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat'))).
+            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 3
+        $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat — LLMTray')))
+        if (-not $chatWindow) { throw 'the chat window did not open' }
+        $box = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Message')))
+        $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
+        $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Send'))).
+            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $package = Get-AppxPackage IPSupportLLC.LLMTray
+        $sessions = Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalState\sessions"
+        $deadline = (Get-Date).AddMinutes(5)
+        $saved = $null
+        do {
+            Start-Sleep -Seconds 3
+            $file = Get-ChildItem $sessions -Filter *.json -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($file) {
+                $json = Get-Content $file.FullName -Raw | ConvertFrom-Json
+                if ($json.messages.Count -ge 2 -and $json.messages[1].content -and $json.title) { $saved = $json }
+            }
+        } until ($saved -or (Get-Date) -gt $deadline)
+        Save-Screenshot '8-chat'
+        if (-not $saved) { throw 'the chat was not answered and saved' }
+        Write-Host "chat '$($saved.title)': $($saved.messages[1].content.Substring(0, [Math]::Min(80, $saved.messages[1].content.Length)))"
+        Copy-Item $file.FullName (Join-Path $Out 'chat.json')
+    }
+    catch {
+        Save-Screenshot 'chat-failure'
+        throw
+    }
+
     # Each tab of the window, for a look at the layout.
     try {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes

@@ -192,7 +192,9 @@ sealed class PopoverWindow : Window
             var footer = new Grid();
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footer.Children.Add(Ui.Button("Get models…", () => { Hide(); app.ShowWindow("models", getModels: true); }));
+            footer.Children.Add(Ui.Horizontal(
+                Ui.Button("Chat", () => { Hide(); app.ShowChat(); }, accent: true),
+                Ui.Button("Get models…", () => { Hide(); app.ShowWindow("models", getModels: true); })));
             var quit = Ui.Button("Quit", () => _ = app.QuitAsync());
             Grid.SetColumn(quit, 1);
             footer.Children.Add(quit);

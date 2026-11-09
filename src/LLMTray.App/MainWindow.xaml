@@ -39,6 +39,12 @@
                 <TextBlock x:Name="ErrorText" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <Button Click="Chat_Click" Style="{StaticResource AccentButtonStyle}" Margin="0,0,6,0" AutomationProperties.Name="Chat">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8BD;" FontSize="14" />
+                        <TextBlock Text="Chat" />
+                    </StackPanel>
+                </Button>
                 <Button x:Name="StopButton" Click="Stop_Click" ToolTipService.ToolTip="Unload the model" AutomationProperties.Name="Unload the model" Style="{StaticResource SubtleButtonStyle}">
                     <FontIcon Glyph="&#xE71A;" FontSize="14" />
                 </Button>
