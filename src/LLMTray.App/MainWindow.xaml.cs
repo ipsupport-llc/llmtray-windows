@@ -210,6 +210,7 @@ public sealed partial class MainWindow : Window
             "server" => ServerPage(),
             "general" => GeneralPage(),
             "updates" => UpdatesPage(),
+            "about" => AboutPage(),
             _ => ModelsPage(),
         };
         foreach (var part in parts) PageContent.Children.Add(part);
@@ -348,13 +349,8 @@ public sealed partial class MainWindow : Window
             Ui.Row("Start LLMTray when you sign in", signInError ?? "It starts in the notification area, without opening this window.", signIn),
             Ui.Row("Load the last model when LLMTray starts", "So it's ready before the first request.", loadLast));
 
-        yield return Ui.Section("About");
-        var version = app.Updater.Current?.DisplayVersion ?? "development build";
+        yield return Ui.Section("Data");
         yield return Ui.Card(
-            Ui.Row("LLMTray for Windows", $"Version {version}. Local AI runtime: run local models and serve an OpenAI-compatible API.",
-                Ui.Button("Releases", () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/releases"))),
-            Ui.Row("Licenses", "LLMTray is Apache 2.0. llama.cpp, .NET and the Windows App SDK keep their own licenses, and each model its own.",
-                Ui.Button("Open", () => Ui.Open(Path.Combine(AppContext.BaseDirectory, "NOTICE.md")))),
             Ui.Row("Data folder", app.DataFolder, Ui.Button("Open", () => Ui.OpenFolder(app.DataFolder))));
     }
 
@@ -391,6 +387,148 @@ public sealed partial class MainWindow : Window
                 updater.Status, updater.Available is not null
                     ? Ui.Horizontal(Ui.Button("Install and restart", () => _ = updater.InstallAsync(), accent: true), check)
                     : check));
+    }
+
+    /// <summary>
+    /// About, as the Mac app's About window: the app, the model disclaimer,
+    /// and every license that applies, bundled (Licenses.json, made at build
+    /// time) and on this PC (the downloaded models, read now).
+    /// </summary>
+    IEnumerable<UIElement> AboutPage()
+    {
+        var app = App.Current;
+        var header = new Grid { ColumnSpacing = 14, Margin = new Thickness(4, 12, 0, 4) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.Children.Add(new Image
+        {
+            Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square150x150Logo.png"))),
+            Width = 64,
+            Height = 64,
+        });
+        var title = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+        title.Children.Add(new TextBlock { Text = "LLMTray for Windows", FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        title.Children.Add(Ui.Caption($"Version {app.Updater.Current?.DisplayVersion ?? "development build"}"));
+        var links = Ui.Horizontal(
+            Ui.Caption("Apache License 2.0"),
+            Link("Source on GitHub", "https://github.com/ipsupport-llc/llmtray-windows"),
+            Link("ipsupport.us", "https://ipsupport.us"),
+            Link("Releases", "https://github.com/ipsupport-llc/llmtray-windows/releases"));
+        title.Children.Add(links);
+        Grid.SetColumn(title, 1);
+        header.Children.Add(title);
+        yield return header;
+
+        // The Mac app's model disclaimer.
+        var disclaimer = new InfoBar
+        {
+            IsOpen = true,
+            IsClosable = false,
+            Severity = InfoBarSeverity.Warning,
+            Title = "A model is a tool, not an authority",
+            Message = "It can be wrong and make things up: check anything that matters. It is not a doctor, lawyer, psychologist or friend. You use its answers at your own risk.",
+        };
+        yield return disclaimer;
+
+        yield return Ui.Section("Licenses");
+        yield return LicensesView();
+    }
+
+    static HyperlinkButton Link(string text, string url) => new() { Content = text, NavigateUri = new Uri(url), Padding = new Thickness(4, 0, 4, 0) };
+
+    /// <summary>Components on the left by group, the chosen one's license on the right.</summary>
+    UIElement LicensesView()
+    {
+        var list = new ListView { SelectionMode = ListViewSelectionMode.Single };
+        var name = new TextBlock { FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+        var license = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var text = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = Ui.Mono,
+            FontSize = 12,
+            Text = "Select a component to see its license.",
+        };
+        ScrollViewer.SetVerticalScrollBarVisibility(text, ScrollBarVisibility.Auto);
+
+        var groups = new List<Core.Licenses.LicenseGroup>();
+        var bundled = Core.Licenses.LicenseCatalog.Load(Path.Combine(AppContext.BaseDirectory, "runtime", "Licenses.json"));
+        groups.AddRange(bundled?.Groups ?? [new Core.Licenses.LicenseGroup("missing", "Bundled software",
+            [new Core.Licenses.LicenseEntry("Licenses.json", null, "not in this build",
+                null, "This build has no generated license list: scripts/generate-licenses.ps1 writes it (with THIRD_PARTY_NOTICES.txt) beside the app.")])]);
+
+        void Fill(IEnumerable<Core.Licenses.LicenseGroup> all, bool scanning)
+        {
+            list.Items.Clear();
+            foreach (var group in all)
+            {
+                list.Items.Add(new ListViewItem
+                {
+                    Content = new TextBlock { Text = group.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Ui.Secondary, FontSize = 12 },
+                    IsEnabled = false,
+                    Margin = new Thickness(0, 6, 0, 0),
+                });
+                foreach (var entry in group.Entries)
+                {
+                    var row = new StackPanel { Padding = new Thickness(0, 3, 0, 3) };
+                    row.Children.Add(new TextBlock { Text = entry.Title, TextTrimming = TextTrimming.CharacterEllipsis });
+                    row.Children.Add(Ui.Caption(entry.License));
+                    list.Items.Add(new ListViewItem { Content = row, Tag = entry });
+                }
+            }
+            if (scanning) list.Items.Add(new ListViewItem { Content = Ui.Caption("Reading the models on this PC…"), IsEnabled = false });
+        }
+        list.SelectionChanged += (_, _) =>
+        {
+            if (list.SelectedItem is not ListViewItem { Tag: Core.Licenses.LicenseEntry entry }) return;
+            name.Text = entry.Title;
+            license.Children.Clear();
+            license.Children.Add(Ui.Caption(entry.License));
+            if (entry.Url is { } url && Uri.TryCreate(url, UriKind.Absolute, out var uri)) license.Children.Add(new HyperlinkButton { Content = uri.Host, NavigateUri = uri, Padding = new Thickness(0) });
+            text.Text = entry.Text;
+        };
+        Fill(groups, scanning: true);
+
+        // The models on this PC, read off the UI thread (each GGUF header).
+        var models = App.Current.Library.Current.Models;
+        _ = Task.Run(() => models.Select(Core.Licenses.ModelLicenses.Of).OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList())
+            .ContinueWith(t =>
+            {
+                var all = groups.ToList();
+                if (t.IsCompletedSuccessfully && t.Result.Count > 0) all.Add(new Core.Licenses.LicenseGroup("models", "Downloaded models", t.Result));
+                DispatcherQueue.TryEnqueue(() => Fill(all, scanning: false));
+            }, TaskScheduler.Default);
+
+        var right = new Grid { RowSpacing = 6, Padding = new Thickness(12) };
+        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        right.Children.Add(name);
+        Grid.SetRow(license, 1);
+        right.Children.Add(license);
+        Grid.SetRow(text, 2);
+        right.Children.Add(text);
+
+        var split = new Grid { Height = 460 };
+        split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
+        split.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        split.Children.Add(list);
+        var line = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = 1, Fill = Ui.Stroke };
+        Grid.SetColumn(line, 1);
+        split.Children.Add(line);
+        Grid.SetColumn(right, 2);
+        split.Children.Add(right);
+        return new Border
+        {
+            Child = split,
+            CornerRadius = new CornerRadius(8),
+            Background = Ui.CardBackground,
+            BorderBrush = Ui.Stroke,
+            BorderThickness = new Thickness(1),
+        };
     }
 
     // MARK: Actions

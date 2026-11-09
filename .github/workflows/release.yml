@@ -55,6 +55,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Collect the licenses
+        shell: pwsh
+        run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Stamp the package version
         shell: pwsh
         env:
@@ -133,6 +136,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Collect the licenses
+        shell: pwsh
+        run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Build the portable ZIP
         shell: pwsh
         env:

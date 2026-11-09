@@ -86,6 +86,9 @@
                 <NavigationViewItem Content="Updates" Tag="updates">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE895;" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="About" Tag="about">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
             <ScrollViewer x:Name="PageScroller" Padding="20,8,20,20">
                 <StackPanel x:Name="PageContent" Spacing="6" MaxWidth="900" />

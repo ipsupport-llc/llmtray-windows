@@ -144,7 +144,7 @@ try {
         $nameProp = [System.Windows.Automation.AutomationElement]::NameProperty
         $win = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray')))
-        foreach ($tab in 'Server', 'General', 'Updates', 'Models') {
+        foreach ($tab in 'Server', 'General', 'Updates', 'About', 'Models') {
             $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)))
             $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
             Start-Sleep -Seconds 2
