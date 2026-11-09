@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The main window, laid out like the Mac app's Settings: tabs at the top,
+  each a column of titled cards whose rows read "what — value — action".
+  Rows and model entries are built in code (MainWindow.xaml.cs).
+-->
 <Window
     x:Class="LLMTray.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -8,131 +13,87 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid Padding="24,16,24,24" RowSpacing="16">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <Grid ColumnSpacing="8">
+        <!-- Status, as in the Mac popover's first line -->
+        <Grid Padding="20,14,20,6" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <Image Source="Assets/Square44x44Logo.png" Width="36" Height="36" />
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="LLMTray" Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Local AI Runtime for Windows" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <Image Source="Assets/Square44x44Logo.png" Width="28" Height="28" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Ellipse x:Name="StatusDot" Width="9" Height="9" VerticalAlignment="Center" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource BodyStrongTextBlockStyle}" TextTrimming="CharacterEllipsis" />
+                    <ProgressRing x:Name="Loading" Width="14" Height="14" IsActive="False" />
                 </StackPanel>
+                <TextBlock x:Name="DetailText" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="ErrorText" Style="{StaticResource CaptionTextBlockStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
             </StackPanel>
-            <TextBlock x:Name="VersionText" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource CaptionTextBlockStyle}"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            <ComboBox x:Name="ChannelBox" Grid.Column="2" VerticalAlignment="Center" SelectionChanged="ChannelBox_SelectionChanged">
-                <x:String>Stable</x:String>
-                <x:String>Beta</x:String>
-            </ComboBox>
-            <Button x:Name="CheckUpdatesButton" Grid.Column="3" Content="Check for updates" Click="CheckUpdates_Click" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <Button x:Name="StopButton" Click="Stop_Click" ToolTipService.ToolTip="Unload the model" AutomationProperties.Name="Unload the model" Style="{StaticResource SubtleButtonStyle}">
+                    <FontIcon Glyph="&#xE71A;" FontSize="14" />
+                </Button>
+                <Button Click="OpenLog_Click" ToolTipService.ToolTip="Server log" AutomationProperties.Name="Server log" Style="{StaticResource SubtleButtonStyle}">
+                    <FontIcon Glyph="&#xE756;" FontSize="14" />
+                </Button>
+            </StackPanel>
         </Grid>
 
-        <InfoBar x:Name="UpdateBar" Grid.Row="1" IsClosable="True" IsOpen="False" Closed="UpdateBar_Closed">
-            <InfoBar.ActionButton>
-                <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" />
-            </InfoBar.ActionButton>
-        </InfoBar>
-
-        <!-- Status and API -->
-        <Border Grid.Row="2" Padding="16" CornerRadius="8"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-            <StackPanel Spacing="10">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <Ellipse x:Name="StatusDot" Width="10" Height="10" VerticalAlignment="Center" />
-                    <TextBlock x:Name="StatusText" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <ProgressRing x:Name="Loading" Width="16" Height="16" IsActive="False" />
-                </StackPanel>
-                <TextBlock x:Name="DetailText" TextWrapping="Wrap" Visibility="Collapsed"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <!-- Update and download notices -->
+        <StackPanel Grid.Row="1" Padding="20,0,20,4" Spacing="6">
+            <InfoBar x:Name="UpdateBar" IsClosable="True" IsOpen="False" Closed="UpdateBar_Closed">
+                <InfoBar.ActionButton>
+                    <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+            <Border x:Name="DownloadPanel" Padding="14,10" CornerRadius="8" Visibility="Collapsed"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="API" VerticalAlignment="Center" />
-                    <TextBox x:Name="ApiUrl" Grid.Column="1" IsReadOnly="True" FontFamily="Consolas" />
-                    <Button Grid.Column="2" Content="Copy" Click="CopyApi_Click" />
+                    <StackPanel Spacing="6" VerticalAlignment="Center">
+                        <TextBlock x:Name="DownloadText" TextWrapping="Wrap" />
+                        <ProgressBar x:Name="DownloadProgress" Maximum="1000" />
+                    </StackPanel>
+                    <Button x:Name="DownloadCancel" Grid.Column="1" Content="Cancel" Click="DownloadCancel_Click" />
                 </Grid>
-            </StackPanel>
-        </Border>
+            </Border>
+        </StackPanel>
 
-        <!-- Models -->
-        <Grid Grid.Row="3" RowSpacing="8">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Grid ColumnSpacing="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="Models" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                    <TextBlock x:Name="FolderText" Style="{StaticResource CaptionTextBlockStyle}" TextTrimming="CharacterEllipsis"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </StackPanel>
-                <Button Grid.Column="1" Content="Get models…" Style="{StaticResource AccentButtonStyle}" Click="GetModels_Click" />
-                <Button Grid.Column="2" Content="Refresh" Click="Refresh_Click" />
-                <Button Grid.Column="3" Content="Open folder" Click="OpenFolder_Click" />
-                <Button Grid.Column="4" Content="Change folder…" Click="ChangeFolder_Click" />
-            </Grid>
-
-            <ListView x:Name="ModelsList" Grid.Row="1" SelectionMode="Single" DoubleTapped="ModelsList_DoubleTapped"
-                      SelectionChanged="ModelsList_SelectionChanged"
-                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8"
-                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-            </ListView>
-            <TextBlock x:Name="EmptyText" Grid.Row="1" Margin="16" TextWrapping="Wrap" Visibility="Collapsed"
-                       VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-
-            <Grid x:Name="DownloadPanel" Grid.Row="2" ColumnSpacing="8" Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="4" VerticalAlignment="Center">
-                    <TextBlock x:Name="DownloadText" TextWrapping="Wrap" />
-                    <ProgressBar x:Name="DownloadProgress" Maximum="1000" />
-                </StackPanel>
-                <Button x:Name="DownloadCancel" Grid.Column="1" Content="Cancel" Click="DownloadCancel_Click" />
-            </Grid>
-
-            <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
-                <Button x:Name="LoadButton" Content="Load" Click="Load_Click" IsEnabled="False" />
-                <Button x:Name="StopButton" Content="Stop" Click="Stop_Click" IsEnabled="False" />
-            </StackPanel>
-        </Grid>
-
-        <!-- Server log -->
-        <Expander x:Name="LogExpander" Grid.Row="4" Header="Server log" HorizontalAlignment="Stretch"
-                  HorizontalContentAlignment="Stretch" Expanding="LogExpander_Expanding" Collapsed="LogExpander_Collapsed">
-            <TextBox x:Name="LogText" IsReadOnly="True" FontFamily="Consolas" FontSize="12" Height="200"
-                     TextWrapping="NoWrap" AcceptsReturn="True"
-                     ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" />
-        </Expander>
+        <NavigationView x:Name="Tabs" Grid.Row="2" PaneDisplayMode="Top" IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="False" SelectionChanged="Tabs_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Models" Tag="models" IsSelected="True">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Server" Tag="server">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE968;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="General" Tag="general">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Updates" Tag="updates">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE895;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="About" Tag="about">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <ScrollViewer x:Name="PageScroller" Padding="20,8,20,20">
+                <StackPanel x:Name="PageContent" Spacing="6" MaxWidth="900" />
+            </ScrollViewer>
+        </NavigationView>
     </Grid>
 </Window>

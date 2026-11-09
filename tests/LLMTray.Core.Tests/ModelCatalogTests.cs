@@ -76,6 +76,26 @@ public sealed class ModelCatalogTests : IDisposable
     }
 
     [Fact]
+    public void DeletingTakesAllShardsAndAProjectorNoOneElseUses()
+    {
+        var a = Touch("org/big-GGUF/big-00001-of-00002.gguf");
+        var b = Touch("org/big-GGUF/big-00002-of-00002.gguf");
+        var p = Touch("org/big-GGUF/mmproj-big.gguf");
+        var catalog = ModelCatalog.Scan(root);
+        Assert.Equal([a, b, p], catalog.FilesOf(catalog.Models.Single()));
+    }
+
+    [Fact]
+    public void ASharedProjectorStays()
+    {
+        var q4 = Touch("org/vl-GGUF/vl-Q4.gguf");
+        Touch("org/vl-GGUF/vl-Q8.gguf");
+        Touch("org/vl-GGUF/mmproj-vl.gguf");
+        var catalog = ModelCatalog.Scan(root);
+        Assert.Equal([q4], catalog.FilesOf(catalog.Models.Single(m => m.Name == "vl-Q4")));
+    }
+
+    [Fact]
     public void MissingFolderIsEmpty()
     {
         Assert.Empty(ModelCatalog.Scan(Path.Combine(root, "nope")).Models);

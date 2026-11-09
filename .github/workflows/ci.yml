@@ -52,6 +52,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Collect the licenses
+        shell: pwsh
+        run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Make a throwaway signing certificate
         id: cert
         shell: pwsh
@@ -96,7 +99,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'fetch failed' }
       - name: Smoke test
         shell: pwsh
-        run: scripts/smoke.ps1 -Model ([IO.Path]::GetFileNameWithoutExtension($env:SMOKE_FILE)) -Out smoke
+        run: scripts/smoke.ps1 -Model ([IO.Path]::GetFileNameWithoutExtension($env:SMOKE_FILE)) -Out smoke -UiDownload:$${{ matrix.platform == 'x64' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -122,6 +125,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Collect the licenses
+        shell: pwsh
+        run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Build the portable ZIP
         shell: pwsh
         run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip
@@ -130,7 +136,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
-          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe')
+          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--show-log', '--show-popover'
           $deadline = (Get-Date).AddSeconds(90)
           do {
             Start-Sleep -Seconds 2

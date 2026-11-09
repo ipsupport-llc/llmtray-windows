@@ -3,8 +3,9 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  IgnorableNamespaces="uap uap5 rescap">
 
   <Identity
     Name="IPSupportLLC.LLMTray"
@@ -38,6 +39,12 @@
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
+      <Extensions>
+        <!-- "Start LLMTray when you sign in" (SignInStartup.cs); off until the user turns it on. -->
+        <uap5:Extension Category="windows.startupTask">
+          <uap5:StartupTask TaskId="LLMTrayStartup" Enabled="false" DisplayName="LLMTray" />
+        </uap5:Extension>
+      </Extensions>
     </Application>
   </Applications>
 
