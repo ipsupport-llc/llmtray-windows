@@ -48,6 +48,8 @@ dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
    `model` field picks the model: its file name without `.gguf` (see
    `GET /v1/models`). LLMTray loads it on the first request.
 
+Releases: [RELEASING.md](RELEASING.md).
+
 ## License
 
 Apache 2.0, like LLMTray for macOS.
