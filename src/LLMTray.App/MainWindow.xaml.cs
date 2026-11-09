@@ -204,7 +204,7 @@ public sealed partial class MainWindow : Window
 
     void RenderPage()
     {
-        Page.Children.Clear();
+        PageContent.Children.Clear();
         var parts = page switch
         {
             "server" => ServerPage(),
@@ -212,7 +212,7 @@ public sealed partial class MainWindow : Window
             "updates" => UpdatesPage(),
             _ => ModelsPage(),
         };
-        foreach (var part in parts) Page.Children.Add(part);
+        foreach (var part in parts) PageContent.Children.Add(part);
     }
 
     IEnumerable<UIElement> ModelsPage()

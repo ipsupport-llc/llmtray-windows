@@ -56,7 +56,7 @@ sealed class LogWindow : Window
         var more = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 } };
         ToolTipService.SetToolTip(more, "Copy, save or open");
         var menu = new MenuFlyout();
-        menu.Items.Add(Item("Copy shown", () => Copy(string.Join(Environment.NewLine, Visible().SelectMany(Text)))));
+        menu.Items.Add(Item("Copy shown", () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
         menu.Items.Add(Item("Copy the whole log", () => Copy(ReadTail())));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item("Open logs folder", () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
@@ -170,7 +170,7 @@ sealed class LogWindow : Window
         }
     }
 
-    IEnumerable<LogEntry> Visible()
+    IEnumerable<LogEntry> ShownEntries()
     {
         var query = search.Text.Trim();
         return entries.Where(e =>
@@ -182,7 +182,7 @@ sealed class LogWindow : Window
 
     void Render()
     {
-        var visible = Visible().ToList();
+        var visible = ShownEntries().ToList();
         var problemCount = entries.Count(e => e.IsProblem);
         problems.Text = problemCount > 0 ? $"Problems {problemCount}" : "Problems";
         var rows = new List<UIElement>(visible.Count);

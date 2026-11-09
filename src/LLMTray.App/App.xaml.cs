@@ -118,9 +118,9 @@ public partial class App : Application
         if (!SignInStartup.StartedInBackground()) ShowWindow();
         ListenForSecondLaunch();
         // For screenshots in CI and for support: open the panel or the log at start.
-        var args = Environment.GetCommandLineArgs();
-        if (args.Contains("--show-log")) ShowLog();
-        if (args.Contains("--show-popover")) dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => (popover ??= new PopoverWindow()).Toggle());
+        var commandLine = Environment.GetCommandLineArgs();
+        if (commandLine.Contains("--show-log")) ShowLog();
+        if (commandLine.Contains("--show-popover")) dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => (popover ??= new PopoverWindow()).Toggle());
         Updater.Start();
 
         if (Settings.LoadLastModelOnStart && Settings.LastModel is { } last && Library.Current.Resolve(last) is { } model)

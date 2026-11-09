@@ -88,7 +88,7 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <ScrollViewer x:Name="PageScroller" Padding="20,8,20,20">
-                <StackPanel x:Name="Page" Spacing="6" MaxWidth="900" />
+                <StackPanel x:Name="PageContent" Spacing="6" MaxWidth="900" />
             </ScrollViewer>
         </NavigationView>
     </Grid>
