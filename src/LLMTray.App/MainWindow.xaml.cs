@@ -13,14 +13,47 @@ using Windows.Graphics;
 
 namespace LLMTray.App;
 
-/// <summary>A row of the models list.</summary>
-public sealed class ModelRow(ModelEntry model, string badge)
+/// <summary>
+/// A row of the models list, built in code: the XAML compiler under the
+/// dotnet CLI can't resolve this project's own types for x:DataType.
+/// </summary>
+sealed class ModelRow : Grid
 {
-    public ModelEntry Model { get; } = model;
-    public string Name => Model.Name;
-    public string Folder => Model.Folder;
-    public string Badge { get; } = badge;
-    public string Size => MainWindow.FormatSize(Model.SizeBytes);
+    public ModelRow(ModelEntry model, string badge)
+    {
+        Model = model;
+        Padding = new Thickness(0, 8, 0, 8);
+        ColumnSpacing = 12;
+        ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var secondary = Resource<Brush>("TextFillColorSecondaryBrush", new SolidColorBrush(Colors.Gray));
+        var names = new StackPanel();
+        names.Children.Add(new TextBlock { Text = model.Name });
+        names.Children.Add(new TextBlock
+        {
+            Text = model.Folder,
+            FontSize = 12,
+            Foreground = secondary,
+        });
+        Children.Add(names);
+        var badgeText = new TextBlock
+        {
+            Text = badge,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Resource<Brush>("AccentTextFillColorPrimaryBrush", new SolidColorBrush(Colors.SteelBlue)),
+        };
+        SetColumn(badgeText, 1);
+        Children.Add(badgeText);
+        var size = new TextBlock { Text = MainWindow.FormatSize(model.SizeBytes), VerticalAlignment = VerticalAlignment.Center, Foreground = secondary };
+        SetColumn(size, 2);
+        Children.Add(size);
+    }
+
+    public ModelEntry Model { get; }
+
+    static T Resource<T>(string key, T fallback) where T : class =>
+        Application.Current.Resources.TryGetValue(key, out var value) && value is T found ? found : fallback;
 }
 
 public sealed partial class MainWindow : Window

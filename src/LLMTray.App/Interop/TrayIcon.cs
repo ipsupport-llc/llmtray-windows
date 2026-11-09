@@ -6,7 +6,7 @@ namespace LLMTray.App.Interop;
 /// <summary>One line of the tray menu; <c>null</c> text is a separator.</summary>
 sealed record TrayMenuItem(string? Text, Action? Action = null, bool Checked = false, bool Enabled = true)
 {
-    public static readonly TrayMenuItem Separator = new(null);
+    public static readonly TrayMenuItem Separator = new(Text: null);
 }
 
 /// <summary>
