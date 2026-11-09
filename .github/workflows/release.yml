@@ -52,6 +52,9 @@ jobs:
           global-json-file: global.json
       - name: Test Core
         run: dotnet test --project tests/LLMTray.Core.Tests
+      - name: Fetch llama.cpp
+        shell: pwsh
+        run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
       - name: Stamp the package version
         shell: pwsh
         env:

@@ -426,3 +426,6 @@ FodyWeavers.xsd
 
 # Local agent notes, not for the repo
 CLAUDE.local.md
+
+# llama.cpp binaries, fetched by scripts/fetch-llama.ps1
+src/LLMTray.App/runtime/

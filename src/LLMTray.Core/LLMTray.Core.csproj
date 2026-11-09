@@ -5,6 +5,10 @@
     <RootNamespace>LLMTray.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Kestrel for the local API (adr/0001). -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="LLMTray.Core.Tests" />
   </ItemGroup>
 </Project>
