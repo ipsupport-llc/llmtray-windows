@@ -63,6 +63,8 @@ scoop install llmtray/llmtray
 scoop update llmtray        # quit LLMTray first
 ```
 
+The Scoop package follows the newest release, betas included.
+
 ## Using it
 
 1. Choose **Get models…** and pick one of ours, or list any GGUF repository.

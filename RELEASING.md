@@ -32,8 +32,9 @@ The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
 1. Merge to `main` through PRs (every check read as *pass*).
 2. Tag `vX.Y.Z-beta.N` on `main` and push it.
 3. `release.yml` tests Core, builds x64 and ARM64 MSIX packages with the
-   pinned llama.cpp inside, signs them, and creates a GitHub pre-release
-   with both packages and `LLMTray-signing.cer`.
+   pinned llama.cpp inside, signs them, builds the x64 and ARM64 portable
+   ZIPs, and creates a GitHub pre-release with the packages, the ZIPs and
+   `LLMTray-signing.cer`.
 
 4. Bump the Scoop manifest (adr/0005) in a PR. Scoop's `checkver` reads the
    new tag and fills in each ZIP's URL and the SHA-256 GitHub lists for it
