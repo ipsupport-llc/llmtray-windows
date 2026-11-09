@@ -103,3 +103,53 @@ jobs:
           name: smoke-${{ matrix.platform }}
           path: smoke/
           retention-days: 7
+
+  # The portable ZIP (adr/0004): built, unpacked, started, the API checked.
+  portable:
+    name: portable (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: x64, rid: win-x64, runner: windows-latest }
+          - { platform: ARM64, rid: win-arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Fetch llama.cpp
+        shell: pwsh
+        run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the portable ZIP
+        shell: pwsh
+        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip
+      - name: Unpack and start it
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
+          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe')
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep -Seconds 2
+            try { $models = Invoke-RestMethod http://127.0.0.1:8765/v1/models } catch { $models = $null }
+          } until ($models -or (Get-Date) -gt $deadline)
+          Start-Sleep -Seconds 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("smoke/portable.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          if (-not $models) { throw 'the portable app did not serve the API' }
+          Write-Host "portable API up; models: $($models.data.id -join ', ')"
+          Stop-Process -Name LLMTray -Force
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: portable-${{ matrix.platform }}
+          path: |
+            smoke/
+            out/*.zip
+          retention-days: 7

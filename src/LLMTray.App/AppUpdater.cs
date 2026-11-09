@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using LLMTray.Core;
 using LLMTray.Core.Downloads;
@@ -30,21 +32,32 @@ sealed class AppUpdater
         checker = new UpdateChecker(http);
         downloader = new ModelDownloader(http);
         folder = Path.Combine(dataFolder, "updates");
+        Architecture = RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "ARM64" : "x64";
         try
         {
             var id = Package.Current.Id;
             Current = ReleaseTag.FromPackageVersion(new Version(id.Version.Major, id.Version.Minor, id.Version.Build, id.Version.Revision));
-            Architecture = id.Architecture == Windows.System.ProcessorArchitecture.Arm64 ? "ARM64" : "x64";
+            Kind = InstallKind.Package;
         }
         catch (InvalidOperationException)
         {
-            // Not installed as a package (a development run): nothing to update.
+            // Not a package: the portable ZIP carries its release in the
+            // assembly (adr/0004); a development build carries none.
+            var release = typeof(AppUpdater).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => a.Key == "LLMTrayRelease")?.Value;
+            if (release is not null && ReleaseTag.TryParse("v" + release, out var tag, out _))
+            {
+                Current = tag;
+                Kind = InstallKind.Portable;
+            }
         }
     }
 
+    public InstallKind Kind { get; }
+
     /// <summary>The running release; null in a development build.</summary>
     public ReleaseTag? Current { get; }
-    public string Architecture { get; } = "x64";
+    public string Architecture { get; }
     public bool CanUpdate => Current is not null;
 
     public UpdateInfo? Available { get; private set; }
@@ -78,7 +91,7 @@ sealed class AppUpdater
         Raise();
         try
         {
-            Available = await checker.CheckAsync(Current!, Channel, Architecture, CancellationToken.None);
+            Available = await checker.CheckAsync(Current!, Channel, Architecture, Kind, CancellationToken.None);
             Status = Available is null && manual ? $"LLMTray {Current!.DisplayVersion} is the newest {Word(Channel)} release." : null;
         }
         catch (UpdateCheckException e)
@@ -118,6 +131,12 @@ sealed class AppUpdater
             return;
         }
 
+        if (Kind == InstallKind.Portable)
+        {
+            await InstallPortableAsync(update, file);
+            return;
+        }
+
         Status = $"Installing LLMTray {update.Tag.DisplayVersion}; it restarts by itself…";
         Raise();
         // Windows restarts an app registered for restart after updating it.
@@ -143,6 +162,53 @@ sealed class AppUpdater
                 Raise();
             }
         }
+    }
+
+    /// <summary>
+    /// The portable copy: the new version is unpacked beside the data, and a
+    /// small script waits for this process to end, copies it over the app's
+    /// folder (overwriting, never deleting) and starts it again.
+    /// </summary>
+    async Task InstallPortableAsync(UpdateInfo update, string zip)
+    {
+        var appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var unpacked = Path.Combine(folder, update.Tag.DisplayVersion);
+        try
+        {
+            if (Directory.Exists(unpacked)) Directory.Delete(unpacked, recursive: true);
+            await Task.Run(() => ZipFile.ExtractToDirectory(zip, unpacked));
+            // The ZIP holds one LLMTray folder.
+            var root = File.Exists(Path.Combine(unpacked, "LLMTray.exe")) ? unpacked : Path.Combine(unpacked, "LLMTray");
+            if (!File.Exists(Path.Combine(root, "LLMTray.exe"))) throw new IOException("the update has no LLMTray.exe");
+            var pid = Environment.ProcessId;
+            var exe = Path.Combine(appDir, "LLMTray.exe");
+            var script = Path.Combine(folder, "update.cmd");
+            var lines = new[]
+            {
+                "@echo off",
+                "rem LLMTray portable update: wait for the app to exit, copy the new version over it, start it.",
+                ":wait",
+                $"tasklist /FI \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul",
+                "if not errorlevel 1 (",
+                "  timeout /t 1 /nobreak >nul",
+                "  goto wait",
+                ")",
+                $"robocopy \"{root}\" \"{appDir}\" /E /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"start \"\" \"{exe}\"",
+            };
+            await File.WriteAllTextAsync(script, string.Join("\r\n", lines) + "\r\n");
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"") { UseShellExecute = false, CreateNoWindow = true });
+        }
+        catch (Exception e)
+        {
+            Status = $"The update didn't install: {e.Message}. The new version is in {unpacked}.";
+            Busy = false;
+            Raise();
+            return;
+        }
+        Status = $"Restarting into LLMTray {update.Tag.DisplayVersion}…";
+        Raise();
+        await App.Current.QuitAsync();
     }
 
     public void SetChannel(UpdateChannel channel)

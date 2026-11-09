@@ -40,6 +40,20 @@ pwsh scripts/fetch-llama.ps1 -Rid win-x64
 dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
 ```
 
+## Installing
+
+Each [release](https://github.com/ipsupport-llc/llmtray-windows/releases) has
+two formats, for `x64` and `ARM64`:
+
+- **`.msix`**: the installer. Betas are signed with a self-signed
+  certificate, so the first install needs administrator rights (the release
+  notes say how).
+- **`-portable.zip`**: no installation and no administrator rights. Unpack it
+  and run `LLMTray\LLMTray.exe`.
+
+Both check for updates at start and on **Check for updates** (stable or beta
+channel).
+
 ## Using it
 
 1. Choose **Get models…** and pick one of ours, or list any GGUF repository.

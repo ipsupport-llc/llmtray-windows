@@ -6,6 +6,9 @@ namespace LLMTray.Core.Updates;
 
 public enum UpdateChannel { Stable, Beta }
 
+/// <summary>How this copy was installed: an MSIX package, or the portable ZIP (adr/0004).</summary>
+public enum InstallKind { Package, Portable }
+
 /// <summary>A release asset: the package for one architecture.</summary>
 public sealed record ReleaseAsset(string Name, Uri Url, long Size, string? Sha256);
 
@@ -29,24 +32,27 @@ public sealed class UpdateChecker(HttpClient http, string repository = "ipsuppor
     readonly Uri api = apiBase ?? new Uri("https://api.github.com/");
 
     /// <param name="architecture">"x64" or "ARM64", as in the package names.</param>
-    public async Task<UpdateInfo?> CheckAsync(ReleaseTag current, UpdateChannel channel, string architecture, CancellationToken cancellationToken)
+    public async Task<UpdateInfo?> CheckAsync(ReleaseTag current, UpdateChannel channel, string architecture, InstallKind kind, CancellationToken cancellationToken)
     {
         var releases = await FetchAsync(cancellationToken).ConfigureAwait(false);
-        var best = Pick(releases, channel, architecture);
+        var best = Pick(releases, channel, architecture, kind);
         return best is not null && best.Tag.SortKey > current.SortKey ? best : null;
     }
 
-    public static UpdateInfo? Pick(IEnumerable<Release> releases, UpdateChannel channel, string architecture) =>
+    public static UpdateInfo? Pick(IEnumerable<Release> releases, UpdateChannel channel, string architecture, InstallKind kind = InstallKind.Package) =>
         releases
             .Where(r => channel == UpdateChannel.Beta || !r.Tag.IsPrerelease)
-            .Select(r => (r, asset: r.Assets.FirstOrDefault(a => a.Name == PackageName(r.Tag, architecture))))
+            .Select(r => (r, asset: r.Assets.FirstOrDefault(a => a.Name == PackageName(r.Tag, architecture, kind))))
             .Where(x => x.asset is not null)
             .OrderByDescending(x => x.r.Tag.SortKey)
             .Select(x => new UpdateInfo(x.r.Tag, x.r.Page, x.asset!))
             .FirstOrDefault();
 
-    /// <summary>The name release.yml gives a package.</summary>
-    public static string PackageName(ReleaseTag tag, string architecture) => $"LLMTray-{tag.DisplayVersion}-{architecture}.msix";
+    /// <summary>The name release.yml gives a package or a portable ZIP.</summary>
+    public static string PackageName(ReleaseTag tag, string architecture, InstallKind kind = InstallKind.Package) =>
+        kind == InstallKind.Portable
+            ? $"LLMTray-{tag.DisplayVersion}-{architecture}-portable.zip"
+            : $"LLMTray-{tag.DisplayVersion}-{architecture}.msix";
 
     async Task<IReadOnlyList<Release>> FetchAsync(CancellationToken cancellationToken)
     {

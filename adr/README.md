@@ -10,5 +10,6 @@ and why.
 | [0001](0001-windows-app.md) | LLMTray for Windows: .NET 10 + WinUI 3, llama.cpp as a child process behind our own proxy, one MSIX shipped directly and through the Store, the feature map and phases (proposed) |
 | [0002](0002-build-and-release.md) | Build, version and release in GitHub Actions; tag → package version; self-signed betas until a public certificate (accepted) |
 | [0003](0003-updates.md) | Updates: the app checks GitHub Releases itself (stable/beta channels, like the Mac app); replaces `.appinstaller` feeds (accepted) |
+| [0004](0004-portable-zip.md) | A portable ZIP beside the MSIX: no install, no admin, self-updating; for PCs that can't trust a self-signed package (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.

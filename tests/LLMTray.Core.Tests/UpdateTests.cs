@@ -40,6 +40,19 @@ public class UpdateTests
         Assert.Null(UpdateChecker.Pick([R("v0.2.0", "x64")], UpdateChannel.Stable, "ARM64"));
     }
 
+    [Fact]
+    public void PortableCopiesGetTheZip()
+    {
+        var t = ReleaseTag.Parse("v0.2.0-beta.1");
+        var release = new Release(t, new Uri("https://example.invalid/r"),
+        [
+            new ReleaseAsset(UpdateChecker.PackageName(t, "x64"), new Uri("https://example.invalid/a.msix"), 1, null),
+            new ReleaseAsset(UpdateChecker.PackageName(t, "x64", InstallKind.Portable), new Uri("https://example.invalid/a.zip"), 2, null),
+        ]);
+        Assert.Equal("LLMTray-0.2.0-beta.1-x64-portable.zip", UpdateChecker.Pick([release], UpdateChannel.Beta, "x64", InstallKind.Portable)!.Package.Name);
+        Assert.EndsWith(".msix", UpdateChecker.Pick([release], UpdateChannel.Beta, "x64")!.Package.Name);
+    }
+
     [Theory]
     [InlineData("v0.1.0-beta.1")]
     [InlineData("v0.1.0")]
