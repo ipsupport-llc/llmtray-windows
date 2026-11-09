@@ -46,7 +46,7 @@ jobs:
         with:
           global-json-file: global.json
       - name: Test Core
-        run: dotnet test tests/LLMTray.Core.Tests
+        run: dotnet test --project tests/LLMTray.Core.Tests
       - name: Stamp the package version
         shell: pwsh
         env:

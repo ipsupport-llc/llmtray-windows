@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-      - run: dotnet test tests/LLMTray.Core.Tests
+      - run: dotnet test --project tests/LLMTray.Core.Tests
 
   app:
     name: app (${{ matrix.platform }})
@@ -33,7 +33,7 @@ jobs:
         with:
           global-json-file: global.json
       - name: Test Core on Windows
-        run: dotnet test tests/LLMTray.Core.Tests
+        run: dotnet test --project tests/LLMTray.Core.Tests
       - name: Build an unsigned MSIX
         run: >
           dotnet build src/LLMTray.App -c Release

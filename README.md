@@ -27,7 +27,7 @@ adr/                      decisions
 Core and its tests need only the .NET 10 SDK, on any OS:
 
 ```
-dotnet test tests/LLMTray.Core.Tests
+dotnet test --project tests/LLMTray.Core.Tests
 ```
 
 The app needs Windows 11 with the .NET 10 SDK, or Visual Studio 2026 with
