@@ -1,0 +1,20 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="ARM64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/LLMTray.Core/LLMTray.Core.csproj" />
+    <Project Path="src/LLMTray.App/LLMTray.App.csproj">
+      <Platform Solution="Any CPU" Project="x64" />
+      <Deploy />
+    </Project>
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LLMTray.Core.Tests/LLMTray.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/LLMTray.Version/LLMTray.Version.csproj" />
+  </Folder>
+</Solution>
