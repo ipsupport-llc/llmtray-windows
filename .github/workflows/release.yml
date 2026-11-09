@@ -1,0 +1,145 @@
+name: Release
+
+# Every v* tag (admin-only): build signed MSIX packages for x64 and ARM64 and
+# publish them on GitHub Releases. Betas (vX.Y.Z-beta.N) are pre-releases.
+# See adr/0002.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.v.outputs.package_version }}
+      display_version: ${{ steps.v.outputs.display_version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: dotnet run --project tools/LLMTray.Version -- "$TAG" | tee -a "$GITHUB_OUTPUT"
+      - name: No stable release with the self-signed certificate (adr/0002)
+        if: steps.v.outputs.prerelease != 'true'
+        run: |
+          echo "::error::Stable releases wait for a public signing certificate. Tag a beta (vX.Y.Z-beta.N)."
+          exit 1
+
+  package:
+    needs: version
+    name: package (${{ matrix.platform }})
+    strategy:
+      matrix:
+        include:
+          - { platform: x64, rid: win-x64, runner: windows-latest }
+          - { platform: ARM64, rid: win-arm64, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Test Core
+        run: dotnet test --project tests/LLMTray.Core.Tests
+      - name: Stamp the package version
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
+        run: |
+          $path = 'src/LLMTray.App/Package.appxmanifest'
+          [xml]$m = Get-Content $path
+          $m.Package.Identity.Version = $env:PACKAGE_VERSION
+          $m.Save((Resolve-Path $path))
+      - name: Import the signing certificate
+        id: cert
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.MSIX_CERT_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
+        run: |
+          if (-not $env:PFX_BASE64 -or -not $env:PFX_PASSWORD) { throw 'MSIX_CERT_PFX_BASE64 or MSIX_CERT_PASSWORD is not set' }
+          $pfx = "$env:RUNNER_TEMP\sign.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          } finally {
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+          }
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          [xml]$m = Get-Content src/LLMTray.App/Package.appxmanifest
+          if ($cert.Subject -ne $m.Package.Identity.Publisher) {
+            throw "certificate subject '$($cert.Subject)' differs from the manifest Publisher '$($m.Package.Identity.Publisher)'"
+          }
+          New-Item -ItemType Directory dist | Out-Null
+          # The public part, once per release (both jobs hold the same certificate).
+          if ('${{ matrix.platform }}' -eq 'x64') {
+            Export-Certificate -Cert $cert -FilePath dist/LLMTray-signing.cer -Type CERT | Out-Null
+          }
+      - name: Build a signed MSIX
+        run: >
+          dotnet build src/LLMTray.App -c Release
+          -r ${{ matrix.rid }} -p:Platform=${{ matrix.platform }}
+          -p:GenerateAppxPackageOnBuild=true
+          -p:AppxPackageSigningEnabled=true
+          -p:PackageCertificateThumbprint=${{ steps.cert.outputs.thumbprint }}
+          -p:AppxPackageDir=${{ github.workspace }}\out\
+      - name: Remove the signing certificate
+        if: always() && steps.cert.outputs.thumbprint != ''
+        shell: pwsh
+        run: Remove-Item "Cert:\CurrentUser\My\${{ steps.cert.outputs.thumbprint }}"
+      - name: Collect
+        shell: pwsh
+        env:
+          DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
+        run: |
+          $msix = @(Get-ChildItem out -Recurse -Filter *.msix)
+          if ($msix.Count -ne 1) { throw "expected one .msix, found $($msix.Count)" }
+          Copy-Item $msix[0].FullName "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}.msix"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msix-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: msix-*
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Builds for Windows 11 (22H2 or later): `x64` for most PCs, `ARM64` for Snapdragon laptops.
+
+          These packages are signed with a self-signed certificate until the app gets a public one. Before the first install:
+
+          1. Download `LLMTray-signing.cer`, open it, and choose **Install Certificate**.
+          2. Pick **Local Machine**, then **Place all certificates in the following store**, **Trusted People**.
+          3. Open the `.msix` for your PC and choose **Install**.
+          NOTES
+          flags=()
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --verify-tag \
+            --title "LLMTray for Windows ${TAG#v}" --notes-file notes.md "${flags[@]}"

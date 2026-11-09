@@ -249,11 +249,10 @@ feature without a settled Windows path stays on the list as open work.
   or Vulkan numbers.
 - **Real PCs** are needed for speed, memory and backend tests: at least one
   with NVIDIA and one with an AMD or Intel GPU.
-- **CI:** GitHub's `windows-latest` (Windows Server, not Windows 11) and
-  `windows-11-arm` runners can build, test Core and package. They have no
-  GPU, and tray, capture and OCR behaviour there differs from a desktop.
-  Windows minutes cost money on a private repo and are free once the repo is
-  public.
+- **CI** (ADR 0002): GitHub's `windows-latest` (Windows Server, not
+  Windows 11) and `windows-11-arm` runners build the app, run the Core tests
+  and package every PR and every release. They have no GPU, and tray,
+  capture and OCR behaviour there differs from a desktop.
 
 ## Shared with the Mac app
 
@@ -268,9 +267,10 @@ These stay single-sourced. Windows reads them; it doesn't fork them.
 
 ## Open questions
 
-1. CI before the repo is public: paid Windows runners, or local builds only.
+1. ~~CI before the repo is public~~: settled by ADR 0002. The repo is
+   public and builds in GitHub Actions.
 2. Code signing for the Direct build: Azure Artifact Signing eligibility, or
-   which CA.
+   which CA. Betas are self-signed until then (ADR 0002).
 3. Store certification of downloaded backends and runners (the test
    submission above).
 4. GGUF publishing for our own quantized models: which ones first.

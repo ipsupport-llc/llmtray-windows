@@ -23,6 +23,8 @@
 - Only the llama.cpp CPU and Vulkan backends ship in the package. Everything
   heavier (CUDA, models, image, voice and music runners) is opt-in and
   downloaded only when the user turns it on in Settings.
+- CI builds and packages everything (adr/0002). Required checks: `core`,
+  `app (x64)`, `app (ARM64)`.
 - `main` changes only through PRs. Releases are tags: `vX.Y.Z-beta.N` for
   betas, `vX.Y.Z` for stable. A stable tag needs the maintainer's OK. Never
   move or re-push an existing tag; use the next number.

@@ -8,5 +8,6 @@ and why.
 | ADR | Topic |
 |---|---|
 | [0001](0001-windows-app.md) | LLMTray for Windows: .NET 10 + WinUI 3, llama.cpp as a child process behind our own proxy, one MSIX shipped directly and through the Store, the feature map and phases (proposed) |
+| [0002](0002-build-and-release.md) | Build, version and release in GitHub Actions; tag → package version; self-signed betas until a public certificate (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.
