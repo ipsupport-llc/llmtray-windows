@@ -80,7 +80,7 @@ public sealed record PersistedMessage
 
     /// <summary>Everything else the Mac app wrote (audio, citations, …): kept when this app saves the file.</summary>
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? Other { get; init; }
+    public Dictionary<string, JsonElement>? Other { get; set; }
 }
 
 /// <summary>A chat: one JSON file per chat, sessions/&lt;UUID&gt;.json (Mac adr/0006).</summary>
@@ -100,7 +100,7 @@ public sealed record ChatSessionFile
     public int? LastSeq { get; init; }
 
     [JsonExtensionData]
-    public Dictionary<string, JsonElement>? Other { get; init; }
+    public Dictionary<string, JsonElement>? Other { get; set; }
 }
 
 /// <summary>Swift writes UUIDs in upper case.</summary>
