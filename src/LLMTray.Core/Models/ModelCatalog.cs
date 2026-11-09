@@ -106,6 +106,35 @@ public sealed partial class ModelCatalog
     public ModelEntry? Find(ModelEntry model) =>
         Models.FirstOrDefault(m => string.Equals(m.FullPath, model.FullPath, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// The files that go when a model is deleted: its weights (every shard)
+    /// and its projector, unless another model in the folder uses it too.
+    /// </summary>
+    public IReadOnlyList<string> FilesOf(ModelEntry model)
+    {
+        var files = new List<string>();
+        var dir = Path.GetDirectoryName(model.FullPath) ?? "";
+        var name = Path.GetFileName(model.FullPath);
+        var shard = ShardPattern().Match(name);
+        if (shard.Success && Directory.Exists(dir))
+        {
+            var stem = name[..shard.Index];
+            files.AddRange(Directory.EnumerateFiles(dir, "*.gguf")
+                .Where(f => ShardPattern().Match(Path.GetFileName(f)) is { Success: true } m && Path.GetFileName(f)[..m.Index] == stem)
+                .OrderBy(f => f, StringComparer.Ordinal));
+        }
+        else
+        {
+            files.Add(model.FullPath);
+        }
+        if (model.ProjectorPath is { } projector
+            && !Models.Any(m => m != model && string.Equals(m.ProjectorPath, projector, StringComparison.OrdinalIgnoreCase)))
+        {
+            files.Add(projector);
+        }
+        return files;
+    }
+
     static bool IsProjector(string fileName) =>
         fileName.Contains("mmproj", StringComparison.OrdinalIgnoreCase);
 

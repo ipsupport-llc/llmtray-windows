@@ -130,7 +130,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
-          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe')
+          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--show-log', '--show-popover'
           $deadline = (Get-Date).AddSeconds(90)
           do {
             Start-Sleep -Seconds 2

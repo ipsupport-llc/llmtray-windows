@@ -14,6 +14,8 @@ namespace LLMTray.App;
 public partial class App : Application
 {
     MainWindow? window;
+    PopoverWindow? popover;
+    LogWindow? log;
     TrayIcon? tray;
     JobObjectLauncher? launcher;
     ProxyServer? proxy;
@@ -108,13 +110,17 @@ public partial class App : Application
         }
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
-        tray.Activated += ShowWindow;
+        tray.Activated += () => (popover ??= new PopoverWindow()).Toggle();
         tray.Menu = TrayMenu;
         if (!tray.IsAdded) RetryTray();
 
-        window = new MainWindow();
-        window.Activate();
+        // Started at sign-in: only the tray icon until the user opens the window.
+        if (!SignInStartup.StartedInBackground()) ShowWindow();
         ListenForSecondLaunch();
+        // For screenshots in CI and for support: open the panel or the log at start.
+        var args = Environment.GetCommandLineArgs();
+        if (args.Contains("--show-log")) ShowLog();
+        if (args.Contains("--show-popover")) dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => (popover ??= new PopoverWindow()).Toggle());
         Updater.Start();
 
         if (Settings.LoadLastModelOnStart && Settings.LastModel is { } last && Library.Current.Resolve(last) is { } model)
@@ -123,11 +129,25 @@ public partial class App : Application
         }
     }
 
-    public void ShowWindow()
+    public void ShowWindow() => ShowWindow(null);
+
+    /// <summary>Opens the window, on a tab if given, and the download window if asked.</summary>
+    public void ShowWindow(string? page, bool getModels = false)
     {
-        if (window is null) return;
+        if (Quitting) return;
+        window ??= new MainWindow();
         window.AppWindow.Show();
         window.Activate();
+        if (page is not null) window.ShowPage(page);
+        if (getModels) _ = window.GetModelsAsync();
+    }
+
+    public void ShowLog()
+    {
+        if (Quitting) return;
+        log ??= new LogWindow();
+        log.AppWindow.Show();
+        log.Activate();
     }
 
     public async Task LoadAsync(ModelEntry model)
@@ -211,6 +231,7 @@ public partial class App : Application
         if (models.Count == 0) items.Add(new("No models in the models folder", Enabled: false));
         items.Add(TrayMenuItem.Separator);
         items.Add(new("Stop the model", () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
+        items.Add(new("Server log", ShowLog));
         if (Updater.CanUpdate)
         {
             items.Add(Updater.Available is { } update
@@ -236,6 +257,8 @@ public partial class App : Application
         {
             // Closing the job ends every child, a model still loading included.
             launcher?.Dispose();
+            popover?.Close();
+            log?.Close();
             window?.Close();
             Exit();
         }
