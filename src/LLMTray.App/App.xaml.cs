@@ -1,5 +1,7 @@
 using LLMTray.App.Interop;
+using System.Net;
 using LLMTray.Core;
+using LLMTray.Core.Downloads;
 using LLMTray.Core.Models;
 using LLMTray.Core.Proxy;
 using LLMTray.Core.Runtime;
@@ -21,6 +23,20 @@ public partial class App : Application
     public App()
     {
         InitializeComponent();
+        // A beta must not vanish on a bug: the error goes to the log and the app goes on.
+        UnhandledException += (_, e) =>
+        {
+            try
+            {
+                var log = Path.Combine(DataFolder.Length > 0 ? DataFolder : Path.GetTempPath(), "logs", "app-errors.log");
+                Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+                File.AppendAllText(log, $"{DateTime.Now:O} {e.Exception}\n\n");
+            }
+            catch (Exception)
+            {
+            }
+            e.Handled = true;
+        };
     }
 
     public static new App Current => (App)Application.Current;
@@ -40,7 +56,13 @@ public partial class App : Application
 
     public string ModelsFolder => Settings.ModelsFolder ?? AppPaths.DefaultModelsFolder;
 
+    /// <summary>For downloads: the system proxy with the user's Windows credentials (corporate proxies).</summary>
+    public HttpClient Web { get; } = CreateWebClient();
+    public IReadOnlyDictionary<DownloadSource, IModelSource> Sources { get; private set; } = null!;
+    public DownloadQueue Downloads { get; private set; } = null!;
+
     public event Action? ModelsChanged;
+    public event Action<DownloadState>? DownloadsChanged;
     public event Action<HostState>? HostChanged;
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
@@ -54,6 +76,15 @@ public partial class App : Application
         Library = new ModelLibrary(() => ModelsFolder);
         Library.Changed += _ => dispatcher.TryEnqueue(() => ModelsChanged?.Invoke());
         Library.Rescan();
+
+        Sources = new Dictionary<DownloadSource, IModelSource>
+        {
+            [DownloadSource.HuggingFace] = new HuggingFaceSource(Web),
+            [DownloadSource.Kaggle] = new KaggleSource(Web),
+        };
+        Downloads = new DownloadQueue(new ModelDownloader(Web));
+        Downloads.Changed += _ => dispatcher.TryEnqueue(() => DownloadsChanged?.Invoke(Downloads.State));
+        Downloads.Completed += _ => Library.Rescan();
 
         launcher = new JobObjectLauncher();
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
@@ -108,6 +139,26 @@ public partial class App : Application
     }
 
     public Task StopAsync() => Host.StopAsync();
+
+    public void SetDownloadSource(DownloadSource source)
+    {
+        if (Settings.DownloadSource != source) UpdateSettings(Settings with { DownloadSource = source });
+    }
+
+    static HttpClient CreateWebClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            UseProxy = true,
+            DefaultProxyCredentials = CredentialCache.DefaultCredentials,
+            AutomaticDecompression = DecompressionMethods.All,
+            ConnectTimeout = TimeSpan.FromSeconds(20),
+        };
+        var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0";
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"LLMTray-Windows/{version}");
+        return client;
+    }
 
     public void SetModelsFolder(string? folder)
     {

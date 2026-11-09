@@ -24,6 +24,11 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet test --project tests/LLMTray.Core.Tests
+      - name: Fetch from the real Hugging Face and Kaggle
+        run: |
+          dotnet run --project tools/LLMTray.Fetch -- hf "$SMOKE_REPO@$SMOKE_REVISION" LICENSE "$RUNNER_TEMP/hf/LICENSE"
+          dotnet run --project tools/LLMTray.Fetch -- kaggle romanromenskyi/gemma-4-e2b-it-ipsupport/gguf/qat-phone/1 LICENSE "$RUNNER_TEMP/kaggle/LICENSE"
+          dotnet run --project tools/LLMTray.Fetch -- kaggle romanromenskyi/gemma-4-e2b-it-ipsupport/gguf/qat-phone README.md "$RUNNER_TEMP/kaggle/README.md"
 
   # Builds the MSIX, installs it, and runs the smoke test against a real
   # llama-server and model (scripts/smoke.ps1). The package is signed with a
@@ -83,17 +88,12 @@ jobs:
         with:
           path: ~/.llmtray/models
           key: smoke-model-${{ env.SMOKE_SHA256 }}
-      - name: Fetch the smoke-test model
+      - name: Fetch the smoke-test model (the app's downloader)
         shell: pwsh
         run: |
-          $dir = Join-Path $HOME ".llmtray/models/$env:SMOKE_REPO"
-          $file = Join-Path $dir $env:SMOKE_FILE
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          if (-not (Test-Path $file)) {
-            curl.exe -sSfL -o $file "https://huggingface.co/$env:SMOKE_REPO/resolve/$env:SMOKE_REVISION/$env:SMOKE_FILE"
-          }
-          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
-          if ($hash -ne $env:SMOKE_SHA256) { throw "model SHA-256 $hash, expected $env:SMOKE_SHA256" }
+          $file = Join-Path $HOME ".llmtray/models/$env:SMOKE_REPO/$env:SMOKE_FILE"
+          dotnet run --project tools/LLMTray.Fetch -- hf "$env:SMOKE_REPO@$env:SMOKE_REVISION" $env:SMOKE_FILE $file $env:SMOKE_SHA256
+          if ($LASTEXITCODE -ne 0) { throw 'fetch failed' }
       - name: Smoke test
         shell: pwsh
         run: scripts/smoke.ps1 -Model ([IO.Path]::GetFileNameWithoutExtension($env:SMOKE_FILE)) -Out smoke
