@@ -12,6 +12,9 @@ public static class Program
     internal const string ShowEventName = @"Local\LLMTray.Windows.Show";
     const string InstanceMutexName = @"Local\LLMTray.Windows.Instance";
 
+    /// <summary>Set by a second launch; the running app shows its window.</summary>
+    internal static EventWaitHandle ShowEvent { get; private set; } = null!;
+
     [STAThread]
     static int Main()
     {
@@ -24,6 +27,9 @@ public static class Program
             }
             return 0;
         }
+        // Created before anything else, so a launch during startup isn't lost:
+        // the auto-reset event stays set until the app first waits on it.
+        ShowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         WinRT.ComWrappersSupport.InitializeComWrappers();
         Application.Start(callback =>
         {

@@ -22,6 +22,7 @@ sealed class TrayIcon : IDisposable
     readonly Native.WndProc wndProc;
     readonly IntPtr window;
     readonly IntPtr icon;
+    readonly bool ownsIcon = true;
     readonly uint taskbarCreated;
     string tooltip;
     bool disposed;
@@ -46,7 +47,25 @@ sealed class TrayIcon : IDisposable
         taskbarCreated = Native.RegisterWindowMessageW("TaskbarCreated");
         icon = Native.LoadImageW(IntPtr.Zero, iconPath, Native.IMAGE_ICON,
             Native.GetSystemMetrics(Native.SM_CXSMICON), Native.GetSystemMetrics(Native.SM_CYSMICON), Native.LR_LOADFROMFILE);
+        if (icon == IntPtr.Zero)
+        {
+            // The packaged icon is missing: the stock one still gives the user a way in.
+            icon = Native.LoadIconW(IntPtr.Zero, Native.IDI_APPLICATION);
+            ownsIcon = false;
+        }
         Add();
+    }
+
+    /// <summary>
+    /// Whether the icon is in the notification area. Explorer can refuse
+    /// it at sign-in while it starts; <see cref="TryAdd"/> again later.
+    /// </summary>
+    public bool IsAdded { get; private set; }
+
+    public bool TryAdd()
+    {
+        if (!IsAdded) Add();
+        return IsAdded;
     }
 
     public event Action? Activated;
@@ -64,7 +83,8 @@ sealed class TrayIcon : IDisposable
     void Add()
     {
         var data = Data(Native.NIF_MESSAGE | Native.NIF_ICON | Native.NIF_TIP | Native.NIF_SHOWTIP);
-        Native.Shell_NotifyIconW(Native.NIM_ADD, ref data);
+        IsAdded = Native.Shell_NotifyIconW(Native.NIM_ADD, ref data);
+        if (!IsAdded) return;
         data.uTimeoutOrVersion = Native.NOTIFYICON_VERSION_4;
         Native.Shell_NotifyIconW(Native.NIM_SETVERSION, ref data);
     }
@@ -145,7 +165,7 @@ sealed class TrayIcon : IDisposable
         var data = Data(0);
         Native.Shell_NotifyIconW(Native.NIM_DELETE, ref data);
         Native.DestroyWindow(window);
-        if (icon != IntPtr.Zero) Native.DestroyIcon(icon);
+        if (icon != IntPtr.Zero && ownsIcon) Native.DestroyIcon(icon);
     }
 
     static class Native
@@ -158,6 +178,7 @@ sealed class TrayIcon : IDisposable
         public const uint TPM_RIGHTBUTTON = 0x2, TPM_NONOTIFY = 0x80, TPM_RETURNCMD = 0x100;
         public const uint IMAGE_ICON = 1, LR_LOADFROMFILE = 0x10;
         public const int SM_CXSMICON = 49, SM_CYSMICON = 50;
+        public static readonly IntPtr IDI_APPLICATION = new(32512);
 
         public delegate IntPtr WndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
@@ -214,6 +235,9 @@ sealed class TrayIcon : IDisposable
 
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr icon);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr LoadIconW(IntPtr instance, IntPtr name);
 
         [DllImport("user32.dll")]
         public static extern int GetSystemMetrics(int index);

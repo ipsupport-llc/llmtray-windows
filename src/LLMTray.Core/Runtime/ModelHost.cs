@@ -308,7 +308,6 @@ public sealed class ModelHost : IAsyncDisposable
         catch (TimeoutException)
         {
             // Still there after 15 s: the job object ends it with the app.
-            return;
         }
         process.Dispose();
     }

@@ -71,7 +71,8 @@ public sealed partial class MainWindow : Window
         {
             if (App.Current.Quitting) return;
             args.Cancel = true;
-            sender.Hide();
+            if (App.Current.HasTrayIcon) sender.Hide();
+            else _ = App.Current.QuitAsync();
         };
         ApiUrl.Text = AppInfo.ApiBaseUrl;
         logTimer.Tick += (_, _) => RefreshLog();

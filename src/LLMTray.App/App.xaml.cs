@@ -16,7 +16,6 @@ public partial class App : Application
     JobObjectLauncher? launcher;
     ProxyServer? proxy;
     SettingsStore? settingsStore;
-    EventWaitHandle? showEvent;
     DispatcherQueue? dispatcher;
 
     public App()
@@ -35,6 +34,9 @@ public partial class App : Application
     public string? ProxyError { get; private set; }
 
     public bool Quitting { get; private set; }
+
+    /// <summary>Without the tray icon, closing the window must quit: nothing else would bring it back.</summary>
+    public bool HasTrayIcon => tray?.IsAdded == true;
 
     public string ModelsFolder => Settings.ModelsFolder ?? AppPaths.DefaultModelsFolder;
 
@@ -74,6 +76,7 @@ public partial class App : Application
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
         tray.Activated += ShowWindow;
         tray.Menu = TrayMenu;
+        if (!tray.IsAdded) RetryTray();
 
         window = new MainWindow();
         window.Activate();
@@ -161,19 +164,39 @@ public partial class App : Application
     {
         if (Quitting) return;
         Quitting = true;
-        tray?.Dispose();
-        showEvent?.Set();
-        if (proxy is not null) await proxy.DisposeAsync();
-        await Host.DisposeAsync();
-        launcher?.Dispose();
-        window?.Close();
-        Exit();
+        try
+        {
+            tray?.Dispose();
+            Program.ShowEvent.Set();
+            if (proxy is not null) await proxy.DisposeAsync();
+            await Host.DisposeAsync();
+        }
+        finally
+        {
+            // Closing the job ends every child, a model still loading included.
+            launcher?.Dispose();
+            window?.Close();
+            Exit();
+        }
+    }
+
+    /// <summary>Explorer may not take the icon yet (sign-in): try again for a minute.</summary>
+    void RetryTray()
+    {
+        var attempts = 0;
+        var timer = dispatcher!.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(2);
+        timer.Tick += (t, _) =>
+        {
+            if (tray is null || tray.TryAdd() || ++attempts >= 30) t.Stop();
+        };
+        timer.Start();
     }
 
     /// <summary>Another launch sets the event (Program.Main): show the window.</summary>
     void ListenForSecondLaunch()
     {
-        showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowEventName);
+        var showEvent = Program.ShowEvent;
         var thread = new Thread(() =>
         {
             while (showEvent.WaitOne() && !Quitting)

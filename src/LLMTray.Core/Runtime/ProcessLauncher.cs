@@ -10,6 +10,7 @@ public interface IChildProcess : IDisposable
     /// <summary>Completes with the exit code when the process ends.</summary>
     Task<int> Exited { get; }
 
+    /// <summary>Starts ending the process; <see cref="Exited"/> completes when it's gone.</summary>
     void Kill();
 }
 

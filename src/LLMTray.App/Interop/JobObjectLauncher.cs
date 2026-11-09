@@ -59,7 +59,13 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
             process.Dispose();
             throw error;
         }
-        Native.ResumeThread(thread);
+        if (Native.ResumeThread(thread) == uint.MaxValue)
+        {
+            var error = new Win32Exception();
+            Native.TerminateProcess(process, 1);
+            process.Dispose();
+            throw error;
+        }
         return new Child(process, info.dwProcessId);
     }
 
@@ -86,6 +92,9 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
         readonly ManualResetEvent waitable;
         readonly RegisteredWaitHandle registration;
         readonly TaskCompletionSource<int> exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly object sync = new();
+        bool disposeRequested;
+        bool tornDown;
 
         public Child(SafeProcessHandle handle, int id)
         {
@@ -94,8 +103,13 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
             waitable = new ManualResetEvent(false) { SafeWaitHandle = new SafeWaitHandle(handle.DangerousGetHandle(), ownsHandle: false) };
             registration = ThreadPool.RegisterWaitForSingleObject(waitable, (_, _) =>
             {
-                Native.GetExitCodeProcess(handle, out var code);
-                exited.TrySetResult(unchecked((int)code));
+                // -1 when the exit code can't be read: never a clean 0.
+                var code = Native.GetExitCodeProcess(handle, out var raw) ? unchecked((int)raw) : -1;
+                exited.TrySetResult(code);
+                lock (sync)
+                {
+                    if (disposeRequested) TearDown();
+                }
             }, null, Timeout.Infinite, executeOnlyOnce: true);
         }
 
@@ -104,11 +118,26 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
 
         public void Kill()
         {
-            if (!exited.Task.IsCompleted) Native.TerminateProcess(handle, 1);
+            lock (sync)
+            {
+                if (!tornDown && !exited.Task.IsCompleted) Native.TerminateProcess(handle, 1);
+            }
         }
 
+        /// <summary>Before the process has exited, the handles stay open until it does, so <see cref="Exited"/> still completes.</summary>
         public void Dispose()
         {
+            lock (sync)
+            {
+                if (exited.Task.IsCompleted) TearDown();
+                else disposeRequested = true;
+            }
+        }
+
+        void TearDown()
+        {
+            if (tornDown) return;
+            tornDown = true;
             registration.Unregister(null);
             waitable.Dispose();
             handle.Dispose();
