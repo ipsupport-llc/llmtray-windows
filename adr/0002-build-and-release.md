@@ -9,8 +9,15 @@ Status: accepted (2026-11-09)
    to `main`:
    - `core`: `dotnet test` of `LLMTray.Core` on Ubuntu;
    - `app (x64)` on `windows-latest` and `app (ARM64)` on `windows-11-arm`:
-     the Core tests again, then the app built as an unsigned MSIX. The MSIX
-     is kept as a run artifact for 7 days.
+     the Core tests again, then the app built as an MSIX with the pinned
+     llama.cpp CPU and Vulkan builds inside, signed with a throwaway
+     certificate made in the job. The job installs it and runs
+     `scripts/smoke.ps1`: the API comes up on 8765, lists the models
+     folder, loads a small model of ours from Hugging Face (pinned by
+     revision and SHA-256) on a request, answers, streams, refuses an
+     unknown model, and llama-server dies when the app is killed. The
+     package, screenshots and the server log are kept as artifacts for 7
+     days.
 
    Nothing has to build on a developer's Mac. Core can still be tested there
    with the .NET 10 SDK.
@@ -36,6 +43,12 @@ Status: accepted (2026-11-09)
    next patch's betas, so App Installer always sees an upgrade. Patch can go
    up to 64. `LLMTray.Core.ReleaseTag` holds the mapping, and
    `tools/LLMTray.Version` prints it for the workflow.
+
+5. **llama.cpp is pinned in `runtime-pins.json`**: one build number and
+   the SHA-256 of each zip the package carries (CPU and Vulkan, per
+   architecture). `scripts/fetch-llama.ps1` downloads and checks them
+   before every build, CI or local. Moving to a newer llama.cpp is a
+   change to that file, through a PR.
 
 4. **Self-signed until there is a public certificate.** Open question 2 in
    ADR 0001 (Azure Artifact Signing or an OV certificate) needs Microsoft
@@ -80,5 +93,3 @@ Status: accepted (2026-11-09)
 
 - `.appinstaller` update feeds (ADR 0001, Updates): with the app's first
   real features.
-- NOTICE and license texts in the package: with the first bundled
-  third-party binary (llama.cpp).

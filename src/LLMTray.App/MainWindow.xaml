@@ -7,8 +7,95 @@
     <Window.SystemBackdrop>
         <MicaBackdrop />
     </Window.SystemBackdrop>
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-        <TextBlock Text="LLMTray" Style="{StaticResource TitleTextBlockStyle}" HorizontalAlignment="Center" />
-        <TextBlock x:Name="ApiLine" Style="{StaticResource BodyTextBlockStyle}" HorizontalAlignment="Center" />
-    </StackPanel>
+
+    <Grid Padding="24,16,24,24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <Image Source="Assets/Square44x44Logo.png" Width="36" Height="36" />
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="LLMTray" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <TextBlock Text="Local AI Runtime for Windows" Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Status and API -->
+        <Border Grid.Row="1" Padding="16" CornerRadius="8"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            <StackPanel Spacing="10">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Ellipse x:Name="StatusDot" Width="10" Height="10" VerticalAlignment="Center" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <ProgressRing x:Name="Loading" Width="16" Height="16" IsActive="False" />
+                </StackPanel>
+                <TextBlock x:Name="DetailText" TextWrapping="Wrap" Visibility="Collapsed"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="API" VerticalAlignment="Center" />
+                    <TextBox x:Name="ApiUrl" Grid.Column="1" IsReadOnly="True" FontFamily="Consolas" />
+                    <Button Grid.Column="2" Content="Copy" Click="CopyApi_Click" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Models -->
+        <Grid Grid.Row="2" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Models" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock x:Name="FolderText" Style="{StaticResource CaptionTextBlockStyle}" TextTrimming="CharacterEllipsis"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="Refresh" Click="Refresh_Click" />
+                <Button Grid.Column="2" Content="Open folder" Click="OpenFolder_Click" />
+                <Button Grid.Column="3" Content="Change folder…" Click="ChangeFolder_Click" />
+            </Grid>
+
+            <ListView x:Name="ModelsList" Grid.Row="1" SelectionMode="Single" DoubleTapped="ModelsList_DoubleTapped"
+                      SelectionChanged="ModelsList_SelectionChanged"
+                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+            </ListView>
+            <TextBlock x:Name="EmptyText" Grid.Row="1" Margin="16" TextWrapping="Wrap" Visibility="Collapsed"
+                       VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                <Button x:Name="LoadButton" Content="Load" Style="{StaticResource AccentButtonStyle}" Click="Load_Click" IsEnabled="False" />
+                <Button x:Name="StopButton" Content="Stop" Click="Stop_Click" IsEnabled="False" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Server log -->
+        <Expander x:Name="LogExpander" Grid.Row="3" Header="Server log" HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Stretch" Expanding="LogExpander_Expanding" Collapsed="LogExpander_Collapsed">
+            <TextBox x:Name="LogText" IsReadOnly="True" FontFamily="Consolas" FontSize="12" Height="200"
+                     TextWrapping="NoWrap" AcceptsReturn="True"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+        </Expander>
+    </Grid>
 </Window>

@@ -15,9 +15,15 @@
     <!-- Carry the Windows App SDK and .NET runtimes in the package: nothing else to install. -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
+    <!-- Program.cs has Main: one instance per session. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\*.png" />
+    <Content Include="Assets\AppIcon.ico" />
+    <Content Include="..\..\NOTICE.md" Link="NOTICE.md" />
+    <!-- llama.cpp, put here by scripts/fetch-llama.ps1 (CPU and Vulkan, adr/0001). -->
+    <Content Include="runtime\**\*" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />

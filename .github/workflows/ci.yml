@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # The smoke-test model: small, ours, pinned by revision and SHA-256.
+  SMOKE_REPO: roman220220/LFM2.5-1.2B-Instruct-GGUF-jang-imatrix
+  SMOKE_REVISION: 536077886ff3305cbbfdf258e32ba1a224400093
+  SMOKE_FILE: lfm2.5-1.2b-instruct-jang.gguf
+  SMOKE_SHA256: e7d276710fc157d104ca0079694baacc4903cd3c7f2f8710139a90223ba6f63c
+
 jobs:
   core:
     runs-on: ubuntu-latest
@@ -18,6 +25,9 @@ jobs:
           global-json-file: global.json
       - run: dotnet test --project tests/LLMTray.Core.Tests
 
+  # Builds the MSIX, installs it, and runs the smoke test against a real
+  # llama-server and model (scripts/smoke.ps1). The package is signed with a
+  # throwaway certificate made in the job: it installs only here.
   app:
     name: app (${{ matrix.platform }})
     strategy:
@@ -34,16 +44,62 @@ jobs:
           global-json-file: global.json
       - name: Test Core on Windows
         run: dotnet test --project tests/LLMTray.Core.Tests
-      - name: Build an unsigned MSIX
+      - name: Fetch llama.cpp
+        shell: pwsh
+        run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Make a throwaway signing certificate
+        id: cert
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=IPSupport LLC' `
+            -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(2) `
+            -TextExtension @('2.5.29.19={text}')
+          $cer = Join-Path $env:RUNNER_TEMP 'ci.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+      - name: Build the MSIX
         run: >
           dotnet build src/LLMTray.App -c Release
           -r ${{ matrix.rid }} -p:Platform=${{ matrix.platform }}
           -p:GenerateAppxPackageOnBuild=true
-          -p:AppxPackageSigningEnabled=false
+          -p:AppxPackageSigningEnabled=true
+          -p:PackageCertificateThumbprint=${{ steps.cert.outputs.thumbprint }}
           -p:AppxPackageDir=${{ github.workspace }}\out\
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: LLMTray-unsigned-${{ matrix.platform }}
+          name: LLMTray-ci-${{ matrix.platform }}
           path: out/**/*.msix
           if-no-files-found: error
+          retention-days: 7
+      - name: Install
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem out -Recurse -Filter *.msix | Select-Object -First 1
+          Add-AppxPackage -Path $msix.FullName
+          Get-AppxPackage IPSupportLLC.LLMTray | Format-List Name, Version, Architecture, PackageFamilyName
+      - name: Cache the smoke-test model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.llmtray/models
+          key: smoke-model-${{ env.SMOKE_SHA256 }}
+      - name: Fetch the smoke-test model
+        shell: pwsh
+        run: |
+          $dir = Join-Path $HOME ".llmtray/models/$env:SMOKE_REPO"
+          $file = Join-Path $dir $env:SMOKE_FILE
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          if (-not (Test-Path $file)) {
+            curl.exe -sSfL -o $file "https://huggingface.co/$env:SMOKE_REPO/resolve/$env:SMOKE_REVISION/$env:SMOKE_FILE"
+          }
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+          if ($hash -ne $env:SMOKE_SHA256) { throw "model SHA-256 $hash, expected $env:SMOKE_SHA256" }
+      - name: Smoke test
+        shell: pwsh
+        run: scripts/smoke.ps1 -Model ([IO.Path]::GetFileNameWithoutExtension($env:SMOKE_FILE)) -Out smoke
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: smoke-${{ matrix.platform }}
+          path: smoke/
           retention-days: 7

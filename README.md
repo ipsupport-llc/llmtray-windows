@@ -8,8 +8,9 @@ Windows, on [llama.cpp](https://github.com/ggml-org/llama.cpp). The goal is
 the same features and the same local API at `http://localhost:8765/v1`, in an
 app that lives in the notification area.
 
-Status: early. The app skeleton builds in CI, and there is nothing useful to
-install yet. The plan is in [adr/0001](adr/0001-windows-app.md), and how it is
+Status: early beta. It serves GGUF models from a folder through the local
+API, loads the model a request names, and lives in the notification area.
+Chat, the model browser and the rest of the Mac app's features come next. The plan is in [adr/0001](adr/0001-windows-app.md), and how it is
 built and released is in [adr/0002](adr/0002-build-and-release.md).
 
 ## Layout
@@ -31,11 +32,23 @@ dotnet test --project tests/LLMTray.Core.Tests
 ```
 
 The app needs Windows 11 with the .NET 10 SDK, or Visual Studio 2026 with
-the WinUI workload:
+the WinUI workload. Fetch the pinned llama.cpp builds first:
 
 ```
+pwsh scripts/fetch-llama.ps1 -Rid win-x64
 dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
 ```
+
+## Using it
+
+1. Put GGUF models in `%USERPROFILE%\.llmtray\models`, one folder per model
+   (`publisher\repo\file.gguf`), or pick another folder with **Change folder…**
+   in the window, such as LM Studio's.
+2. Point any OpenAI-compatible client at `http://localhost:8765/v1`. The
+   `model` field picks the model: its file name without `.gguf` (see
+   `GET /v1/models`). LLMTray loads it on the first request.
+
+Releases: [RELEASING.md](RELEASING.md).
 
 ## License
 

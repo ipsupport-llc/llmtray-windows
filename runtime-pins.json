@@ -1,0 +1,17 @@
+{
+  "llama.cpp": {
+    "build": "b11889",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/{build}/{file}",
+    "license": "MIT",
+    "assets": {
+      "win-x64": {
+        "vulkan": { "file": "llama-b11889-bin-win-vulkan-x64.zip", "sha256": "3874d6cb33c3540a68191c1ca31b774bd72914e8ca65e51dfe23e3dae8201f00" },
+        "cpu": { "file": "llama-b11889-bin-win-cpu-x64.zip", "sha256": "bf563dffb502a230ae06c9dc455b54cbc079e7e0bc270cd4d6191209b28d175d" }
+      },
+      "win-arm64": {
+        "vulkan": { "file": "llama-b11889-bin-win-vulkan-arm64.zip", "sha256": "a993a3a85adf9c45229385390dca00ddfbaeb3deaa2d4508dc6fb5cfc30301f6" },
+        "cpu": { "file": "llama-b11889-bin-win-cpu-arm64.zip", "sha256": "d55567e32d1b5945db7e9118c7d86a6bfcf22afa8e177c90ee8811f522981f35" }
+      }
+    }
+  }
+}
