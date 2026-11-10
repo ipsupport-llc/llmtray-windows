@@ -116,7 +116,8 @@ sealed partial class ChatWindow : Window
         }
         thinking.Flyout = efforts;
         App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); };
-        App.Current.ModelsChanged += RenderModels;
+        App.Current.ModelsChanged += () => { RenderModels(); RenderThinking(); };
+        App.Current.ThinkingStylesChanged += RenderThinking;
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;

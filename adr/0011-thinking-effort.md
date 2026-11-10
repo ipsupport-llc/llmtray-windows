@@ -22,3 +22,12 @@ thought), as the Mac fork's server does. At Low and Medium the latest user
 message also carries the Mac's note telling the model its budget, so it
 plans a short thought; the note is never saved. Titles keep thinking off.
 External clients send what they want; the proxy adds nothing.
+
+## Limits
+
+- The budget is per request: a turn with tool rounds can think up to the
+  budget in each round. The note stays with the turn's message.
+- llama-server enforces the budget only for templates whose reasoning
+  tags it knows; for others Low and Medium rely on the note alone.
+- The template is read from the GGUF header off the UI thread; until it
+  has been read the picker stays hidden.

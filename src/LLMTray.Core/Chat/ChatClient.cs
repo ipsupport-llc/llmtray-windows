@@ -599,7 +599,16 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // Templates that think (Gemma 4, Qwen 3, LFM Thinking) read enable_thinking; others ignore it.
         if (!options.Thinking)
         {
+            // The app's own one-shot requests: as little thinking as the template allows.
             body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };
+            if (options.Style == ThinkingStyle.Levels)
+            {
+                body["chat_template_kwargs"]!["reasoning_effort"] = "low";
+            }
+            else if (options.Style == ThinkingStyle.Budget)
+            {
+                body["thinking_budget_tokens"] = 0;
+            }
         }
         else
         {

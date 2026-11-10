@@ -9,6 +9,22 @@ namespace LLMTray.Core.Licenses;
 /// </summary>
 public static class GgufMetadata
 {
+    /// <summary>Like <see cref="ReadStrings"/>, but null when the file couldn't be read (as opposed to not having the keys).</summary>
+    public static IReadOnlyDictionary<string, string>? TryReadStrings(string path, IReadOnlyCollection<string> keys)
+    {
+        try
+        {
+            using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1))
+            {
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        return ReadStrings(path, keys);
+    }
+
     public static IReadOnlyDictionary<string, string> ReadStrings(string path, IReadOnlyCollection<string> keys)
     {
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
