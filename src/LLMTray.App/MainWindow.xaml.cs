@@ -336,6 +336,8 @@ public sealed partial class MainWindow : Window
         yield return Ui.Card(
             Ui.Row(L.T("Data folder"), app.DataFolder, Ui.Button(L.T("Open"), () => Ui.OpenFolder(app.DataFolder))));
 
+        foreach (var part in UsagePart()) yield return part;
+
         yield return Ui.Section(L.T("About"));
         yield return Ui.Card(
             Ui.Row(L.T("About LLMTray"), app.Updater.Current is { } current ? L.F("Version {0}", current.DisplayVersion) : L.T("Development build"),

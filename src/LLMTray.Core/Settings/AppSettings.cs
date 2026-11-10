@@ -35,6 +35,15 @@ public sealed record AppSettings
     /// <summary>The chat may work in folders the user grants (adr/0016): off until switched on.</summary>
     public bool FolderTools { get; init; }
 
+    /// <summary>
+    /// Share anonymous usage statistics (adr/0019): on for a new install, never
+    /// turned on by an update (null: an install from before that never chose).
+    /// </summary>
+    public bool? ShareUsage { get; init; }
+
+    /// <summary>The random install id reports carry while sharing is on; a new one each time it's turned on.</summary>
+    public Guid? UsageId { get; init; }
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }

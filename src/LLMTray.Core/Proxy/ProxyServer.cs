@@ -22,7 +22,7 @@ public sealed class ProxyServer : IAsyncDisposable
     static readonly HashSet<string> HopByHop = new(StringComparer.OrdinalIgnoreCase)
     {
         "Connection", "Keep-Alive", "Proxy-Connection", "Transfer-Encoding", "Upgrade", "TE", "Trailer",
-        "Host", "Content-Length", "Authorization",
+        "Host", "Content-Length", "Authorization", AppHeader,
     };
 
     /// <summary>
@@ -69,6 +69,15 @@ public sealed class ProxyServer : IAsyncDisposable
     /// chat or completion request leaves out (adr/0008). Null: none.
     /// </summary>
     public Func<ModelEntry, Profiles.ResolvedProfile>? ProfileOf { get; set; }
+
+    /// <summary>The header the app's own requests carry, with <see cref="AppToken"/>: anything else is an outside client.</summary>
+    public const string AppHeader = "X-LLMTray-App";
+
+    /// <summary>A per-run secret the app's own requests carry.</summary>
+    public string? AppToken { get; set; }
+
+    /// <summary>A request from an outside client (an app using the API), for usage statistics: counted, never looked into.</summary>
+    public Action? OutsideRequest { get; set; }
 
     /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
     public const long MaxBodyBytes = 256L * 1024 * 1024;
@@ -119,6 +128,7 @@ public sealed class ProxyServer : IAsyncDisposable
             return;
         }
 
+        if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke();
         var body = await ReadBodyAsync(request, context.RequestAborted).ConfigureAwait(false);
         ModelEntry? wanted = null;
         if (body.Count > 0)

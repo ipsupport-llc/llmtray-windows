@@ -65,7 +65,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None,
     Mcp.McpHub? Mcp = null, Func<McpApprovalRequest, CancellationToken, Task<McpApproval>>? Approve = null,
     Folders.FolderTools? Folders = null, Func<Folders.FolderGrantRequest, CancellationToken, Task<Folders.FolderGrantChoice>>? AskFolder = null,
-    Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null);
+    Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null,
+    Action<string, string?>? Count = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -384,6 +385,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         if (outcome.Source is { Length: > 0 } source && !answer.Sources.Contains(source)) answer.Sources.Add(source);
                         answer.ToolCalls++;
                     }
+                    // Usage statistics (adr/0019): a tool that ran, in a chat that's kept.
+                    if (!outcome.Failed && !Temporary) options.Count?.Invoke(Telemetry.TelemetryFeature.ToolCalls, null);
                     ran[key] = outcome.Result;
                     history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = outcome.Result });
                 }
@@ -430,6 +433,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Requests = requests,
             TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
         };
+        // Usage statistics (adr/0019): an answer that came through, in a chat that's kept; only a count and the model's family.
+        if (!Temporary && answer.Error is null && answer.Content.Length > 0) options.Count?.Invoke(Telemetry.TelemetryFeature.Chat, options.Model);
         if (mine != epoch) return;
         Save();
         Changed?.Invoke();
