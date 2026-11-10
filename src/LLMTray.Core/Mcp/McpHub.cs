@@ -7,7 +7,9 @@ namespace LLMTray.Core.Mcp;
 public sealed record McpDeclared(string ModelName, McpServerConfig Server, McpTool Tool);
 
 /// <summary>What the chat knows of a server right now, for Settings.</summary>
-public sealed record McpServerState(McpServerConfig Config, string Status, IReadOnlyList<McpTool>? Tools, IReadOnlyList<string> Log, bool Running);
+/// <param name="NeedsSignIn">It answered 401, or its sign-in is gone: "Sign In" (adr/0015).</param>
+public sealed record McpServerState(McpServerConfig Config, string Status, IReadOnlyList<McpTool>? Tools, IReadOnlyList<string> Log, bool Running,
+    bool NeedsSignIn = false);
 
 /// <summary>
 /// Runs the user's MCP servers for the chat (Mac MCPHub): a server starts at
@@ -17,8 +19,9 @@ public sealed record McpServerState(McpServerConfig Config, string Status, IRead
 /// </summary>
 /// <param name="own">Takes a started command server and all it starts (the Windows app: a job object each).</param>
 /// <param name="transport">Makes a server's connection; tests give their own.</param>
+/// <param name="signIn">Tokens for servers signed in to (adr/0015).</param>
 public sealed class McpHub(McpServerStore store, HttpClient http, string clientVersion, string dataFolder, Func<Process, IDisposable?>? own = null,
-    Func<McpServerConfig, IMcpTransport>? transport = null) : IAsyncDisposable
+    Func<McpServerConfig, IMcpTransport>? transport = null, McpSignIn? signIn = null) : IAsyncDisposable
 {
     sealed class Running
     {
@@ -36,6 +39,10 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         public readonly List<DateTimeOffset> Crashes = [];
         /// <summary>Three crashes in a minute: no start until Restart.</summary>
         public bool Blocked;
+        /// <summary>It answered 401: nothing starts until a sign-in.</summary>
+        public bool NeedsSignIn;
+        /// <summary>Its last <c>WWW-Authenticate</c> challenge, for the sign-in.</summary>
+        public string? Challenge;
         public readonly SemaphoreSlim Gate = new(1, 1);
     }
 
@@ -63,7 +70,60 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     public McpServerState State(McpServerConfig config)
     {
         var r = Of(config.Key);
-        lock (r.Log) return new McpServerState(config, r.Status, r.Tools, r.Log.ToList(), r.Client is { IsClosed: false });
+        lock (r.Log)
+        {
+            return new McpServerState(config, r.Status, r.Tools, r.Log.ToList(), r.Client is { IsClosed: false },
+                !config.IsCommand && (r.NeedsSignIn || config.OAuth?.NeedsSignIn == true));
+        }
+    }
+
+    /// <summary>The server's last sign-in challenge (its 401's header), for the sign-in.</summary>
+    public string? Challenge(string key)
+    {
+        var r = Of(key);
+        lock (r.Log) return r.Challenge;
+    }
+
+    /// <summary>Signed in: what it said before is forgotten, and it starts again with its token.</summary>
+    public async Task SignedInAsync(string key)
+    {
+        var r = Of(key);
+        lock (r.Log)
+        {
+            r.NeedsSignIn = false;
+            r.Challenge = null;
+            r.Crashes.Clear();
+            r.Blocked = false;
+        }
+        await StopAsync(key).ConfigureAwait(false);
+    }
+
+    /// <summary>A refusal for want of a sign-in (or of scopes) noted where Settings shows it; the error the chat sees.</summary>
+    McpAuthException NeedsSignIn(McpServerConfig config, Running r, McpAuthException e)
+    {
+        var scope = e.Status == 403 ? McpOAuth.ParseChallenge(e.Challenge)?.Scope : null;
+        if (scope is { Length: > 0 })
+        {
+            signIn?.NeedsMoreScope(config.Key, scope);
+            AddLog(r, "[LLMTray] a call needs more access than was granted: sign in again");
+        }
+        else
+        {
+            lock (r.Log)
+            {
+                r.NeedsSignIn = true;
+                r.Challenge = e.Challenge ?? r.Challenge;
+                r.Status = "needs sign-in";
+            }
+            if (config.OAuth is { NeedsSignIn: false }) signIn?.MarkNeedsSignIn(config.Key);
+            AddLog(r, "[LLMTray] the server asks to sign in");
+            // Its client goes now (not at the next need): no tools are offered from it meanwhile.
+            _ = Task.Run(() => StopAsync(config.Key));
+        }
+        Changed?.Invoke();
+        return new McpAuthException(scope is { Length: > 0 }
+            ? $"{config.Name} needs more access than was granted: the user can sign in again in Settings › Tools"
+            : $"{config.Name} needs the user to sign in (Settings › Tools)", e.Status, e.Challenge);
     }
 
     void AddLog(Running r, string line)
@@ -73,6 +133,20 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             r.Log.Add(line.Length > 1000 ? line[..1000] + "…" : line);
             if (r.Log.Count > 200) r.Log.RemoveAt(0);
         }
+    }
+
+    /// <summary>What a server said, without its secrets or its sign-in's tokens.</summary>
+    string Redact(string text, McpServerConfig config)
+    {
+        text = Blank(text, config);
+        if (signIn?.Tokens(config.Key) is { } t)
+        {
+            foreach (var secret in new[] { t.AccessToken, t.RefreshToken }.OfType<string>().Where(v => v.Length >= 4))
+            {
+                text = text.Replace(secret, "••••", StringComparison.Ordinal);
+            }
+        }
+        return text;
     }
 
     /// <summary>Secret values (its environment and headers) never reach the log.</summary>
@@ -95,6 +169,24 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         try
         {
             r.LastUsed = DateTimeOffset.UtcNow;
+            bool waiting;
+            lock (r.Log) waiting = r.NeedsSignIn;
+            if (!config.IsCommand && (waiting || config.OAuth?.NeedsSignIn == true))
+            {
+                // Asked to sign in: a client still running is let go, and nothing starts until the sign-in.
+                if (r.Client is { } stale)
+                {
+                    r.Client = null;
+                    lock (r.Log)
+                    {
+                        r.Tools = null;
+                        r.ToolsFrom = null;
+                    }
+                    await stale.DisposeAsync().ConfigureAwait(false);
+                }
+                r.Status = "needs sign-in";
+                throw new McpAuthException($"{config.Name} needs the user to sign in (Settings › Tools)", 401, Challenge(config.Key));
+            }
             if (r.Client is { IsClosed: false } running) return running;
             if (r.Client is { } old)
             {
@@ -116,7 +208,7 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             r.Status = "starting";
             Changed?.Invoke();
             var connection = transport?.Invoke(config)
-                ?? (config.IsCommand ? Stdio(config, r) : new McpHttpTransport(http, new Uri(config.Url!), config.Headers));
+                ?? (config.IsCommand ? Stdio(config, r) : new McpHttpTransport(http, new Uri(config.Url!), config.Headers, Bearer(config)));
             var client = new McpClient(connection, clientVersion);
             var counted = false;
             client.Closed += why =>
@@ -152,18 +244,27 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
                 // Gone as soon as it was up (counted as it went).
                 if (client.IsClosed) throw new McpException("it stopped right after starting", notSent: true);
             }
+            catch (McpAuthException e)
+            {
+                // Asking to sign in isn't a crash.
+                counted = true;
+                await client.DisposeAsync().ConfigureAwait(false);
+                throw NeedsSignIn(config, r, e);
+            }
             catch (Exception e)
             {
                 await client.DisposeAsync().ConfigureAwait(false);
-                AddLog(r, $"[LLMTray] didn't start: {e.Message}");
+                var said = Redact(e.Message, config);
+                AddLog(r, $"[LLMTray] didn't start: {said}");
                 lock (r.Log)
                 {
-                    if (e is not OperationCanceledException && !counted)
+                    // A sign-in server that didn't answer isn't this server crashing.
+                    if (e is not (OperationCanceledException or McpRenewalException) && !counted)
                     {
                         counted = true;
                         Crashed(r);
                     }
-                    r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"didn't start: {e.Message}";
+                    r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"didn't start: {said}";
                 }
                 Changed?.Invoke();
                 throw;
@@ -177,6 +278,24 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         {
             r.Gate.Release();
         }
+    }
+
+    /// <summary>
+    /// A signed-in server's token, only for the server its resource covers
+    /// and never in the clear over the network.
+    /// </summary>
+    IMcpBearer? Bearer(McpServerConfig config)
+    {
+        if (signIn is null || config.OAuth is not { NeedsSignIn: false } state || !Uri.TryCreate(config.Url, UriKind.Absolute, out var url)) return null;
+        if (!McpOAuth.Covers(state.Resource, url) || (url.Scheme != Uri.UriSchemeHttps && !url.IsLoopback)) return null;
+        return new SignedIn(signIn, config.Key);
+    }
+
+    sealed class SignedIn(McpSignIn signIn, string key) : IMcpBearer
+    {
+        public Task<string?> TokenAsync(CancellationToken cancellationToken) => signIn.TokenAsync(key, cancellationToken);
+        public async Task<string?> RefreshAsync(string rejected, CancellationToken cancellationToken) =>
+            McpSignIn.Use(await signIn.RefreshAsync(key, rejected).WaitAsync(cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>Under the log lock: a crash counted; the third in a minute latches.</summary>
@@ -270,7 +389,15 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             }
             int version;
             lock (r.Log) version = r.ToolsVersion;
-            var tools = await client.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<McpTool> tools;
+            try
+            {
+                tools = await client.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (McpAuthException e)
+            {
+                throw NeedsSignIn(config, r, e);
+            }
             var current = false;
             lock (r.Log)
             {
@@ -402,6 +529,10 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             try
             {
                 return await client.CallAsync(tool.Tool.Name, arguments, cancellationToken).ConfigureAwait(false);
+            }
+            catch (McpAuthException e)
+            {
+                throw NeedsSignIn(now, r, e);
             }
             catch (McpTimeoutException)
             {

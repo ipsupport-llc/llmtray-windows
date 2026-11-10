@@ -13,5 +13,6 @@ and why.
 | [0004](0004-portable-zip.md) | A portable ZIP beside the MSIX: no install, no admin, self-updating; for PCs that can't trust a self-signed package (accepted) |
 | [0005](0005-scoop.md) | Scoop bucket for the portable ZIP, in its own repository (ipsupport-llc/scoop-bucket), updated by each release (accepted) |
 | [0006](0006-localization.md) | Localization: shared with the Mac app (its translations at a pinned commit), Windows-only text machine-translated in CI (accepted) |
+| [0015](0015-mcp-sign-in.md) | Signing in to web MCP servers with OAuth (Mac adr/0028): discovery, PKCE, loopback redirect, tokens under DPAPI (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.
