@@ -132,11 +132,14 @@ sealed partial class ChatWindow : Window
         App.Current.ModelsChanged += RenderStatus;
         App.Current.ModelsChanged += () => { RenderModels(); RenderThinking(); };
         App.Current.ThinkingStylesChanged += RenderThinking;
+        // Closing the chat keeps LLMTray in the notification area; with no icon there, nothing
+        // would bring it back, so then it quits.
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
             args.Cancel = true;
-            sender.Hide();
+            if (App.Current.HasTrayIcon) sender.Hide();
+            else _ = App.Current.QuitAsync();
         };
 
         // Keys: Ctrl+N a new chat, Ctrl+F search, Esc stops an answer.
