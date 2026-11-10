@@ -56,7 +56,8 @@ static class L
         var lower = culture.ToLowerInvariant();
         if (lower.StartsWith("zh", StringComparison.Ordinal))
         {
-            var traditional = lower.Contains("hant") || lower.EndsWith("-tw") || lower.EndsWith("-hk") || lower.EndsWith("-mo");
+            // An explicit script wins; the region decides only without one.
+            var traditional = lower.Contains("hant") || (!lower.Contains("hans") && (lower.EndsWith("-tw") || lower.EndsWith("-hk") || lower.EndsWith("-mo")));
             var zh = traditional ? "zh-Hant" : "zh-Hans";
             if (available.Contains(zh)) return zh;
         }

@@ -147,8 +147,14 @@ sealed partial class DownloadDialog : ContentDialog
 
     void RenderReach()
     {
-        static string Word(bool? ok) => ok switch { true => "reachable", false => L.T("not reachable from this network"), null => L.T("checking…") };
-        reach.Text = L.F("Hugging Face: {0}. Kaggle: {1}.", Word(reachable[DownloadSource.HuggingFace]), Word(reachable[DownloadSource.Kaggle]));
+        // One whole sentence per source and state: translations can reorder them.
+        static string Line(string source, bool? ok) => ok switch
+        {
+            true => L.F("{0}: reachable.", source),
+            false => L.F("{0}: not reachable from this network.", source),
+            null => L.F("{0}: checking…", source),
+        };
+        reach.Text = Line("Hugging Face", reachable[DownloadSource.HuggingFace]) + " " + Line("Kaggle", reachable[DownloadSource.Kaggle]);
         repository.PlaceholderText = Source == DownloadSource.Kaggle
             ? L.T("owner/model/gguf/variation (from the Kaggle model's page)")
             : L.T("publisher/repo, a GGUF repository");
@@ -162,7 +168,7 @@ sealed partial class DownloadDialog : ContentDialog
             var on = model.IsOn(Source);
             var text = new StackPanel { Padding = new Thickness(0, 6, 0, 6) };
             text.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
-            var note = on ? $"{model.Note} {model.License}." : L.F("Not on {0} yet.", Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face");
+            var note = on ? L.F("{0} License: {1}.", L.T(model.Note), model.License) : L.F("Not on {0} yet.", Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face");
             text.Children.Add(new TextBlock { Text = note, FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
             featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = on, Opacity = on ? 1 : 0.5 });
         }
@@ -204,7 +210,7 @@ sealed partial class DownloadDialog : ContentDialog
         var choices = Choices(listing.Files);
         foreach (var choice in choices)
         {
-            var parts = choice.Parts.Count > 1 ? " " + L.F("({0} parts)", choice.Parts.Count) : "";
+            var parts = choice.Parts.Count > 1 ? "   " + L.F("Parts: {0}", choice.Parts.Count) : "";
             files.Items.Add(new ListViewItem { Content = $"{choice.Name}   {MainWindow.FormatSize(choice.Size)}{parts}", Tag = choice });
         }
         projector.Visibility = listing.Files.Any(f => f.IsGguf && f.IsProjector) ? Visibility.Visible : Visibility.Collapsed;

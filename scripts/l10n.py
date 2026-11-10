@@ -47,8 +47,14 @@ def unescape_cs(s: str) -> str:
     return "".join(out)
 
 
+FEATURED = ROOT / "src" / "LLMTray.Core" / "Downloads" / "featured-models.json"
+
+
 def extract_keys() -> list[str]:
     keys = set()
+    # The download window shows each featured model's note through L.T.
+    if FEATURED.exists():
+        keys.update(m["note"] for m in json.loads(FEATURED.read_text(encoding="utf-8")) if m.get("note"))
     for path in sorted(SOURCES.rglob("*.cs")):
         if "obj" in path.parts or "bin" in path.parts:
             continue
@@ -86,11 +92,25 @@ def parse_strings(text: str) -> dict[str, str]:
             c = text[i]
             if c == "\\":
                 e = text[i + 1]
-                if e == "U" or e == "u":
-                    buf.append(chr(int(text[i + 2:i + 6], 16)))
+                if e in "Uu":
+                    unit = int(text[i + 2:i + 6], 16)
                     i += 6
+                    # A UTF-16 surrogate pair spelled as two escapes is one character.
+                    if 0xD800 <= unit < 0xDC00 and text.startswith(("\\U", "\\u"), i):
+                        low = int(text[i + 2:i + 6], 16)
+                        if 0xDC00 <= low < 0xE000:
+                            unit = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
+                            i += 6
+                    buf.append(chr(unit))
                     continue
-                buf.append({"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}.get(e, e))
+                if e in "01234567":
+                    j = i + 1
+                    while j < i + 4 and j < n and text[j] in "01234567":
+                        j += 1
+                    buf.append(chr(int(text[i + 1:j], 8)))
+                    i = j
+                    continue
+                buf.append({"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "'": "'"}.get(e, e))
                 i += 2
                 continue
             buf.append(c)
@@ -115,16 +135,29 @@ def parse_strings(text: str) -> dict[str, str]:
     return out
 
 
-SPEC = re.compile(r"%(?:(\d+)\$)?[-+ 0#]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?([@dDuUxXoOfeEgGcCsSp%])")
+SPEC = re.compile(r"%(?:(\d+)\$)?([-+ 0#]*)(\d*)(?:\.(\d+))?(?:hh|h|ll|l|q|z|t|j)?([@dDuUxXoOfeEgGcCsSp%])")
 
 
-def mac_to_net(s: str) -> tuple[str, int]:
-    """'%@ of %lld' -> ('{0} of {1}', 2); positional %2$@ -> {1}. Braces become {{ }}."""
+def net_format(flags: str, width: str, precision: str | None, conv: str) -> str:
+    """printf's number format as .NET's: %.1f -> :F1, %02d -> :D2, %x -> :x. Nothing for %@."""
+    if conv in "fF":
+        return f":F{precision if precision is not None else 6}"
+    if conv in "dDuU" and "0" in flags and width:
+        return f":D{width}"
+    if conv in "xX":
+        return ":" + conv
+    return ""
+
+
+def mac_to_net(s: str, keep_formats: bool = False) -> tuple[str, int]:
+    """'%@ of %lld' -> ('{0} of {1}', 2); positional %2$@ -> {1}. Braces become {{ }}.
+    keep_formats: a translation keeps its number formats (%.1f -> {0:F1}); keys don't,
+    so they match the Windows code's {0}."""
     out, last, index, count = [], 0, 0, 0
     s2 = s.replace("{", "\x01").replace("}", "\x02")
     for m in SPEC.finditer(s2):
         out.append(s2[last:m.start()])
-        if m.group(2) == "%":
+        if m.group(5) == "%":
             out.append("%")
         else:
             if m.group(1):
@@ -133,7 +166,8 @@ def mac_to_net(s: str) -> tuple[str, int]:
                 k = index
                 index += 1
             count = max(count, k + 1)
-            out.append("{%d}" % k)
+            fmt = net_format(m.group(2), m.group(3), m.group(4), m.group(5)) if keep_formats else ""
+            out.append("{%d%s}" % (k, fmt))
         last = m.end()
     out.append(s2[last:])
     text = "".join(out)
@@ -155,7 +189,7 @@ def load_mac(mac_dir: pathlib.Path) -> dict[str, dict[str, str]]:
         table = {}
         for k, v in parse_strings(path.read_text(encoding="utf-8")).items():
             nk, kc = mac_to_net(k)
-            nv, vc = mac_to_net(v)
+            nv, vc = mac_to_net(v, keep_formats=True)
             if kc != vc and kc:
                 continue
             table[nk] = nv
@@ -165,8 +199,45 @@ def load_mac(mac_dir: pathlib.Path) -> dict[str, dict[str, str]]:
 
 # --- Windows files ----------------------------------------------------------
 
-def placeholders(s: str) -> list[str]:
-    return sorted(set(re.findall(r"(?<!\{)\{(\d+)(?::[^}]*)?\}(?!\})", s)))
+ITEM = re.compile(r"(\d+)\s*(?:,\s*-?\d+\s*)?(?::[^{}]*)?")
+
+
+def placeholders(s: str):
+    """The argument indices of a .NET composite format string, or None when
+    string.Format would throw on it ({oops}, a lone brace)."""
+    found, i, n = set(), 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "{":
+            if s.startswith("{{", i):
+                i += 2
+                continue
+            j = s.find("}", i)
+            if j < 0:
+                return None
+            m = ITEM.fullmatch(s[i + 1:j])
+            if not m:
+                return None
+            found.add(int(m.group(1)))
+            i = j + 1
+        elif c == "}":
+            if s.startswith("}}", i):
+                i += 2
+                continue
+            return None
+        else:
+            i += 1
+    return sorted(found)
+
+
+def same_placeholders(key: str, value: str) -> bool:
+    """A translation uses exactly its key's arguments, in a format that formats.
+    Text without arguments (L.T) isn't formatted: only its braces aren't checked."""
+    k = placeholders(key)
+    if k is None or not k:
+        return k == [] and (placeholders(value) in ([], None)) or k is None
+    v = placeholders(value)
+    return v is not None and v == k
 
 
 def read_json(path: pathlib.Path) -> dict[str, str]:
@@ -203,7 +274,7 @@ def cmd_check(a):
     for lang in languages(mac):
         own = read_json(L10N / f"{lang}.json")
         for k, v in own.items():
-            if placeholders(k) != placeholders(v):
+            if not same_placeholders(k, v):
                 print(f"{lang}: placeholders differ: {k!r} -> {v!r}")
                 problems += 1
     only = windows_only(keys, mac)
@@ -223,7 +294,7 @@ def cmd_build(a):
         table = {}
         for k in keys:
             v = own.get(k) or mac.get(lang, {}).get(k)
-            if v and placeholders(v) == placeholders(k):
+            if v and same_placeholders(k, v):
                 table[k] = v
         write_json(out / f"{lang}.json", table)
         print(f"{lang}: {len(table)}/{len(keys)}")
@@ -233,6 +304,24 @@ def cmd_build(a):
 def todo(keys, mac, lang):
     own = read_json(L10N / f"{lang}.json")
     return [k for k in windows_only(keys, mac) if not own.get(k)]
+
+
+def cmd_import_proposal(a):
+    """An open proposal's translations, added under the ones main has: a fix on main wins."""
+    src = pathlib.Path(a.dir)
+    for path in sorted(src.glob("*.json")):
+        if path.stem == "mac":
+            continue
+        current = read_json(L10N / path.name)
+        added = 0
+        for k, v in read_json(path).items():
+            if k not in current and v:
+                current[k] = v
+                added += 1
+        if added:
+            write_json(L10N / path.name, current)
+            print(f"{path.stem}: {added} from the proposal")
+    return 0
 
 
 def cmd_missing(a):
@@ -298,7 +387,7 @@ def cmd_translate(a):
                 continue
             for k in batch:
                 v = reply.get(k)
-                if isinstance(v, str) and v.strip() and placeholders(v) == placeholders(k):
+                if isinstance(v, str) and v.strip() and same_placeholders(k, v):
                     own.setdefault(k, v)
             write_json(L10N / f"{lang}.json", own)
         print(f"{lang}: {len(todo(keys, mac, lang))} left")
@@ -315,13 +404,15 @@ def main():
     p = sub.add_parser("build")
     p.add_argument("--mac", required=True)
     p.add_argument("--out", required=True)
+    p = sub.add_parser("import-proposal")
+    p.add_argument("dir")
     p = sub.add_parser("translate")
     p.add_argument("--mac", required=True)
     p.add_argument("languages", nargs="*")
     p.add_argument("--model", default=os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL)
     p.add_argument("--batch", type=int, default=100)
     a = ap.parse_args()
-    return {"extract": cmd_extract, "check": cmd_check, "build": cmd_build, "missing": cmd_missing,
+    return {"extract": cmd_extract, "check": cmd_check, "build": cmd_build, "missing": cmd_missing, "import-proposal": cmd_import_proposal,
             "translate": cmd_translate}[a.cmd](a)
 
 

@@ -198,7 +198,7 @@ sealed class LogWindow : Window
     {
         var visible = ShownEntries().ToList();
         var problemCount = entries.Count(e => e.IsProblem);
-        problems.Text = problemCount > 0 ? L.F("Problems {0}", problemCount) : L.T("Problems");
+        problems.Text = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
         var rows = new List<UIElement>(visible.Count);
         foreach (var entry in visible) rows.Add(Row(entry));
         if (rows.Count == 0)
@@ -216,7 +216,7 @@ sealed class LogWindow : Window
         var warnings = problemCount - errors;
         var requestCount = entries.Count(e => e.Kind == LogKind.Request);
         counts.Inlines.Clear();
-        counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = L.F("{0} requests", requestCount) + "   ", Foreground = Ui.Secondary });
+        counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = L.F("Requests: {0}", requestCount) + "   ", Foreground = Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"✕ {errors}   ", Foreground = errors > 0 ? Ui.Red : Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"⚠ {warnings}", Foreground = warnings > 0 ? Ui.Orange : Ui.Secondary });
         shown.Text = visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "";

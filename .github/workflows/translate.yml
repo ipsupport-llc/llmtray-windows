@@ -46,10 +46,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # While its PR is open, what it already translated isn't bought again.
+          # Its entries are added under main's: a fix made on main wins.
           if [ -n "$(gh pr list --head translations/auto --state open --json number -q '.[].number')" ] \
              && git fetch --quiet origin translations/auto; then
-            git checkout --quiet FETCH_HEAD -- l10n || true
-            git checkout --quiet origin/main -- l10n/mac.json 2>/dev/null || true
+            mkdir -p "$RUNNER_TEMP/proposal"
+            git archive FETCH_HEAD l10n | tar -x -C "$RUNNER_TEMP/proposal"
+            python3 scripts/l10n.py import-proposal "$RUNNER_TEMP/proposal/l10n"
           fi
       - name: Follow the Mac app's newest translations
         env:
@@ -91,6 +93,11 @@ jobs:
           git add l10n
           if git diff --cached --quiet origin/main -- l10n; then
             echo "nothing new"
+            exit 0
+          fi
+          # The open proposal already has exactly this: no new commit, no new CI run.
+          if git fetch --quiet origin translations/auto 2>/dev/null && git diff --cached --quiet FETCH_HEAD -- l10n; then
+            echo "the proposal is current"
             exit 0
           fi
           git config user.name 'github-actions[bot]'

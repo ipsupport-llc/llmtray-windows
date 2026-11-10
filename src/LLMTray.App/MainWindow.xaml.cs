@@ -191,7 +191,7 @@ public sealed partial class MainWindow : Window
             var line = d.Total is long t && t > 0
                 ? L.F("Downloading {0}: {1} of {2}", job.Title, Ui.Size(d.Received), Ui.Size(t))
                 : L.F("Downloading {0}: {1}", job.Title, Ui.Size(d.Received));
-            if (d.Queued > 0) line += " " + L.F("({0} more queued)", d.Queued);
+            if (d.Queued > 0) line += " · " + L.F("Queued: {0}", d.Queued);
             DownloadText.Text = line;
             DownloadProgress.IsIndeterminate = d.Total is null;
             DownloadProgress.Value = d.Total is long all && all > 0 ? 1000.0 * d.Received / all : 0;
@@ -671,7 +671,7 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = L.F("Delete {0}?", model.Name),
-            Content = L.F("{0} on disk. This removes:\n", Ui.Size(files.Where(File.Exists).Sum(f => new FileInfo(f).Length))) + string.Join("\n", files.Select(Path.GetFileName)),
+            Content = L.F("{0} on disk. This removes:\n{1}", Ui.Size(files.Where(File.Exists).Sum(f => new FileInfo(f).Length)), string.Join("\n", files.Select(Path.GetFileName))),
             PrimaryButtonText = L.T("Delete"),
             CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Close,
