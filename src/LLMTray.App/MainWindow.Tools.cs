@@ -22,7 +22,7 @@ public sealed partial class MainWindow
         var servers = app.Mcp.Store.Load();
         yield return Ui.Section(L.T("MCP servers"));
         var intro = Ui.Card(
-            Ui.Row(L.T("MCP servers"),
+            Ui.Row(L.T("Add a server"),
                 L.T("A server gives the chat its tools: mail, files, a company's systems. Nothing runs until you add one, and every call is asked unless you let a tool run without asking. Temporary chats never use them."),
                 null),
             Ui.ButtonRow(

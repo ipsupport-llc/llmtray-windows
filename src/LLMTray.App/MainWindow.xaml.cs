@@ -205,8 +205,10 @@ public sealed partial class MainWindow : Window
         var useLmStudio = Ui.Button(L.T("Use LM Studio's folder"), () => app.SetModelsFolder(lmStudio));
         useLmStudio.IsEnabled = Directory.Exists(lmStudio) && !string.Equals(app.ModelsFolder, lmStudio, StringComparison.OrdinalIgnoreCase);
         yield return Ui.Card(
-            Ui.Row(L.T("Models folder"), L.T("LLMTray lists the .gguf files here, one folder per model (publisher\\repo\\file.gguf)."),
-                Ui.Horizontal(Ui.Value(app.ModelsFolder, mono: true), Ui.Button(L.T("Choose…"), ChooseFolder), Ui.Button(L.T("Open"), () => Ui.OpenFolder(app.ModelsFolder)))),
+            // The path under the title, whole: a long one never squeezes the text beside it.
+            Ui.StackedRow(L.T("Models folder"), L.T("LLMTray lists the .gguf files here, one folder per model (publisher\\repo\\file.gguf)."),
+                Ui.PathText(app.ModelsFolder),
+                Ui.Horizontal(Ui.Button(L.T("Choose…"), ChooseFolder), Ui.Button(L.T("Open"), () => Ui.OpenFolder(app.ModelsFolder)))),
             Ui.Row(L.T("Disk usage"), null, Ui.Value(DiskUsage(catalog, app.ModelsFolder))),
             Ui.ButtonRow(
                 [useLmStudio, Ui.Button(L.T("Rescan"), () => app.Library.Rescan())],
