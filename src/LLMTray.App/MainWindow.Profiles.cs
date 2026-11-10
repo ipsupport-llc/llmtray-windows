@@ -88,22 +88,19 @@ public sealed partial class MainWindow
             var c = control();
             c.IsHitTestVisible = editable;
             if (c is Control enabled) enabled.IsEnabled = editable;
-            var right = overridden
-                ? Ui.Horizontal(c, Ui.IconButton("", L.T("Reset: inherit this setting from Default"), () => profiles.Reset(field, id)))
-                : (UIElement)c;
+            UIElement Reset() => Ui.IconButton("", L.T("Reset: inherit this setting from Default"), () => profiles.Reset(field, id));
             // A prompt gets the card's width under its title; the rest sit on the right.
             Grid row;
             if (c is TextBox { AcceptsReturn: true } prompt)
             {
                 prompt.Width = double.NaN;
                 prompt.MaxHeight = 260;
-                row = overridden
-                    ? Ui.StackedRow(title, help, prompt, Ui.IconButton("\uE7A7", L.T("Reset: inherit this setting from Default"), () => profiles.Reset(field, id)))
-                    : Ui.StackedRow(title, help, prompt);
+                row = Ui.StackedRow(title, help, prompt, overridden ? Reset() : null);
             }
             else
             {
-                row = Ui.Row(title, help, right);
+                // Made here only: a control has one parent.
+                row = Ui.Row(title, help, overridden ? Ui.Horizontal(c, Reset()) : c);
             }
             if (overridden && row.Children[0] is StackPanel left && left.Children[0] is TextBlock name)
             {
