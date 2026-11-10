@@ -251,6 +251,8 @@ jobs:
           if ($LASTEXITCODE -ne 2) { throw "a bad command exited $LASTEXITCODE, not 2" }
           Write-Host "llmtray: $($status.text); $($listed.models.Count) models"
           Stop-Process -Name LLMTray -Force
+          # The bad command's exit code 2 is still in $LASTEXITCODE: the step itself passed.
+          exit 0
       # The installer (adr/0007): installed silently for this user, started, the API checked, uninstalled.
       - name: Install and start it
         shell: pwsh
