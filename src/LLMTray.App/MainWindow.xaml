@@ -35,6 +35,9 @@
                 <NavigationViewItem Content="Profiles" Tag="profiles">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE9E9;" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="Memory" Tag="memory">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F4;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="Tools" Tag="tools">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE90F;" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
