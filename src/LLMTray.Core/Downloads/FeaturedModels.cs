@@ -12,6 +12,8 @@ public sealed record KaggleRef(string Handle);
 /// file (size and SHA-256) on each source that has it. The same bytes land
 /// in the same folder whichever source they came from.
 /// </summary>
+/// <param name="MinMemoryGB">Memory (GPU or system) it needs to run well.</param>
+/// <param name="RecommendedFor">The memory tiers it's the first pick for (Setup.MemoryTier).</param>
 public sealed record FeaturedModel(
     string Title,
     string Note,
@@ -20,7 +22,9 @@ public sealed record FeaturedModel(
     FeaturedFile File,
     FeaturedFile? Projector,
     HuggingFaceRef? HuggingFace,
-    KaggleRef? Kaggle)
+    KaggleRef? Kaggle,
+    int MinMemoryGB = 0,
+    IReadOnlyList<int>? RecommendedFor = null)
 {
     public long TotalSize => File.Size + (Projector?.Size ?? 0);
 
@@ -30,6 +34,34 @@ public sealed record FeaturedModel(
         DownloadSource.Kaggle => Kaggle is not null,
         _ => false,
     };
+
+    /// <summary>
+    /// The download: the model file and its projector from <paramref name="source"/>,
+    /// into <c>&lt;root&gt;\&lt;folder&gt;</c>, size and SHA-256 checked.
+    /// </summary>
+    public async Task<DownloadJob> JobAsync(IModelSource source, string root, CancellationToken cancellationToken)
+    {
+        var repo = Repository(source.Kind);
+        var items = new List<DownloadItem>();
+        foreach (var f in Projector is { } p ? new[] { File, p } : [File])
+        {
+            var url = await source.FileUrlAsync(repo, f.Name, cancellationToken).ConfigureAwait(false);
+            items.Add(new DownloadItem(url, Inside(root, Path.Combine(Folder, f.Name)), f.Size, f.Sha256, $"{repo}/{f.Name}"));
+        }
+        return new DownloadJob(Title, items);
+    }
+
+    /// <summary>A path inside the models folder, never outside it.</summary>
+    public static string Inside(string root, string relative)
+    {
+        var full = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DownloadException($"'{relative}' would land outside the models folder");
+        }
+        return full;
+    }
 
     /// <summary>The repository string the source understands.</summary>
     public string Repository(DownloadSource source) => source switch

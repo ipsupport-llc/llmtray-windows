@@ -26,6 +26,9 @@ public sealed record AppSettings
     /// <summary>Check at start and every 12 hours.</summary>
     public bool CheckForUpdates { get; init; } = true;
 
+    /// <summary>The first-run wizard's version once it was finished or closed (adr/0010); null: never.</summary>
+    public int? SetupCompleted { get; init; }
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }

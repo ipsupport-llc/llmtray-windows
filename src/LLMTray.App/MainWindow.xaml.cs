@@ -417,7 +417,8 @@ public sealed partial class MainWindow : Window
             L.T("Load the last model when LLMTray starts"));
         yield return Ui.Card(
             Ui.Row(L.T("Start LLMTray when you sign in"), signInError ?? L.T("It starts in the notification area, without opening this window."), signIn),
-            Ui.Row(L.T("Load the last model when LLMTray starts"), L.T("So it's ready before the first request."), loadLast));
+            Ui.Row(L.T("Load the last model when LLMTray starts"), L.T("So it's ready before the first request."), loadLast),
+            Ui.Row(L.T("Set Up LLMTray…"), L.T("The first-run steps again: a model for this PC, web tools, apps, updates."), Ui.Button(L.T("Set Up LLMTray…"), app.ShowSetup)));
 
         yield return Ui.Section(L.T("Language"));
         var language = new ComboBox { MinWidth = 200 };
