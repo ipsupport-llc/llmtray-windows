@@ -136,8 +136,12 @@ try {
         function Wait-Element($root, [scriptblock]$match, [string]$what) {
             $deadline = (Get-Date).AddSeconds(30)
             do {
-                $found = $root.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
-                    Where-Object { & $match $_ } | Select-Object -First 1
+                # The tree changes under the walk (a dialog opening, a notice going): a failed walk is tried again.
+                try {
+                    $found = $root.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+                        Where-Object { try { & $match $_ } catch { $false } } | Select-Object -First 1
+                }
+                catch { $found = $null }
                 if ($found) { return $found }
                 Start-Sleep -Milliseconds 500
             } until ((Get-Date) -gt $deadline)
