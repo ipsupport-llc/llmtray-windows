@@ -13,7 +13,7 @@ try
 }
 catch (FormatException e)
 {
-    Console.Error.WriteLine($"llmtray: {e.Message}");
+    Console.Error.WriteLine(OneLine($"llmtray: {e.Message}"));
     Console.Error.WriteLine("Try: llmtray help");
     return 2;
 }
@@ -45,9 +45,12 @@ catch (OperationCanceledException)
 catch (Exception e)
 {
     // Whatever went wrong is one line and exit 1, never a stack trace.
-    Console.Error.WriteLine($"llmtray: {(e is TimeoutException ? "LLMTray didn't answer (is it running?)" : e.Message)}");
+    Console.Error.WriteLine(OneLine($"llmtray: {(e is TimeoutException ? "LLMTray didn't answer (is it running?)" : e.Message)}"));
     return 1;
 }
+
+/// <summary>A message on one line, whatever the server or the exception put in it.</summary>
+static string OneLine(string text) => text.ReplaceLineEndings(" ");
 
 static int Help()
 {
@@ -74,7 +77,7 @@ static async Task<int> Control(CliArguments a, CancellationToken ct)
     {
         if (reply["error"] is { } error)
         {
-            Console.Error.WriteLine($"llmtray: {error}");
+            Console.Error.WriteLine(OneLine($"llmtray: {error}"));
             return 1;
         }
         if (reply["event"]?.GetValue<string>() is { } kind)
@@ -147,7 +150,7 @@ static async Task<int> Api(CancellationToken ct)
     {
         if (reply["error"] is { } error)
         {
-            Console.Error.WriteLine($"llmtray: {error}");
+            Console.Error.WriteLine(OneLine($"llmtray: {error}"));
             return 1;
         }
         if (reply["done"] is null) continue;
@@ -184,7 +187,7 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
     {
         if (reply["error"] is { } error)
         {
-            Console.Error.WriteLine($"llmtray: {error}");
+            Console.Error.WriteLine(OneLine($"llmtray: {error}"));
             return 1;
         }
         if (reply["done"] is not null) api = ApiOf(reply);
@@ -199,7 +202,8 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
     messages.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = prompt });
     var body = new JsonObject { ["messages"] = messages, ["stream"] = true };
     if (a.Option("--model", "-m") is { } model) body["model"] = model;
-    using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
+    // No redirects: the prompt goes to this PC's API and nowhere it might point.
+    using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
     using var request = new HttpRequestMessage(HttpMethod.Post, api.TrimEnd('/') + "/chat/completions")
     {
         Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
@@ -208,7 +212,7 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
     if (!response.IsSuccessStatusCode)
     {
         var text = await response.Content.ReadAsStringAsync(ct);
-        Console.Error.WriteLine($"llmtray: {(int)response.StatusCode} {text}");
+        Console.Error.WriteLine(OneLine($"llmtray: {(int)response.StatusCode} {text}"));
         return 1;
     }
     var json = a.Has("--json");
@@ -238,7 +242,7 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
         }
         if (chunk?["error"] is { } error)
         {
-            Console.Error.WriteLine($"llmtray: {error["message"] ?? error}");
+            Console.Error.WriteLine(OneLine($"llmtray: {error["message"] ?? error}"));
             return 1;
         }
         // The last chunk may carry usage only, with no choices.

@@ -175,54 +175,49 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
         }
         var finished = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lastPercent = -1L;
-        // Whether the queue got to it yet: once it has and moved on, it finished, failed or was cancelled.
-        var started = 0;
-        // Progress lines go out one after another, in order.
+        // Lines go out one after another, in order, and all before the answer.
         var sending = Task.CompletedTask;
         var sendLock = new object();
         void Send(JsonObject line)
         {
-            lock (sendLock) sending = sending.ContinueWith(_ => emit(line), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+            lock (sendLock)
+            {
+                sending = sending.ContinueWith(_ => emit(line), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap()
+                    .ContinueWith(_ => { }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            }
         }
-        void Completed(DownloadJob done)
+        // This job's own outcome, whatever else the queue does meanwhile.
+        void Ended(DownloadJob done, string? why)
         {
-            if (done == job) finished.TrySetResult(null);
+            if (done == job) finished.TrySetResult(why);
         }
         void Changed(DownloadState state)
         {
-            if (state.Current == job)
+            if (state.Current != job || state.Total is not long total || total <= 0) return;
+            var percent = 100 * state.Received / total;
+            if (percent != Interlocked.Exchange(ref lastPercent, percent))
             {
-                Volatile.Write(ref started, 1);
-                if (state.Total is long total && total > 0)
-                {
-                    var percent = 100 * state.Received / total;
-                    if (percent != Interlocked.Exchange(ref lastPercent, percent))
-                    {
-                        Send(ControlProtocol.Event("progress", new JsonObject { ["received"] = state.Received, ["total"] = total, ["text"] = $"{job.Title}: {percent}%" }));
-                    }
-                }
-            }
-            else if (Volatile.Read(ref started) == 1 && !finished.Task.IsCompleted)
-            {
-                // Moved on without Completed: it failed or was cancelled (Completed, when it comes first, wins).
-                finished.TrySetResult(state.LastError ?? $"{job.Title} didn't finish");
+                Send(ControlProtocol.Event("progress", new JsonObject { ["received"] = state.Received, ["total"] = total, ["text"] = $"{job.Title}: {percent}%" }));
             }
         }
-        app.Downloads.Completed += Completed;
+        app.Downloads.Ended += Ended;
         app.Downloads.Changed += Changed;
         try
         {
+            Send(ControlProtocol.Event("queued", new JsonObject { ["text"] = $"Downloading {job.Title} into {root}" }));
             app.Downloads.Enqueue(job);
-            await emit(ControlProtocol.Event("queued", new JsonObject { ["text"] = $"Downloading {job.Title} into {root}" }));
             // Ctrl-C detaches: the download goes on in the app.
             var error = await finished.Task.WaitAsync(ct);
+            Task last;
+            lock (sendLock) last = sending;
+            await last.WaitAsync(TimeSpan.FromSeconds(10), ct);
             return error is null
                 ? ControlProtocol.Done(new JsonObject { ["model"] = job.Title, ["text"] = $"{job.Title} is downloaded. Try: llmtray start" })
                 : ControlProtocol.Error(error);
         }
         finally
         {
-            app.Downloads.Completed -= Completed;
+            app.Downloads.Ended -= Ended;
             app.Downloads.Changed -= Changed;
         }
     }

@@ -34,6 +34,8 @@ public sealed class ControlTests
         Assert.Equal(@"%JAVA_HOME%\bin;C:\Tools;C:\L\cli", UserPath.Edit(raw, @"C:\L\cli", on: true));
         Assert.Null(UserPath.Edit(@"C:\Tools;""C:\L\cli\""", @"C:\L\cli", on: true));
         Assert.Equal(@"%JAVA_HOME%\bin;C:\Tools", UserPath.Edit(@"%JAVA_HOME%\bin;c:/l/cli/;C:\Tools", @"C:\L\cli", on: false));
+        Assert.Equal("A;;C:\\L\\cli", UserPath.Edit("A;;", @"C:\L\cli", on: true));
+        Assert.Equal("A;;", UserPath.Edit(@"A;;C:\L\cli;", @"C:\L\cli", on: false));
         Assert.Equal(@"C:\L\cli", UserPath.Edit("", @"C:\L\cli", on: true));
         Assert.Throws<ArgumentException>(() => UserPath.Edit("", @"C:\a;b", on: true));
     }

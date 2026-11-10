@@ -47,8 +47,11 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             {
                 try
                 {
-                    // None of ours is open: only a fresh pipe of our own will do.
-                    listening = Create(first: true);
+                    // None of ours is open: only a fresh pipe of our own will do. While ours are
+                    // still open (a long pull), the name is ours, so another instance is made.
+                    bool owned;
+                    lock (serving) owned = serving.Count > 0;
+                    listening = Create(first: !owned);
                     failing = false;
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -150,7 +153,8 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             }
             // A client that goes away (its end closed: a read returns nothing) cancels what it asked for.
             using var gone = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            _ = WatchAsync(pipe, gone);
+            using var hungUp = new CancellationTokenSource();
+            _ = WatchAsync(pipe, gone, hungUp);
             JsonObject final;
             try
             {
@@ -166,10 +170,13 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
                 final = ControlProtocol.Error(e.Message);
             }
             await Send(final).ConfigureAwait(false);
-            // Until the client has read the answer, a few seconds at most.
-            if (OperatingSystem.IsWindows())
+            // Kept open until the client, having read the answer, hangs up: a few seconds at most, no thread held.
+            try
             {
-                await Task.Run(pipe.WaitForPipeDrain, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(5), hungUp.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
             }
         }
         catch (Exception e) when (e is not OutOfMemoryException)
@@ -184,21 +191,23 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
     }
 
     /// <summary>The client sends nothing after its request: a read that ends means it hung up.</summary>
-    static async Task WatchAsync(Stream pipe, CancellationTokenSource gone)
+    static async Task WatchAsync(Stream pipe, CancellationTokenSource gone, CancellationTokenSource hungUp)
     {
         var one = new byte[1];
         try
         {
-            while (await pipe.ReadAsync(one, gone.Token).ConfigureAwait(false) > 0)
+            while (await pipe.ReadAsync(one, CancellationToken.None).ConfigureAwait(false) > 0)
             {
             }
-            gone.Cancel();
         }
         catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
         {
+        }
+        foreach (var source in new[] { gone, hungUp })
+        {
             try
             {
-                gone.Cancel();
+                source.Cancel();
             }
             catch (ObjectDisposedException)
             {
