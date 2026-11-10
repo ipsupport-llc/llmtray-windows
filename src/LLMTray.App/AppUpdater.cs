@@ -48,7 +48,8 @@ sealed class AppUpdater
             if (release is not null && ReleaseTag.TryParse("v" + release, out var tag, out _))
             {
                 Current = tag;
-                Kind = InstallKind.Portable;
+                // The installer leaves its uninstaller at the top (adr/0007).
+                Kind = File.Exists(Path.Combine(InstallRoot, "unins000.exe")) ? InstallKind.Installer : InstallKind.Portable;
             }
         }
     }
@@ -62,7 +63,56 @@ sealed class AppUpdater
     /// and the files never disagree.
     /// </summary>
     public bool ScoopManaged { get; } =
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "install.json")) && File.Exists(Path.Combine(AppContext.BaseDirectory, "manifest.json"));
+        File.Exists(Path.Combine(InstallRoot, "install.json")) && File.Exists(Path.Combine(InstallRoot, "manifest.json"));
+
+    /// <summary>
+    /// The top of the installed or unpacked LLMTray folder: the parent of
+    /// app\ (adr/0007), or the app's own folder in an older, flat layout.
+    /// </summary>
+    public static string InstallRoot { get; } = FindInstallRoot();
+
+    static string FindInstallRoot()
+    {
+        var dir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(dir);
+        return string.Equals(Path.GetFileName(dir), "app", StringComparison.OrdinalIgnoreCase)
+            && parent is not null && File.Exists(Path.Combine(parent, "LLMTray.exe"))
+            ? parent
+            : dir;
+    }
+
+    /// <summary>
+    /// A portable copy updated from the flat layout (before adr/0007) still
+    /// has the old runtime files at the top beside the new app\ folder: the
+    /// ones app\ also has are removed, so the folder holds LLMTray.exe,
+    /// README.txt and app\ again.
+    /// </summary>
+    public void TidyOldLayout()
+    {
+        if (Kind != InstallKind.Portable || ScoopManaged) return;
+        var root = InstallRoot;
+        var app = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        if (string.Equals(root, app, StringComparison.OrdinalIgnoreCase)) return;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(root))
+            {
+                var name = Path.GetFileName(file);
+                if (name.Equals("LLMTray.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("README.txt", StringComparison.OrdinalIgnoreCase)) continue;
+                if (File.Exists(Path.Combine(app, name))) File.Delete(file);
+            }
+            foreach (var dir in Directory.EnumerateDirectories(root))
+            {
+                var name = Path.GetFileName(dir);
+                if (name.Equals("app", StringComparison.OrdinalIgnoreCase)) continue;
+                if (Directory.Exists(Path.Combine(app, name))) Directory.Delete(dir, recursive: true);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // In use or locked: tried again at the next start.
+        }
+    }
 
     /// <summary>The running release; null in a development build.</summary>
     public ReleaseTag? Current { get; }
@@ -82,6 +132,7 @@ sealed class AppUpdater
     public void Start()
     {
         if (!CanUpdate) return;
+        TidyOldLayout();
         timer = dispatcher.CreateTimer();
         timer.Interval = TimeSpan.FromSeconds(15);
         timer.Tick += async (t, _) =>
@@ -157,6 +208,15 @@ sealed class AppUpdater
         if (Kind == InstallKind.Portable)
         {
             await InstallPortableAsync(update, file);
+            return;
+        }
+        if (Kind == InstallKind.Installer)
+        {
+            // The new installer, silent, once this process is gone; it closes
+            // nothing else and starts nothing: the script starts the app.
+            await RestartAsync(update,
+                $"start \"\" /wait \"{file}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
+                $"start \"\" \"{Path.Combine(InstallRoot, "LLMTray.exe")}\"");
             return;
         }
 
@@ -236,7 +296,7 @@ sealed class AppUpdater
     /// </summary>
     async Task InstallPortableAsync(UpdateInfo update, string zip)
     {
-        var appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var appDir = InstallRoot;
         var unpacked = Path.Combine(folder, update.Tag.DisplayVersion);
         try
         {

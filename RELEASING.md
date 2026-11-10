@@ -33,8 +33,8 @@ The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
 2. Tag `vX.Y.Z-beta.N` on `main` and push it.
 3. `release.yml` tests Core, builds x64 and ARM64 MSIX packages with the
    pinned llama.cpp inside, signs them, builds the x64 and ARM64 portable
-   ZIPs, and creates a GitHub pre-release with the packages, the ZIPs and
-   `LLMTray-signing.cer`.
+   ZIPs and installers (adr/0007), and creates a GitHub pre-release with the
+   packages, the ZIPs, the `-setup.exe` files and `LLMTray-signing.cer`.
 
 4. The same run points the Scoop bucket
    ([ipsupport-llc/scoop-bucket](https://github.com/ipsupport-llc/scoop-bucket),

@@ -43,16 +43,18 @@ dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
 ## Installing
 
 Each [release](https://github.com/ipsupport-llc/llmtray-windows/releases) has
-two formats, for `x64` and `ARM64`:
+three formats, for `x64` and `ARM64`:
 
-- **`.msix`**: the installer. Betas are signed with a self-signed
+- **`-setup.exe`**: installs for your user only, without administrator
+  rights, with a Start menu shortcut and an uninstaller (adr/0007).
+- **`.msix`**: the Windows package. Betas are signed with a self-signed
   certificate, so the first install needs administrator rights (the release
   notes say how).
-- **`-portable.zip`**: no installation and no administrator rights. Unpack it
-  and run `LLMTray\LLMTray.exe`.
+- **`-portable.zip`**: no installation. Unpack it and run
+  `LLMTray\LLMTray.exe`; the `app` folder beside it holds the rest.
 
-Both check for updates at start and on **Check for updates** (stable or beta
-channel).
+All three check for updates at start and on **Check for updates** (stable or
+beta channel).
 
 With [Scoop](https://scoop.sh), the portable build installs and updates from
 IPSupport's bucket (adr/0005):
