@@ -51,7 +51,8 @@
     <Application Id="Cli"
       Executable="cli\llmtray.exe"
       EntryPoint="Windows.FullTrustApplication"
-      desktop4:Subsystem="console">
+      desktop4:Subsystem="console"
+      desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="llmtray"
         Description="LLMTray's command line."

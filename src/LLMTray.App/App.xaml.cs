@@ -160,7 +160,18 @@ public partial class App : Application
         }
 
         // llmtray's way in (adr/0013): this user's pipe, always on while the app runs.
-        control = new LLMTray.Core.Control.ControlServer(new ControlCommands(this, dispatcher).HandleAsync);
+        var controlLog = Path.Combine(DataFolder, "logs", "control.log");
+        control = new LLMTray.Core.Control.ControlServer(new ControlCommands(this, dispatcher).HandleAsync, log: line =>
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(controlLog)!);
+                File.AppendAllText(controlLog, $"{DateTimeOffset.Now:O} {line}{Environment.NewLine}");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        });
         control.Start();
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");

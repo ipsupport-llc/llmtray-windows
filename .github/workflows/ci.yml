@@ -240,7 +240,11 @@ jobs:
           # The command line (adr/0013), through the app's pipe.
           $cli = Join-Path $env:RUNNER_TEMP 'portable/LLMTray/app/cli/llmtray.exe'
           $status = & $cli status --json | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $status.api) { throw "llmtray status failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0 -or -not $status.api) {
+            Get-ChildItem $env:RUNNER_TEMP, $env:LOCALAPPDATA, $env:APPDATA -Recurse -Filter *.log -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -in 'control.log', 'app-errors.log' } | ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName -Tail 50 }
+            throw "llmtray status failed: $LASTEXITCODE"
+          }
           $listed = & $cli models --json | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $listed.folder) { throw 'llmtray models failed' }
           & $cli frobnicate 2>$null

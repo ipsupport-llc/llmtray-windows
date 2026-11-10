@@ -18,10 +18,12 @@ public delegate Task<JsonObject> ControlHandler(JsonObject request, Func<JsonObj
 /// makes creating ours fail rather than be shared). Not reachable from a
 /// browser or the network.
 /// </summary>
-public sealed class ControlServer(ControlHandler handler, string? pipeName = null) : IAsyncDisposable
+/// <param name="log">Told why a connection ended without an answer (the app's control log).</param>
+public sealed class ControlServer(ControlHandler handler, string? pipeName = null, Action<string>? log = null) : IAsyncDisposable
 {
     readonly CancellationTokenSource stop = new();
     Task? loop;
+    bool failing;
 
     public string PipeName { get; } = pipeName ?? ControlProtocol.PipeName();
 
@@ -39,6 +41,9 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
+                // Once per run of failures, not every two seconds.
+                if (!failing) log?.Invoke($"the pipe {PipeName} couldn't be made: {e.Message}");
+                failing = true;
                 // Taken by another copy (the single-instance hand-over) or by someone else: try again shortly.
                 try
                 {
@@ -50,6 +55,7 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
                 }
                 continue;
             }
+            failing = false;
             try
             {
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
@@ -121,9 +127,10 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             await Send(final).ConfigureAwait(false);
             if (OperatingSystem.IsWindows()) pipe.WaitForPipeDrain();
         }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
-            // The client went away.
+            // Mostly the client went away; anything else is logged, never thrown at the app.
+            if (e is not (IOException or ObjectDisposedException or OperationCanceledException)) log?.Invoke($"a request failed: {e}");
         }
     }
 
