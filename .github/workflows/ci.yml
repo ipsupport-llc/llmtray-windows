@@ -24,6 +24,42 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet test --project tests/LLMTray.Core.Tests
+      - name: The Scoop bump script (on stand-in ZIPs)
+        shell: pwsh
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'dist'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          'x64' | Set-Content (Join-Path $dist 'LLMTray-9.9.9-beta.1-x64-portable.zip')
+          'arm' | Set-Content (Join-Path $dist 'LLMTray-9.9.9-beta.1-ARM64-portable.zip')
+          $manifest = Join-Path $env:RUNNER_TEMP 'llmtray.json'
+          Invoke-WebRequest https://raw.githubusercontent.com/ipsupport-llc/scoop-bucket/main/bucket/llmtray.json -OutFile $manifest
+          $before = Get-Content $manifest -Raw | ConvertFrom-Json
+
+          # A missing ZIP fails and leaves the manifest as it was.
+          $copy = Get-Content $manifest -Raw
+          try { scripts/bump-scoop.ps1 -Version 9.9.9-beta.2 -Dist $dist -Manifest $manifest; throw 'no failure' } catch { if ($_.Exception.Message -eq 'no failure') { throw } }
+          if ((Get-Content $manifest -Raw) -ne $copy) { throw 'a failed bump changed the manifest' }
+
+          scripts/bump-scoop.ps1 -Version 9.9.9-beta.1 -Dist $dist -Manifest $manifest
+          $first = Get-Content $manifest -Raw
+          $m = $first | ConvertFrom-Json
+          if ($m.version -ne '9.9.9-beta.1') { throw 'version not set' }
+          $want = (Get-FileHash (Join-Path $dist 'LLMTray-9.9.9-beta.1-x64-portable.zip') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($m.architecture.'64bit'.hash -ne $want) { throw 'x64 hash wrong' }
+          if ($m.architecture.arm64.url -notlike '*/v9.9.9-beta.1/LLMTray-9.9.9-beta.1-ARM64-portable.zip') { throw 'ARM64 url wrong' }
+          # Everything else is kept as it was.
+          foreach ($field in 'description', 'homepage', 'license', 'extract_dir') { if ($m.$field -ne $before.$field) { throw "$field changed" } }
+          if (($m.shortcuts | ConvertTo-Json -Compress) -ne ($before.shortcuts | ConvertTo-Json -Compress)) { throw 'shortcuts changed' }
+          if ($m.checkver.regex -ne $before.checkver.regex) { throw 'checkver regex changed' }
+          if ($m.autoupdate.architecture.'64bit'.url -notlike '*$version*') { throw 'autoupdate lost $version' }
+          if ($first -notmatch '(?m)^    "version"') { throw 'not four-space indented' }
+
+          # Again: same file. Older: left alone.
+          scripts/bump-scoop.ps1 -Version 9.9.9-beta.1 -Dist $dist -Manifest $manifest
+          if ((Get-Content $manifest -Raw) -ne $first) { throw 'a second run changed the file' }
+          scripts/bump-scoop.ps1 -Version 0.0.1-beta.1 -Dist $dist -Manifest $manifest
+          if ((Get-Content $manifest -Raw | ConvertFrom-Json).version -ne '9.9.9-beta.1') { throw 'an older release moved the manifest back' }
+          Write-Host $first
       - name: Fetch from the real Hugging Face and Kaggle
         run: |
           dotnet run --project tools/LLMTray.Fetch -- hf "$SMOKE_REPO@$SMOKE_REVISION" LICENSE "$RUNNER_TEMP/hf/LICENSE"

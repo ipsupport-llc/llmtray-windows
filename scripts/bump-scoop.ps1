@@ -8,15 +8,35 @@ param(
     [Parameter(Mandatory)][string]$Manifest
 )
 $ErrorActionPreference = 'Stop'
+if ($Version -notmatch '^\d+\.\d+\.\d+(-beta\.\d+)?$') { throw "'$Version' is not a release version" }
+
+# Release order, as the app's ReleaseTag sorts it: the betas of X.Y.Z come
+# before X.Y.Z itself.
+function Get-Order([string]$v) {
+    $m = [regex]::Match($v, '^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$')
+    if (-not $m.Success) { return [version]'0.0.0.0' }
+    $beta = if ($m.Groups[4].Success) { [int]$m.Groups[4].Value } else { 999 }
+    [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value * 1000 + $beta)
+}
+
 $path = $Manifest
 $manifest = Get-Content $path -Raw | ConvertFrom-Json
+if ((Get-Order $manifest.version) -gt (Get-Order $Version)) {
+    Write-Host "the bucket already has $($manifest.version), newer than $Version: left as it is"
+    exit 0
+}
+# Every ZIP first: a missing one leaves the manifest untouched.
+$hashes = @{}
+foreach ($name in 'x64', 'ARM64') {
+    $zip = Join-Path $Dist "LLMTray-$Version-$name-portable.zip"
+    if (-not (Test-Path $zip)) { throw "$(Split-Path $zip -Leaf) is not in $Dist" }
+    $hashes[$name] = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 $manifest.version = $Version
 foreach ($pair in @(@('64bit', 'x64'), @('arm64', 'ARM64'))) {
     $file = "LLMTray-$Version-$($pair[1])-portable.zip"
-    $zip = Join-Path $Dist $file
-    if (-not (Test-Path $zip)) { throw "$file is not in $Dist" }
     $manifest.architecture.($pair[0]).url = "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v$Version/$file"
-    $manifest.architecture.($pair[0]).hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest.architecture.($pair[0]).hash = $hashes[$pair[1]]
 }
 # Scoop's own style: four-space indents.
 $json = $manifest | ConvertTo-Json -Depth 10

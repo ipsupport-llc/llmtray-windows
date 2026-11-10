@@ -11,6 +11,6 @@ and why.
 | [0002](0002-build-and-release.md) | Build, version and release in GitHub Actions; tag → package version; self-signed betas until a public certificate (accepted) |
 | [0003](0003-updates.md) | Updates: the app checks GitHub Releases itself (stable/beta channels, like the Mac app); replaces `.appinstaller` feeds (accepted) |
 | [0004](0004-portable-zip.md) | A portable ZIP beside the MSIX: no install, no admin, self-updating; for PCs that can't trust a self-signed package (accepted) |
-| [0005](0005-scoop.md) | A Scoop bucket in this repository for the portable ZIP; hashes from GitHub's asset digests (accepted) |
+| [0005](0005-scoop.md) | Scoop bucket for the portable ZIP, in its own repository (ipsupport-llc/scoop-bucket), updated by each release (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.
