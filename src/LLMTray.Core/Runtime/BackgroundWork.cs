@@ -110,7 +110,7 @@ public sealed class BackgroundWork(ModelHost host) : IBackgroundModel
         {
             return new Result(mine.IsCancellationRequested ? Outcome.Preempted : Outcome.Failed, "cut off");
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException)
+        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException)
         {
             return new Result(Outcome.Failed, e.Message);
         }

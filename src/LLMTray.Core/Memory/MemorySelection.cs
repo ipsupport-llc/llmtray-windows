@@ -85,7 +85,8 @@ public static class MemorySelection
         if (!settings.Enabled || snapshot.Settings != settings.Fingerprint) return false;
         if (snapshot.MoodUntil is { } until && (until <= now || file.Mood is not { } mood || mood.Until(settings.MoodHours) != until)) return false;
         // A mood that came since: chosen again, so it reaches the chat while it lasts.
-        if (snapshot.MoodUntil is null && settings.Has(MemoryKind.Observation) && file.Mood is { } fresh && fresh.IsFresh(now, settings.MoodHours)) return false;
+        if (snapshot.MoodUntil is null && settings.Has(MemoryKind.Observation) && file.Mood is { } fresh && fresh.IsFresh(now, settings.MoodHours)
+            && Tokens(MoodLine(fresh)) <= budget / 2) return false;
         if (snapshot.Text.Length > 0 && Tokens(snapshot.Text) > budget) return false;
         foreach (var id in snapshot.NoteIds)
         {

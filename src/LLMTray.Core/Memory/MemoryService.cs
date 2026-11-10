@@ -186,22 +186,23 @@ public sealed class MemoryService : IAsyncDisposable
     /// <param name="leaving">The user left the chat: it's read now, not after its quiet minutes.</param>
     public void Queue(Guid chat, IReadOnlyList<MemoryBatchMessage> messages, DateTimeOffset readFrom, bool leaving = false)
     {
-        lock (sync)
-        {
-            if (!settings.Enabled || file.OptedOut.Contains(chat)) return;
-            if (leaving) activity.Remove(chat);
-            else activity[chat] = Now;
-        }
+        var queued = false;
         Change(f =>
         {
+            // Checked and queued under one lock: memory turned off meanwhile queues nothing.
+            if (!settings.Enabled || f.OptedOut.Contains(chat)) return;
+            if (leaving) activity.Remove(chat);
+            else activity[chat] = Now;
+            // Nothing said before this point is ever read, whatever the chat's watermark.
+            var from = new[] { readFrom, f.EnabledAt, f.RememberedAt.GetValueOrDefault(chat) }.Max();
+            var after = messages.Where(m => m.Date >= from).ToList();
             if (!f.Watermarks.ContainsKey(chat))
             {
-                var from = new[] { readFrom, f.EnabledAt, f.RememberedAt.GetValueOrDefault(chat) }.Max();
                 f.Meet(chat, messages.Where(m => m.Date < from).Select(m => m.Seq).DefaultIfEmpty(0).Max());
             }
-            f.Enqueue(chat, messages, Now);
+            queued = f.Enqueue(chat, after, Now);
         });
-        Poke();
+        if (queued || leaving) Poke();
     }
 
     /// <summary>"Learn from Past Chats Now": every saved chat's earlier messages queued.</summary>
@@ -251,7 +252,12 @@ public sealed class MemoryService : IAsyncDisposable
                     await RunQueueAsync(stopping.Token).ConfigureAwait(false);
                     lock (sync)
                     {
-                        if (!pokedWhileRunning || stopping.IsCancellationRequested) return;
+                        // Idle decided under the lock a poke takes: a poke after this starts a new run.
+                        if (!pokedWhileRunning || stopping.IsCancellationRequested)
+                        {
+                            running = null;
+                            return;
+                        }
                         pokedWhileRunning = false;
                     }
                 }
@@ -329,7 +335,17 @@ public sealed class MemoryService : IAsyncDisposable
                     return;
                 }
                 SetStatus("Reading your chats…");
-                var outcome = await ReflectAsync(batch, embed, model, now, cancellationToken).ConfigureAwait(false);
+                // Claimed: messages answered meanwhile start a batch of their own.
+                lock (sync) file.Reading = batch.Id;
+                Outcome outcome;
+                try
+                {
+                    outcome = await ReflectAsync(batch, embed, model, now, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (sync) file.Reading = null;
+                }
                 if (!Handle(outcome, batch)) return;
             }
         }

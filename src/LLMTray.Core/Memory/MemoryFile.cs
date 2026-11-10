@@ -41,6 +41,9 @@ public sealed class MemoryFile
     public Dictionary<Guid, DateTimeOffset> RememberedAt { get; set; } = [];
     public List<MemoryTombstone> Tombstones { get; set; } = [];
     public int NextBatchId { get; set; } = 1;
+    /// <summary>The batch being read now: nothing joins it meanwhile (it would be committed without being read).</summary>
+    [JsonIgnore]
+    public int? Reading { get; set; }
     public MemoryMood? Mood { get; set; }
 
     public MemoryNote? Note(string id) => Notes.FirstOrDefault(n => n.Id == id);
@@ -233,7 +236,7 @@ public sealed class MemoryFile
     void AppendBatches(List<MemoryBatchMessage> messages, Guid chat, DateTimeOffset now)
     {
         var open = Queue.FindLastIndex(b => b.Chat == chat);
-        var batch = open >= 0 && Queue[open].Failures == 0 && Queue[open].Attempts == 0 ? Queue[open].Messages.ToList() : [];
+        var batch = open >= 0 && Queue[open].Id != Reading && Queue[open].Failures == 0 && Queue[open].Attempts == 0 ? Queue[open].Messages.ToList() : [];
         if (batch.Count == 0) open = -1;
         var bytes = batch.Sum(Bytes);
         void Flush()
