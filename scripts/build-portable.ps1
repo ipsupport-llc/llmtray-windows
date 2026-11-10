@@ -31,6 +31,8 @@ if ($Folder) {
 # What the layout is: pack takes only the one built for this release and platform.
 $stamp = "$Release $Platform"
 if ($Step -ne 'pack') {
+# The stamp goes first: a build that fails half way leaves no layout pack would take.
+if ($Folder -and (Test-Path "$folder.layout.txt")) { Remove-Item "$folder.layout.txt" -Force }
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 if (Test-Path $folder) { Remove-Item $folder -Recurse -Force }
 
@@ -70,7 +72,7 @@ Write-Host "laid out in $folder"
 }
 if ($Step -eq 'build') { return }
 $made = if ($Folder) { "$folder.layout.txt" } else { Join-Path $stage 'layout.txt' }
-if (-not (Test-Path $made) -or (Get-Content $made -Raw) -ne $stamp) { throw "${folder} isn't the layout of $stamp: run -Step build first" }
+if (-not (Test-Path $made) -or (Get-Content $made -Raw) -ne $stamp) { throw "${folder} isn't the layout of ${stamp}: run -Step build first" }
 if (-not $Zip) { throw 'pack needs -Zip' }
 New-Item -ItemType Directory -Force (Split-Path $Zip -Parent) | Out-Null
 if (Test-Path $Zip) { Remove-Item $Zip }

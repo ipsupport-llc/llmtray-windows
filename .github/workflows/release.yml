@@ -269,6 +269,7 @@ jobs:
           foreach ($f in $env:FILES.Split(',')) {
             $sig = Get-AuthenticodeSignature $f
             if ($sig.Status -ne 'Valid') { throw "$(Split-Path $f -Leaf) is not validly signed ($($sig.Status))" }
+            if ($sig.SignerCertificate.Subject -ne $env:PUBLISHER) { throw "$(Split-Path $f -Leaf): the signer isn't MSIX_PUBLISHER" }
           }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           foreach ($f in (Get-ChildItem dist -Filter *.msix)) {

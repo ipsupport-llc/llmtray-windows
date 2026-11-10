@@ -16,8 +16,9 @@ self-signed certificate of adr/0002 (point 4) for every release.
   the profile switches to it, and that's another publisher change (below).
 - **What's public and what isn't.** The subject (`CN=…, O=…, L=…, S=…,
   C=…`) names a person and a town. Every signed file shows it to whoever
-  looks: that's what a signature is. It still stays out of the
-  repository and the build logs: the
+  looks: that's what a signature is (and the signing tool's own log may
+  show it too). It still stays out of the repository, and the workflow
+  prints nothing about it: the
   manifest keeps `CN=IPSupport LLC` for local and CI builds, and the
   release job writes the real subject into `Publisher` from the `release`
   environment's secret `MSIX_PUBLISHER`. The environment's variables
@@ -38,9 +39,9 @@ self-signed certificate of adr/0002 (point 4) for every release.
      `app\cli\llmtray.exe`). It then makes the ZIPs and installers
      (`-Step pack`, which takes only a layout stamped for that release
      and platform) and signs the installers.
-  4. Every signature is checked Valid, and each MSIX's signer and manifest
-     `Publisher` must equal `MSIX_PUBLISHER`, before anything is
-     published. Nothing about the signer is printed to the log.
+  4. Every signature is checked Valid with `MSIX_PUBLISHER` as the
+     signer, and each MSIX's manifest `Publisher` must equal it too,
+     before anything is published. Nothing about the signer is printed to the log.
   5. A manual run (`workflow_dispatch` with a tag name) builds and signs
      everything and publishes nothing: a dry run before a tag. It signs
      only from `main`.
@@ -60,7 +61,9 @@ place, and it has its own data folder. So the first MSIX signed this way
   recently (by the newest file in its data) in `%LOCALAPPDATA%\Packages`.
   It copies that package's data (settings, chats, MCP servers, folder
   grants and the journal) into a staging folder, and moves it into place
-  only once all of it has copied. Nothing of the old one is changed. If
+  only once all of it has copied. The marker is written before those
+  moves, so an interrupted start finishes them next time. Nothing of the
+  old one is changed. If
   the copy fails, the app starts fresh, and while the old package is
   installed the chat says to keep it, with why.
 - **Removing the old one.** While the old package is still installed, the
