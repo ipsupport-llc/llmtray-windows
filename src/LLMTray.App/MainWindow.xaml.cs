@@ -420,6 +420,9 @@ public sealed partial class MainWindow : Window
             Ui.Row(L.T("Load the last model when LLMTray starts"), L.T("So it's ready before the first request."), loadLast),
             Ui.Row(L.T("Set Up LLMTray…"), L.T("The first-run steps again: a model for this PC, web tools, apps, updates."), Ui.Button(L.T("Set Up LLMTray…"), app.ShowSetup)));
 
+        yield return Ui.Section(L.T("Command line"));
+        yield return Ui.Card(CommandLineRow());
+
         yield return Ui.Section(L.T("Language"));
         var language = new ComboBox { MinWidth = 200 };
         language.Items.Add(new ComboBoxItem { Content = L.T("Windows' language"), Tag = "" });
@@ -624,6 +627,49 @@ public sealed partial class MainWindow : Window
     }
 
     // MARK: Actions
+
+    /// <summary>
+    /// llmtray (adr/0013): the package's alias needs nothing; the portable
+    /// copy and the installer add the tool's folder to this user's PATH on request.
+    /// </summary>
+    UIElement CommandLineRow()
+    {
+        var folder = Path.Combine(AppContext.BaseDirectory, "cli");
+        var help = L.T("llmtray status, models, start, stop, pull, chat: LLMTray from a terminal or a script. llmtray help lists them.");
+        if (App.Current.Updater.Kind == InstallKind.Package)
+        {
+            return Ui.Row(L.T("Command line"), help, Ui.Value("llmtray", mono: true));
+        }
+        if (!File.Exists(Path.Combine(folder, "llmtray.exe"))) return Ui.Row(L.T("Command line"), help, Ui.Value("—"));
+        var onPath = CliOnPath(folder);
+        var button = Ui.Button(onPath ? L.T("Remove from PATH") : L.T("Add to PATH"), () =>
+        {
+            SetCliOnPath(folder, !CliOnPath(folder));
+            RenderPage();
+        });
+        return Ui.Row(L.T("Command line"), help + " " + (onPath ? L.T("It's on your PATH: open a new terminal to use it.") : L.F("Its folder: {0}", folder)), button);
+    }
+
+    static bool CliOnPath(string folder) =>
+        (Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries).Any(p => string.Equals(p.Trim().TrimEnd('\\'), folder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>This user's PATH only (no administrator rights); Windows tells running programs it changed.</summary>
+    static void SetCliOnPath(string folder, bool on)
+    {
+        try
+        {
+            var parts = (Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "")
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Where(p => !string.Equals(p.Trim().TrimEnd('\\'), folder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (on) parts.Add(folder);
+            Environment.SetEnvironmentVariable("Path", string.Join(";", parts), EnvironmentVariableTarget.User);
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException)
+        {
+            // Policy forbids it: the folder is shown instead.
+        }
+    }
 
     async Task SetSignInAsync(bool on)
     {

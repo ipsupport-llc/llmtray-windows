@@ -55,6 +55,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the command line
+        shell: pwsh
+        run: dotnet publish src/LLMTray.Cli -c Release -r ${{ matrix.rid }} -o src/LLMTray.App/cli
       - id: mac
         name: The Mac app's translations (pinned in l10n/mac.json)
         shell: pwsh
@@ -150,6 +153,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the command line
+        shell: pwsh
+        run: dotnet publish src/LLMTray.Cli -c Release -r ${{ matrix.rid }} -o src/LLMTray.App/cli
       - id: mac
         name: The Mac app's translations (pinned in l10n/mac.json)
         shell: pwsh

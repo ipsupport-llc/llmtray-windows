@@ -432,3 +432,6 @@ src/LLMTray.App/runtime/
 
 # Translations, built by scripts/l10n.py build
 src/LLMTray.App/Strings/
+
+# llmtray, published by CI before the app (adr/0013)
+src/LLMTray.App/cli/
