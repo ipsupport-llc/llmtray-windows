@@ -56,6 +56,7 @@ sealed partial class ChatWindow : Window
     bool renderQueued;
     int renderedCount = -1;
     int renderedEpoch = -1;
+    int attachEpoch;
 
     public ChatWindow()
     {
@@ -296,6 +297,12 @@ sealed partial class ChatWindow : Window
 
     void Render()
     {
+        if (attachEpoch != chat.Epoch)
+        {
+            // Another chat (new, loaded, temporary): pictures waiting to go were the last one's.
+            attachEpoch = chat.Epoch;
+            ClearAttachments();
+        }
         title.Text = chat.Temporary ? L.T("Temporary chat") : chat.Title.Length > 0 ? chat.Title : L.T("New chat");
         temporary.IsChecked = chat.Temporary;
 

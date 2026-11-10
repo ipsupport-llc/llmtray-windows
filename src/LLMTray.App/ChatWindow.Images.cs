@@ -20,6 +20,8 @@ sealed partial class ChatWindow
     /// <summary>What the server takes and the vision encoders use (Mac ImageAttachment.maxSide).</summary>
     const uint MaxSide = 2048;
     const long MaxFileBytes = 64L << 20;
+    /// <summary>Pictures one message may carry: each costs the model hundreds of tokens.</summary>
+    const int MaxPictures = 8;
     static readonly string[] PictureTypes = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic"];
 
     readonly List<byte[]> pending = [];
@@ -38,8 +40,18 @@ sealed partial class ChatWindow
         // Ctrl+V of a picture (or of copied picture files) into the message box.
         input.Paste += async (_, e) =>
         {
-            var content = Clipboard.GetContent();
-            if (!content.Contains(StandardDataFormats.Bitmap) && !content.Contains(StandardDataFormats.StorageItems)) return;
+            DataPackageView content;
+            try
+            {
+                content = Clipboard.GetContent();
+                // Text pastes as text; only pictures and picture files are taken here.
+                if (!content.Contains(StandardDataFormats.Bitmap) && !content.Contains(StandardDataFormats.StorageItems)) return;
+            }
+            catch (Exception)
+            {
+                // The clipboard is busy (another app holds it): the box pastes as usual.
+                return;
+            }
             e.Handled = true;
             await AddFromDataAsync(content);
         };
@@ -75,7 +87,8 @@ sealed partial class ChatWindow
             foreach (var type in PictureTypes) picker.FileTypeFilter.Add(type);
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
             var files = await picker.PickMultipleFilesAsync();
-            foreach (var file in files) await AddFileAsync(file);
+            var epoch = chat.Epoch;
+            foreach (var file in files) await AddFileAsync(file, epoch);
         }
         catch (Exception)
         {
@@ -86,22 +99,22 @@ sealed partial class ChatWindow
 
     async Task AddFromDataAsync(DataPackageView data)
     {
+        var epoch = chat.Epoch;
         try
         {
-            if (data.Contains(StandardDataFormats.StorageItems))
-            {
-                foreach (var item in await data.GetStorageItemsAsync())
-                {
-                    if (item is StorageFile file) await AddFileAsync(file);
-                }
-                return;
-            }
+            var files = data.Contains(StandardDataFormats.StorageItems)
+                ? (await data.GetStorageItemsAsync()).OfType<StorageFile>().ToList()
+                : [];
+            foreach (var file in files) await AddFileAsync(file, epoch);
+            if (files.Count > 0) return;
             if (data.Contains(StandardDataFormats.Bitmap))
             {
                 var reference = await data.GetBitmapAsync();
                 using var stream = await reference.OpenReadAsync();
-                Add(await ToPngAsync(stream));
+                Add(await ToPngAsync(stream), epoch);
+                return;
             }
+            ShowAttachNote(L.T("Only pictures can be attached."));
         }
         catch (Exception)
         {
@@ -109,7 +122,7 @@ sealed partial class ChatWindow
         }
     }
 
-    async Task AddFileAsync(StorageFile file)
+    async Task AddFileAsync(StorageFile file, int epoch)
     {
         if (!PictureTypes.Contains(Path.GetExtension(file.Name).ToLowerInvariant()))
         {
@@ -125,7 +138,7 @@ sealed partial class ChatWindow
                 return;
             }
             using var stream = await file.OpenReadAsync();
-            Add(await ToPngAsync(stream));
+            Add(await ToPngAsync(stream), epoch);
         }
         catch (Exception)
         {
@@ -133,15 +146,31 @@ sealed partial class ChatWindow
         }
     }
 
-    void Add(byte[]? png)
+    /// <param name="epoch">The chat it was attached in: one that finished converting after another chat was opened is dropped.</param>
+    void Add(byte[]? png, int epoch)
     {
+        if (epoch != chat.Epoch) return;
         if (png is null)
         {
             ShowAttachNote(L.T("That picture couldn't be read."));
             return;
         }
+        if (pending.Count >= MaxPictures)
+        {
+            ShowAttachNote(L.F("At most {0} pictures in one message.", MaxPictures));
+            return;
+        }
         pending.Add(png);
         RenderAttachments();
+    }
+
+    /// <summary>Another chat is shown: what was waiting to be sent belonged to the one before.</summary>
+    void ClearAttachments()
+    {
+        if (pending.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
+        pending.Clear();
+        RenderAttachments();
+        attachNote.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>Any picture Windows can read, as PNG with the long side at most 2048 px, upright, in sRGB.</summary>
@@ -183,7 +212,7 @@ sealed partial class ChatWindow
         foreach (var png in pending.ToList())
         {
             var image = new Image { Width = 56, Height = 56, Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill };
-            _ = SetSourceAsync(image, png);
+            _ = SetSourceAsync(image, png, 56);
             var remove = new Button
             {
                 Content = new FontIcon { Glyph = "", FontSize = 10 },
@@ -230,14 +259,15 @@ sealed partial class ChatWindow
         }
     }
 
-    static async Task SetSourceAsync(Image image, byte[] png)
+    /// <param name="width">Decoded at about this width (logical pixels), not at full size: a tile holds no more.</param>
+    static async Task SetSourceAsync(Image image, byte[] png, int width)
     {
         try
         {
             using var stream = new InMemoryRandomAccessStream();
             await stream.WriteAsync(png.AsBuffer());
             stream.Seek(0);
-            var bitmap = new BitmapImage();
+            var bitmap = new BitmapImage { DecodePixelWidth = width, DecodePixelType = DecodePixelType.Logical };
             await bitmap.SetSourceAsync(stream);
             image.Source = bitmap;
         }
@@ -255,7 +285,7 @@ sealed partial class ChatWindow
         foreach (var png in message.Images)
         {
             var image = new Image { MaxWidth = 260, MaxHeight = 260, Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform };
-            _ = SetSourceAsync(image, png);
+            _ = SetSourceAsync(image, png, 260);
             row.Children.Add(new Border { Child = image, CornerRadius = new CornerRadius(8) });
         }
         return new ScrollViewer

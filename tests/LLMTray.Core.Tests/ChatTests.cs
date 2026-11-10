@@ -242,6 +242,13 @@ public sealed class ChatClientTests : IAsyncDisposable
         again.Load(chat.Id!.Value);
         Assert.Equal(png, Assert.Single(again.Messages[0].Images));
         Assert.Null(store.ReadImage(chat.Id!.Value, "..\\x.png"));
+        // A picture that can't be read now keeps its name: a later save doesn't drop it.
+        File.Delete(Path.Combine(store.ImagesFolder(chat.Id!.Value), name));
+        var third = new ChatClient(http, api, store);
+        third.Load(chat.Id!.Value);
+        Assert.Empty(third.Messages[0].Images);
+        third.Rename("Renamed");
+        Assert.Equal([name], store.Load(chat.Id!.Value)!.Messages[0].ImageFilenames);
         store.Delete(chat.Id!.Value);
         Assert.False(Directory.Exists(store.ImagesFolder(chat.Id!.Value)));
     }

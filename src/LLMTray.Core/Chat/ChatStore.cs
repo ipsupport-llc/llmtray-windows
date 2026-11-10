@@ -84,14 +84,14 @@ public sealed class ChatStore(string folder)
     }
 
     /// <summary>A saved picture, or null when it's gone or the name points elsewhere.</summary>
-    public byte[]? ReadImage(Guid id, string name)
+    public byte[]? ReadImage(Guid id, string? name)
     {
-        if (name.Length == 0 || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)) return null;
+        if (string.IsNullOrEmpty(name) || name.Contains('\0') || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)) return null;
         try
         {
             return File.ReadAllBytes(Path.Combine(ImagesFolder(id), name));
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return null;
         }

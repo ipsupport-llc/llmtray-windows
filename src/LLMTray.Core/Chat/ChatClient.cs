@@ -23,11 +23,18 @@ public sealed class ChatMessage
     /// <summary>The tool running right now (its name as the model called it); not saved.</summary>
     public string? Activity { get; set; }
 
-    /// <summary>Pictures in the message (PNG): what the user attached, or what the Mac app made.</summary>
+    /// <summary>Pictures in the message that could be read (PNG): what the user attached, or what the Mac app made.</summary>
     public List<byte[]> Images { get; init; } = [];
 
-    /// <summary>The pictures' files in the chat's images folder, once saved (index-aligned with <see cref="Images"/>).</summary>
+    /// <summary>
+    /// The pictures' files in the chat's images folder, as saved: every one
+    /// the file names, even one that couldn't be read just now, so a save
+    /// never drops it.
+    /// </summary>
     public List<string> ImageFilenames { get; init; } = [];
+
+    /// <summary>Attached pictures not written beside the chat yet (a temporary chat's never are).</summary>
+    public List<byte[]> UnsavedImages { get; init; } = [];
 
     /// <summary>Where the tools' facts came from, shown under the answer and saved (the Mac's sources).</summary>
     public List<string> Sources { get; init; } = [];
@@ -103,15 +110,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Messages.Clear();
             foreach (var m in file.Messages.Where(m => m.Role is "user" or "assistant"))
             {
-                // Pictures stay paired with their names: one that's gone is left out of both.
-                var names = new List<string>();
-                var images = new List<byte[]>();
-                foreach (var name in m.ImageFilenames)
-                {
-                    if (store.ReadImage(file.Id, name) is not { } bytes) continue;
-                    names.Add(name);
-                    images.Add(bytes);
-                }
+                // Every name is kept; the pictures that read are shown and sent.
+                var names = m.ImageFilenames.Where(n => n is not null).ToList();
+                var images = names.Select(n => store.ReadImage(file.Id, n)).OfType<byte[]>().ToList();
                 Messages.Add(new ChatMessage
                 {
                     Role = m.Role,
@@ -136,7 +137,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     {
         text = text.Trim();
         if ((text.Length == 0 && images is not { Count: > 0 }) || Busy) return Task.CompletedTask;
-        lock (sync) Messages.Add(new ChatMessage { Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []] });
+        lock (sync) Messages.Add(new ChatMessage
+        {
+            Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
+        });
         return AnswerAsync(options);
     }
 
@@ -608,16 +612,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             if (Temporary || Messages.Count == 0) return;
             Id ??= Guid.NewGuid();
-            // Pictures not on disk yet: written beside the chat first.
-            foreach (var m in Messages.Where(m => m.Images.Count > m.ImageFilenames.Count))
+            // Pictures not on disk yet: written beside the chat first. One
+            // that fails (a full disk) stays unsaved and the next save tries again.
+            foreach (var m in Messages.Where(m => m.UnsavedImages.Count > 0))
             {
-                try
+                while (m.UnsavedImages.Count > 0)
                 {
-                    for (var i = m.ImageFilenames.Count; i < m.Images.Count; i++) m.ImageFilenames.Add(store.SaveImage(Id.Value, m.Images[i]));
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    // A full disk: the chat is saved without them; the next save tries again.
+                    try
+                    {
+                        m.ImageFilenames.Add(store.SaveImage(Id.Value, m.UnsavedImages[0]));
+                        m.UnsavedImages.RemoveAt(0);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        break;
+                    }
                 }
             }
             var seq = 0;
@@ -634,10 +643,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     SentAt = m.SentAt,
                     Model = m.Model,
                     Sources = [.. m.Sources],
+                    // The names as they were plus the ones written now: the Mac's
+                    // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
-                    // The Mac's per-picture lists, kept only while they still line up.
-                    ImageDurations = baseMessage.ImageDurations.Count == m.ImageFilenames.Count ? baseMessage.ImageDurations : [],
-                    ImagePrompts = baseMessage.ImagePrompts.Count == m.ImageFilenames.Count ? baseMessage.ImagePrompts : [],
                     Seq = seq,
                 };
             }).ToList();
