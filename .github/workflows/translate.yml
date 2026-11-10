@@ -1,0 +1,114 @@
+name: Translate
+
+# Keeps every language in step with the app's English UI text (adr/0006),
+# as the Mac app does (its translate.yml):
+# - the Mac app's translations, pinned in l10n/mac.json, move to its
+#   newest commit, so text both apps share is translated once, there;
+# - the Windows-only text a language lacks is machine-translated with
+#   OpenAI (secret OPENAI_API_KEY; model from repo variable OPENAI_MODEL,
+#   default gpt-5-mini with minimal reasoning) into l10n/<lang>.json;
+# - the result is one pull request from the translations/auto branch, with
+#   CI started on it.
+# Existing translations are never overwritten: a native speaker's fix sticks.
+# Manual run: Actions > Translate > Run workflow, optionally with languages.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/LLMTray.App/**"
+      - "l10n/**"
+      - "scripts/l10n.py"
+  schedule:
+    - cron: "17 3 * * *"   # daily: the Mac app's new translations
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: "Language codes to translate (space-separated). Empty = every language."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: translate
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start from the open proposal's translations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # While its PR is open, what it already translated isn't bought again.
+          # Its entries are added under main's: a fix made on main wins.
+          if [ -n "$(gh pr list --head translations/auto --state open --json number -q '.[].number')" ] \
+             && git fetch --quiet origin translations/auto; then
+            mkdir -p "$RUNNER_TEMP/proposal"
+            git archive FETCH_HEAD l10n | tar -x -C "$RUNNER_TEMP/proposal"
+            python3 scripts/l10n.py import-proposal "$RUNNER_TEMP/proposal/l10n"
+          fi
+      - name: Follow the Mac app's newest translations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(gh api repos/ipsupport-llc/llmtray/commits/main --jq .sha)
+          jq --arg c "$commit" '.commit = $c' l10n/mac.json > l10n/mac.json.new && mv l10n/mac.json.new l10n/mac.json
+          echo "commit=$commit" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ipsupport-llc/llmtray
+          ref: ${{ env.commit }}
+          sparse-checkout: Resources/Localization
+          path: mac
+          persist-credentials: false
+      - name: Translate the missing Windows-only strings
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          # Data, not shell source.
+          LANGS: ${{ github.event.inputs.languages }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY secret is not set -- skipping machine translation"
+            exit 0
+          fi
+          if ! [[ "$LANGS" =~ ^[A-Za-z-]*( [A-Za-z-]+)*$ ]]; then
+            echo "::error::languages must be space-separated codes"
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          python3 scripts/l10n.py translate --mac mac/Resources/Localization $LANGS
+      - name: Check
+        run: python3 scripts/l10n.py check --mac mac/Resources/Localization
+      - name: Propose
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add l10n
+          if git diff --cached --quiet origin/main -- l10n; then
+            echo "nothing new"
+            exit 0
+          fi
+          # The open proposal already has exactly this: no new commit, no new CI run.
+          if git fetch --quiet origin translations/auto 2>/dev/null && git diff --cached --quiet FETCH_HEAD -- l10n; then
+            echo "the proposal is current"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --quiet -C translations/auto
+          git commit --quiet -m "Translations: the Mac app's at ${commit:0:7}, Windows-only strings machine-translated"
+          git push --quiet --force origin translations/auto
+          if [ -z "$(gh pr list --head translations/auto --state open --json number -q '.[].number')" ]; then
+            gh pr create --head translations/auto --base main \
+              --title "Translations" \
+              --body "Machine translations of the Windows-only UI text and the Mac app's newest translations (adr/0006). Opened by translate.yml; merge after CI passes."
+          fi
+          # A push by the Actions token starts no workflow: CI is started by hand.
+          gh workflow run ci.yml --ref translations/auto

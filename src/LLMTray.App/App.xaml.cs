@@ -80,6 +80,8 @@ public partial class App : Application
         DataFolder = FindDataFolder();
         settingsStore = new SettingsStore(Path.Combine(DataFolder, "settings.json"));
         Settings = settingsStore.Load();
+        // Before any window or menu: their text comes from here (adr/0006).
+        L.Load(Settings.Language);
         if (Settings.ModelsFolder is null) Directory.CreateDirectory(AppPaths.DefaultModelsFolder);
 
         Library = new ModelLibrary(() => ModelsFolder);
@@ -113,7 +115,7 @@ public partial class App : Application
         }
         catch (IOException)
         {
-            ProxyError = $"Port {AppInfo.ProxyPort} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.";
+            ProxyError = L.F("Port {0} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.", AppInfo.ProxyPort);
         }
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
@@ -217,11 +219,11 @@ public partial class App : Application
         }
         tray?.SetTooltip(state.Status switch
         {
-            HostStatus.Running when state.ActiveRequests > 0 => $"LLMTray: {state.Model?.Name} (working)",
-            HostStatus.Running => $"LLMTray: {state.Model?.Name}",
-            HostStatus.Loading => $"LLMTray: loading {state.Model?.Name}",
-            HostStatus.Failed => "LLMTray: the model stopped",
-            _ => "LLMTray: no model loaded",
+            HostStatus.Running when state.ActiveRequests > 0 => L.F("LLMTray: {0} (working)", state.Model?.Name),
+            HostStatus.Running => L.F("LLMTray: {0}", state.Model?.Name),
+            HostStatus.Loading => L.F("LLMTray: loading {0}", state.Model?.Name),
+            HostStatus.Failed => L.T("LLMTray: the model stopped"),
+            _ => L.T("LLMTray: no model loaded"),
         });
         HostChanged?.Invoke(state);
     }
@@ -240,24 +242,24 @@ public partial class App : Application
     IReadOnlyList<TrayMenuItem> TrayMenu()
     {
         var state = Host.State;
-        var items = new List<TrayMenuItem> { new("Chat", () => ShowChat()), new("Open LLMTray", ShowWindow), TrayMenuItem.Separator };
+        var items = new List<TrayMenuItem> { new(L.T("Chat"), () => ShowChat()), new(L.T("Open LLMTray"), ShowWindow), TrayMenuItem.Separator };
         var models = Library.Rescan().Models;
         foreach (var model in models.Take(20))
         {
             var loaded = state.Model?.FullPath == model.FullPath && state.Status is HostStatus.Running or HostStatus.Loading;
             items.Add(new(model.Name, () => _ = LoadAsync(model), Checked: loaded));
         }
-        if (models.Count == 0) items.Add(new("No models in the models folder", Enabled: false));
+        if (models.Count == 0) items.Add(new(L.T("No models in the models folder"), Enabled: false));
         items.Add(TrayMenuItem.Separator);
-        items.Add(new("Stop the model", () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
-        items.Add(new("Server log", ShowLog));
+        items.Add(new(L.T("Stop the model"), () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
+        items.Add(new(L.T("Server log"), ShowLog));
         if (Updater.CanUpdate)
         {
             items.Add(Updater.Available is { } update
-                ? new($"Install LLMTray {update.Tag.DisplayVersion}", () => _ = Updater.InstallAsync(), Enabled: !Updater.Busy)
-                : new("Check for updates", () => { ShowWindow(); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
+                ? new(L.F("Install LLMTray {0}", update.Tag.DisplayVersion), () => _ = Updater.InstallAsync(), Enabled: !Updater.Busy)
+                : new(L.T("Check for updates"), () => { ShowWindow(); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
         }
-        items.Add(new("Quit LLMTray", () => _ = QuitAsync()));
+        items.Add(new(L.T("Quit LLMTray"), () => _ = QuitAsync()));
         return items;
     }
 

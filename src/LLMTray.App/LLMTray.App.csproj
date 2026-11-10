@@ -25,6 +25,8 @@
     <Content Include="..\..\NOTICE.md" Link="NOTICE.md" CopyToOutputDirectory="PreserveNewest" />
     <!-- llama.cpp, put here by scripts/fetch-llama.ps1 (CPU and Vulkan, adr/0001). -->
     <Content Include="runtime\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Translations, put here by scripts/l10n.py build (adr/0006). -->
+    <Content Include="Strings\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup Condition="'$(LLMTrayRelease)' != ''">
     <!-- The release a portable build is (adr/0004); a package knows its version from its identity. -->

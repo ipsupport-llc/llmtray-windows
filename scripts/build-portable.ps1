@@ -21,7 +21,7 @@ dotnet publish (Join-Path $root 'src/LLMTray.App') -c Release -r $Rid -p:Platfor
     -p:LLMTrayRelease=$Release `
     -o $folder
 if ($LASTEXITCODE -ne 0) { throw 'publish failed' }
-foreach ($required in 'LLMTray.exe', 'runtime\llama\cpu\llama-server.exe', 'Assets\AppIcon.ico', 'NOTICE.md') {
+foreach ($required in 'LLMTray.exe', 'runtime\llama\cpu\llama-server.exe', 'Assets\AppIcon.ico', 'NOTICE.md', 'Strings\de.json') {
     if (-not (Test-Path (Join-Path $folder $required))) { throw "the portable build has no $required" }
 }
 New-Item -ItemType Directory -Force (Split-Path $Zip -Parent) | Out-Null

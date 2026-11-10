@@ -100,7 +100,7 @@ sealed class AppUpdater
         Busy = true;
         var mine = ++generation;
         var channel = Channel;
-        if (manual) Status = "Checking for updates…";
+        if (manual) Status = L.T("Checking for updates…");
         Raise();
         try
         {
@@ -108,12 +108,12 @@ sealed class AppUpdater
             // A channel switch while checking: this answer is for the old one.
             if (mine != generation || channel != Channel) return;
             Available = found;
-            Status = found is null && manual ? $"LLMTray {Current!.DisplayVersion} is the newest {Word(channel)} release." : null;
+            Status = found is null && manual ? channel == UpdateChannel.Beta ? L.F("LLMTray {0} is the newest beta release.", Current!.DisplayVersion) : L.F("LLMTray {0} is the newest stable release.", Current!.DisplayVersion) : null;
         }
         catch (Exception e)
         {
             // A failed automatic check stays quiet; the next one may get through.
-            if (manual && mine == generation) Status = e is UpdateCheckException ? e.Message : $"The update check failed: {e.Message}";
+            if (manual && mine == generation) Status = e is UpdateCheckException ? e.Message : L.F("The update check failed: {0}", e.Message);
         }
         finally
         {
@@ -128,19 +128,19 @@ sealed class AppUpdater
         if (Available is not { } update || Busy) return;
         if (ScoopManaged)
         {
-            Status = $"LLMTray was installed with Scoop: quit LLMTray, then run \"scoop update llmtray\" to get {update.Tag.DisplayVersion}.";
+            Status = L.F("LLMTray was installed with Scoop: quit LLMTray, then run \"scoop update llmtray\" to get {0}.", update.Tag.DisplayVersion);
             Raise();
             return;
         }
         Busy = true;
-        Status = $"Downloading LLMTray {update.Tag.DisplayVersion}…";
+        Status = L.F("Downloading LLMTray {0}…", update.Tag.DisplayVersion);
         Raise();
         var file = Path.Combine(folder, update.Package.Name);
         try
         {
             var progress = new Progress<DownloadProgress>(p =>
             {
-                Status = $"Downloading LLMTray {update.Tag.DisplayVersion}: {MainWindow.FormatSize(p.Received)} of {MainWindow.FormatSize(update.Package.Size)}";
+                Status = L.F("Downloading LLMTray {0}: {1} of {2}", update.Tag.DisplayVersion, MainWindow.FormatSize(p.Received), MainWindow.FormatSize(update.Package.Size));
                 Raise();
             });
             await downloader.DownloadAsync(new DownloadItem(update.Package.Url, file, update.Package.Size, update.Package.Sha256,
@@ -148,7 +148,7 @@ sealed class AppUpdater
         }
         catch (Exception e)
         {
-            Status = $"The update didn't download: {e.Message}";
+            Status = L.F("The update didn't download: {0}", e.Message);
             Busy = false;
             Raise();
             return;
@@ -160,7 +160,7 @@ sealed class AppUpdater
             return;
         }
 
-        Status = $"Installing LLMTray {update.Tag.DisplayVersion}…";
+        Status = L.F("Installing LLMTray {0}…", update.Tag.DisplayVersion);
         Raise();
         try
         {
@@ -174,7 +174,7 @@ sealed class AppUpdater
         catch (Exception e)
         {
             // The installer window can still do it, with the user's click.
-            Status = $"Installing in the background didn't work ({e.Message}). The Windows installer opens instead: choose Update.";
+            Status = L.F("Installing in the background didn't work ({0}). The Windows installer opens instead: choose Update.", e.Message);
             Busy = false;
             Raise();
             try
@@ -183,7 +183,7 @@ sealed class AppUpdater
             }
             catch (Exception)
             {
-                Status = $"The update is downloaded to {file}. Open it to install.";
+                Status = L.F("The update is downloaded to {0}. Open it to install.", file);
                 Raise();
             }
             return;
@@ -219,12 +219,12 @@ sealed class AppUpdater
         }
         catch (Exception e)
         {
-            Status = $"LLMTray {update.Tag.DisplayVersion} is ready; quit and start LLMTray to finish ({e.Message}).";
+            Status = L.F("LLMTray {0} is ready; quit and start LLMTray to finish ({1}).", update.Tag.DisplayVersion, e.Message);
             Busy = false;
             Raise();
             return;
         }
-        Status = $"Restarting into LLMTray {update.Tag.DisplayVersion}…";
+        Status = L.F("Restarting into LLMTray {0}…", update.Tag.DisplayVersion);
         Raise();
         await App.Current.QuitAsync();
     }
@@ -252,7 +252,7 @@ sealed class AppUpdater
         }
         catch (Exception e)
         {
-            Status = $"The update didn't install: {e.Message}. The new version is in {unpacked}.";
+            Status = L.F("The update didn't install: {0}. The new version is in {1}.", e.Message, unpacked);
             Busy = false;
             Raise();
         }

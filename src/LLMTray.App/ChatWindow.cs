@@ -27,26 +27,26 @@ sealed class ChatWindow : Window
     readonly ChatClient chat;
     readonly ChatStore store;
     readonly ListView chats = new() { SelectionMode = ListViewSelectionMode.Single };
-    readonly TextBox search = new() { PlaceholderText = "Search chats" };
+    readonly TextBox search = new() { PlaceholderText = L.T("Search chats") };
     readonly ToggleButton temporary = new() { Content = new FontIcon { Glyph = "", FontSize = 14 } };
     readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-    readonly ComboBox model = new() { MinWidth = 220, PlaceholderText = "Choose a model" };
+    readonly ComboBox model = new() { MinWidth = 220, PlaceholderText = L.T("Choose a model") };
     readonly Microsoft.UI.Xaml.Shapes.Ellipse dot = Ui.Dot(Ui.Gray, 8);
     readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 260 };
     readonly ScrollViewer scroller = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     readonly StackPanel messages = new() { Spacing = 14, MaxWidth = 860, Padding = new Thickness(24, 16, 24, 16) };
-    readonly Button regenerate = new() { Content = "Regenerate", Visibility = Visibility.Collapsed };
+    readonly Button regenerate = new() { Content = L.T("Regenerate"), Visibility = Visibility.Collapsed };
     readonly TextBlock stats = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBox input = new()
     {
-        PlaceholderText = "Message…",
+        PlaceholderText = L.T("Message…"),
         AcceptsReturn = true,
         TextWrapping = TextWrapping.Wrap,
         MaxHeight = 220,
         MinHeight = 40,
         VerticalContentAlignment = VerticalAlignment.Center,
     };
-    readonly ToggleButton thinking = new() { IsChecked = true, Content = "Thinking" };
+    readonly ToggleButton thinking = new() { IsChecked = true, Content = L.T("Thinking") };
     readonly Button send = new();
     bool rendering;
     /// <summary>Keep the newest in view: on after sending, off when the user scrolls up.</summary>
@@ -59,7 +59,7 @@ sealed class ChatWindow : Window
 
     public ChatWindow()
     {
-        Title = "Chat — LLMTray";
+        Title = L.T("Chat — LLMTray");
         SystemBackdrop = new MicaBackdrop();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         store = App.Current.Chats;
@@ -77,8 +77,8 @@ sealed class ChatWindow : Window
             if (summary.Id != chat.Id) chat.Load(summary.Id);
             input.Focus(FocusState.Programmatic);
         };
-        ToolTipService.SetToolTip(temporary, "Temporary chat: not saved");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(temporary, "Temporary chat");
+        ToolTipService.SetToolTip(temporary, L.T("Temporary chat: not saved"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(temporary, L.T("Temporary chat"));
         temporary.Click += (_, _) => chat.New(temporary.IsChecked == true);
         model.SelectionChanged += (_, _) => { if (!rendering) RenderStatus(); };
         regenerate.Click += (_, _) => _ = chat.RegenerateAsync(Options());
@@ -93,7 +93,7 @@ sealed class ChatWindow : Window
             e.Handled = true;
             SendOrStop();
         };
-        ToolTipService.SetToolTip(thinking, "Let a thinking model reason before it answers");
+        ToolTipService.SetToolTip(thinking, L.T("Let a thinking model reason before it answers"));
         App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); };
         App.Current.ModelsChanged += RenderModels;
         AppWindow.Closing += (sender, args) =>
@@ -121,8 +121,8 @@ sealed class ChatWindow : Window
                 RenderChats();
             };
         }
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(search, "Search chats");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(chats, "Chats");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(search, L.T("Search chats"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(chats, L.T("Chats"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(stats, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
 
@@ -176,7 +176,7 @@ sealed class ChatWindow : Window
     {
         // Sidebar
         var newChat = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
-        newChat.Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 14 }, new TextBlock { Text = "New chat" });
+        newChat.Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 14 }, new TextBlock { Text = L.T("New chat") });
         newChat.Click += (_, _) => NewChat();
         var top = new Grid { ColumnSpacing = 6 };
         top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -201,7 +201,7 @@ sealed class ChatWindow : Window
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.Children.Add(title);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(model, "Model");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(model, L.T("Model"));
         Grid.SetColumn(model, 1);
         header.Children.Add(model);
         var state = Ui.Horizontal(dot, status);
@@ -229,7 +229,7 @@ sealed class ChatWindow : Window
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(input, "Message");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(input, L.T("Message"));
         composer.Children.Add(input);
         thinking.VerticalAlignment = VerticalAlignment.Bottom;
         Grid.SetColumn(thinking, 1);
@@ -276,7 +276,7 @@ sealed class ChatWindow : Window
 
     void Render()
     {
-        title.Text = chat.Temporary ? "Temporary chat" : chat.Title.Length > 0 ? chat.Title : "New chat";
+        title.Text = chat.Temporary ? L.T("Temporary chat") : chat.Title.Length > 0 ? chat.Title : L.T("New chat");
         temporary.IsChecked = chat.Temporary;
 
         if (chat.Messages.Count == 0)
@@ -284,10 +284,10 @@ sealed class ChatWindow : Window
             messages.Children.Clear();
             renderedCount = 0;
             var empty = new StackPanel { Spacing = 6, Margin = new Thickness(0, 120, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
-            empty.Children.Add(new TextBlock { Text = chat.Temporary ? "A temporary chat" : "Ask anything", FontSize = 22, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
+            empty.Children.Add(new TextBlock { Text = chat.Temporary ? L.T("A temporary chat") : L.T("Ask anything"), FontSize = 22, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
             empty.Children.Add(Ui.Caption(chat.Temporary
-                ? "Nothing of it is saved: it's gone when you start another chat."
-                : "Answers come from the model on this PC. Your chats stay here."));
+                ? L.T("Nothing of it is saved: it's gone when you start another chat.")
+                : L.T("Answers come from the model on this PC. Your chats stay here.")));
             messages.Children.Add(empty);
         }
         else
@@ -311,8 +311,8 @@ sealed class ChatWindow : Window
             ? string.Create(System.Globalization.CultureInfo.CurrentCulture, $"{tps:0.0} tok/s")
             : "";
         send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? "Stop" : "Send");
-        ToolTipService.SetToolTip(send, chat.Busy ? "Stop" : "Send (Enter)");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? L.T("Stop") : L.T("Send"));
+        ToolTipService.SetToolTip(send, chat.Busy ? L.T("Stop") : L.T("Send (Enter)"));
         if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true));
         RenderChatsSelection();
     }
@@ -337,12 +337,12 @@ sealed class ChatWindow : Window
                 },
             };
             var copyMenu = new MenuFlyout();
-            var copyItem = new MenuFlyoutItem { Text = "Copy" };
+            var copyItem = new MenuFlyoutItem { Text = L.T("Copy") };
             copyItem.Click += (_, _) => Copy(message.Content);
             copyMenu.Items.Add(copyItem);
             bubble.ContextFlyout = copyMenu;
             var you = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Right };
-            you.Children.Add(new TextBlock { Text = "You", FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
+            you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
             you.Children.Add(bubble);
             return you;
         }
@@ -350,7 +350,7 @@ sealed class ChatWindow : Window
         var stack = new StackPanel { Spacing = 6 };
         var who = Ui.Horizontal(
             new Image { Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
-            new TextBlock { Text = message.Model ?? "Assistant", FontSize = 12, Foreground = Ui.Secondary });
+            new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
         stack.Children.Add(who);
 
         if (message.Reasoning.Length > 0)
@@ -366,7 +366,7 @@ sealed class ChatWindow : Window
             var thinkingNow = message.Streaming && message.Content.Length == 0;
             var expander = new Expander
             {
-                Header = thinkingNow ? "Thinking…" : "Thought process",
+                Header = thinkingNow ? L.T("Thinking…") : L.T("Thought process"),
                 Content = thought,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -403,7 +403,7 @@ sealed class ChatWindow : Window
 
         if (!message.Streaming && message.Content.Length > 0)
         {
-            var copy = new Button { Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 12 }, new TextBlock { Text = "Copy", FontSize = 12 }) };
+            var copy = new Button { Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 12 }, new TextBlock { Text = L.T("Copy"), FontSize = 12 }) };
             copy.Style = Ui.Resource<Style>("SubtleButtonStyle", copy.Style);
             copy.Click += (_, _) => Copy(message.Content);
             var actions = Ui.Horizontal(copy);
@@ -455,8 +455,8 @@ sealed class ChatWindow : Window
                 var code = new TextBlock { Text = c.Text, FontFamily = Ui.Mono, FontSize = 13, IsTextSelectionEnabled = true };
                 var copy = new Button { Content = new FontIcon { Glyph = "", FontSize = 12 }, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top };
                 copy.Style = Ui.Resource<Style>("SubtleButtonStyle", copy.Style);
-                ToolTipService.SetToolTip(copy, "Copy the code");
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(copy, "Copy the code");
+                ToolTipService.SetToolTip(copy, L.T("Copy the code"));
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(copy, L.T("Copy the code"));
                 copy.Click += (_, _) => Copy(c.Text);
                 var grid = new Grid();
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -561,7 +561,7 @@ sealed class ChatWindow : Window
             }
             var want = picked ?? loaded;
             model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
-            model.PlaceholderText = model.Items.Count == 0 ? "No models: Get models… in LLMTray" : "Choose a model";
+            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models: Get models… in LLMTray") : L.T("Choose a model");
         }
         finally
         {
@@ -596,9 +596,9 @@ sealed class ChatWindow : Window
                 var item = new ListViewItem { Content = new TextBlock { Text = c.Title, TextTrimming = TextTrimming.CharacterEllipsis }, Tag = c };
                 ToolTipService.SetToolTip(item, c.Preview.Length > 0 ? c.Preview : c.Title);
                 var menu = new MenuFlyout();
-                var rename = new MenuFlyoutItem { Text = "Rename…" };
+                var rename = new MenuFlyoutItem { Text = L.T("Rename…") };
                 rename.Click += async (_, _) => await RenameAsync(c);
-                var delete = new MenuFlyoutItem { Text = "Delete" };
+                var delete = new MenuFlyoutItem { Text = L.T("Delete") };
                 delete.Click += async (_, _) => await DeleteAsync(c);
                 menu.Items.Add(rename);
                 menu.Items.Add(delete);
@@ -607,7 +607,7 @@ sealed class ChatWindow : Window
             }
             if (all.Count == 0)
             {
-                chats.Items.Add(new ListViewItem { Content = Ui.Caption(query.Length > 0 ? "No chat matches." : "Your chats appear here."), IsEnabled = false });
+                chats.Items.Add(new ListViewItem { Content = Ui.Caption(query.Length > 0 ? L.T("No chat matches.") : L.T("Your chats appear here.")), IsEnabled = false });
             }
         }
         finally
@@ -634,11 +634,11 @@ sealed class ChatWindow : Window
     {
         var day = when.ToLocalTime().Date;
         var today = DateTime.Today;
-        if (day == today) return "Today";
-        if (day == today.AddDays(-1)) return "Yesterday";
-        if (day > today.AddDays(-7)) return "Previous 7 days";
-        if (day > today.AddDays(-30)) return "Previous 30 days";
-        return "Older";
+        if (day == today) return L.T("Today");
+        if (day == today.AddDays(-1)) return L.T("Yesterday");
+        if (day > today.AddDays(-7)) return L.T("Previous 7 days");
+        if (day > today.AddDays(-30)) return L.T("Previous 30 days");
+        return L.T("Older");
     }
 
     async Task RenameAsync(ChatSummary c)
@@ -647,10 +647,10 @@ sealed class ChatWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = "Rename chat",
+            Title = L.T("Rename chat"),
             Content = box,
-            PrimaryButtonText = "Rename",
-            CloseButtonText = "Cancel",
+            PrimaryButtonText = L.T("Rename"),
+            CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Primary,
         };
         try
@@ -670,10 +670,10 @@ sealed class ChatWindow : Window
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
-            Title = $"Delete “{c.Title}”?",
-            Content = "The chat is removed from this PC.",
-            PrimaryButtonText = "Delete",
-            CloseButtonText = "Cancel",
+            Title = L.F("Delete “{0}”?", c.Title),
+            Content = L.T("The chat is removed from this PC."),
+            PrimaryButtonText = L.T("Delete"),
+            CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Close,
         };
         try

@@ -15,9 +15,9 @@ sealed partial class DownloadDialog : ContentDialog
     readonly TextBlock reach = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly ListView featured = new() { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 300 };
     readonly TextBox repository = new();
-    readonly Button list = new() { Content = "List files" };
+    readonly Button list = new() { Content = L.T("List files") };
     readonly ListView files = new() { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 200 };
-    readonly CheckBox projector = new() { Content = "Also download the vision projector (mmproj)", IsChecked = true, Visibility = Visibility.Collapsed };
+    readonly CheckBox projector = new() { Content = L.T("Also download the vision projector (mmproj)"), IsChecked = true, Visibility = Visibility.Collapsed };
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly Dictionary<DownloadSource, bool?> reachable = new() { [DownloadSource.HuggingFace] = null, [DownloadSource.Kaggle] = null };
     /// <summary>Cancelled when the dialog closes: nothing it started touches it afterwards.</summary>
@@ -38,9 +38,9 @@ sealed partial class DownloadDialog : ContentDialog
 
     public DownloadDialog()
     {
-        Title = "Get models";
-        PrimaryButtonText = "Download";
-        CloseButtonText = "Cancel";
+        Title = L.T("Get models");
+        PrimaryButtonText = L.T("Download");
+        CloseButtonText = L.T("Cancel");
         DefaultButton = ContentDialogButton.Primary;
         IsPrimaryButtonEnabled = false;
         Resources["ContentDialogMaxWidth"] = 720.0;
@@ -73,7 +73,7 @@ sealed partial class DownloadDialog : ContentDialog
         custom.Children.Add(projector);
         var other = new Expander
         {
-            Header = "Another repository",
+            Header = L.T("Another repository"),
             Content = custom,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -91,10 +91,10 @@ sealed partial class DownloadDialog : ContentDialog
         };
 
         var panel = new StackPanel { Spacing = 10, MinWidth = 560 };
-        panel.Children.Add(new TextBlock { Text = "Source" });
+        panel.Children.Add(new TextBlock { Text = L.T("Source") });
         panel.Children.Add(sources);
         panel.Children.Add(reach);
-        panel.Children.Add(new TextBlock { Text = "Our models", Margin = new Thickness(0, 6, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = L.T("Our models"), Margin = new Thickness(0, 6, 0, 0) });
         panel.Children.Add(featured);
         panel.Children.Add(other);
         panel.Children.Add(status);
@@ -147,11 +147,17 @@ sealed partial class DownloadDialog : ContentDialog
 
     void RenderReach()
     {
-        static string Word(bool? ok) => ok switch { true => "reachable", false => "not reachable from this network", null => "checking…" };
-        reach.Text = $"Hugging Face: {Word(reachable[DownloadSource.HuggingFace])}. Kaggle: {Word(reachable[DownloadSource.Kaggle])}.";
+        // One whole sentence per source and state: translations can reorder them.
+        static string Line(string source, bool? ok) => ok switch
+        {
+            true => L.F("{0}: reachable.", source),
+            false => L.F("{0}: not reachable from this network.", source),
+            null => L.F("{0}: checking…", source),
+        };
+        reach.Text = Line("Hugging Face", reachable[DownloadSource.HuggingFace]) + " " + Line("Kaggle", reachable[DownloadSource.Kaggle]);
         repository.PlaceholderText = Source == DownloadSource.Kaggle
-            ? "owner/model/gguf/variation (from the Kaggle model's page)"
-            : "publisher/repo, a GGUF repository";
+            ? L.T("owner/model/gguf/variation (from the Kaggle model's page)")
+            : L.T("publisher/repo, a GGUF repository");
     }
 
     void RenderFeatured()
@@ -162,7 +168,7 @@ sealed partial class DownloadDialog : ContentDialog
             var on = model.IsOn(Source);
             var text = new StackPanel { Padding = new Thickness(0, 6, 0, 6) };
             text.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
-            var note = on ? $"{model.Note} {model.License}." : $"Not on {(Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face")} yet.";
+            var note = on ? L.F("{0} License: {1}.", L.T(model.Note), model.License) : L.F("Not on {0} yet.", Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face");
             text.Children.Add(new TextBlock { Text = note, FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
             featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = on, Opacity = on ? 1 : 0.5 });
         }
@@ -187,7 +193,7 @@ sealed partial class DownloadDialog : ContentDialog
         var mine = generation;
         var kind = Source;
         var source = App.Current.Sources[kind];
-        status.Text = "Listing files…";
+        status.Text = L.T("Listing files…");
         list.IsEnabled = false;
         try
         {
@@ -204,11 +210,11 @@ sealed partial class DownloadDialog : ContentDialog
         var choices = Choices(listing.Files);
         foreach (var choice in choices)
         {
-            var parts = choice.Parts.Count > 1 ? $" ({choice.Parts.Count} parts)" : "";
+            var parts = choice.Parts.Count > 1 ? "   " + L.F("Parts: {0}", choice.Parts.Count) : "";
             files.Items.Add(new ListViewItem { Content = $"{choice.Name}   {MainWindow.FormatSize(choice.Size)}{parts}", Tag = choice });
         }
         projector.Visibility = listing.Files.Any(f => f.IsGguf && f.IsProjector) ? Visibility.Visible : Visibility.Collapsed;
-        status.Text = choices.Count == 0 ? "No GGUF models in this repository." : "";
+        status.Text = choices.Count == 0 ? L.T("No GGUF models in this repository.") : "";
     }
 
     /// <summary>The models in a listing: single files, and split models as one choice with all their shards.</summary>
@@ -242,7 +248,7 @@ sealed partial class DownloadDialog : ContentDialog
             var need = StillNeeded(job);
             if (Free(job) is long free && need > free)
             {
-                status.Text = $"Not enough disk space: {MainWindow.FormatSize(need)} more needed, {MainWindow.FormatSize(free)} free.";
+                status.Text = L.F("Not enough disk space: {0} more needed, {1} free.", MainWindow.FormatSize(need), MainWindow.FormatSize(free));
                 args.Cancel = true;
                 return;
             }
@@ -305,7 +311,7 @@ sealed partial class DownloadDialog : ContentDialog
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!full.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
         {
-            throw new DownloadException($"'{relative}' would land outside the models folder");
+            throw new DownloadException(L.F("'{0}' would land outside the models folder", relative));
         }
         return full;
     }
