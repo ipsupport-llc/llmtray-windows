@@ -26,6 +26,7 @@ sealed class TrayIcon : IDisposable
     readonly uint taskbarCreated;
     string tooltip;
     bool disposed;
+    long lastActivated = -10_000;
 
     public TrayIcon(string iconPath, string tooltip)
     {
@@ -110,6 +111,9 @@ sealed class TrayIcon : IDisposable
                 case Native.WM_LBUTTONUP:
                 case Native.NIN_SELECT:
                 case Native.NIN_KEYSELECT:
+                    // One click sends both WM_LBUTTONUP and NIN_SELECT: it's one activation.
+                    if (Environment.TickCount64 - lastActivated < 500) break;
+                    lastActivated = Environment.TickCount64;
                     Activated?.Invoke();
                     break;
                 case Native.WM_CONTEXTMENU:

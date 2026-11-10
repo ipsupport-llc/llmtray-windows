@@ -285,15 +285,19 @@ public partial class App : Application
 
     internal ChatWindow? Chat => chatWindow;
 
+    long chatShownAt = -10_000;
+
     /// <summary>The tray icon's left click: the chat shown, or hidden when it's already in front.</summary>
     void ToggleChat()
     {
-        if (chatWindow is { } open && open.AppWindow.IsVisible && open.IsForeground)
+        // Shown a moment ago (this same click, reported twice): it stays.
+        if (chatWindow is { } open && open.AppWindow.IsVisible && open.IsForeground && Environment.TickCount64 - chatShownAt > 600)
         {
             open.AppWindow.Hide();
             return;
         }
         ShowChat();
+        chatShownAt = Environment.TickCount64;
     }
 
     readonly Dictionary<string, (DateTime Written, LLMTray.Core.Chat.ThinkingStyle Style)> thinkingStyles = new(StringComparer.OrdinalIgnoreCase);
