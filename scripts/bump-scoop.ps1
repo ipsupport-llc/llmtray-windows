@@ -22,7 +22,7 @@ function Get-Order([string]$v) {
 $path = $Manifest
 $manifest = Get-Content $path -Raw | ConvertFrom-Json
 if ((Get-Order $manifest.version) -gt (Get-Order $Version)) {
-    Write-Host "the bucket already has $($manifest.version), newer than $Version: left as it is"
+    Write-Host "the bucket already has $($manifest.version), newer than ${Version}: left as it is"
     exit 0
 }
 # Every ZIP first: a missing one leaves the manifest untouched.
