@@ -228,6 +228,8 @@ public partial class App : Application
 
     internal MainWindow? SettingsWindow => window;
 
+    internal AboutWindow? About => about;
+
     public void ShowAbout()
     {
         if (Quitting) return;
@@ -433,26 +435,51 @@ public partial class App : Application
         catch (UnauthorizedAccessException) { }
     }
 
+    /// <summary>
+    /// The tray icon's right-click menu (adr/0014), the Mac quick menu's
+    /// lines: what's running, the chat, a model, the server, Settings, Help,
+    /// About, Quit.
+    /// </summary>
     IReadOnlyList<TrayMenuItem> TrayMenu()
     {
         var state = Host.State;
-        var items = new List<TrayMenuItem> { new(L.T("Chat"), () => ShowChat()), new(L.T("Open LLMTray"), ShowWindow), new(L.T("Set Up LLMTray…"), ShowSetup), TrayMenuItem.Separator };
-        var models = Library.Rescan().Models;
-        foreach (var model in models.Take(20))
+        var running = state.Status is HostStatus.Running or HostStatus.Loading;
+        var (status, _) = Status.Of(state);
+        var items = new List<TrayMenuItem>
         {
-            var loaded = state.Model?.FullPath == model.FullPath && state.Status is HostStatus.Running or HostStatus.Loading;
-            items.Add(new(model.Name, () => _ = LoadAsync(model), Checked: loaded));
-        }
-        if (models.Count == 0) items.Add(new(L.T("No models in the models folder"), Enabled: false));
+            // The status line: the log when something went wrong.
+            new(status, state.Status == HostStatus.Failed ? ShowLog : null, Enabled: state.Status == HostStatus.Failed),
+            TrayMenuItem.Separator,
+            new(L.T("Open Chat"), () => ShowChat()),
+            new(L.T("New Chat"), () => ShowChat(newChat: true)),
+        };
+        var models = Library.Rescan().Models;
+        var choices = models.Take(30).Select(model => new TrayMenuItem(model.Name, () => _ = LoadAsync(model),
+            Checked: running && state.Model?.FullPath == model.FullPath)).ToList();
+        if (models.Count == 0) choices.Add(new(L.T("No models in the models folder"), Enabled: false));
+        choices.Add(TrayMenuItem.Separator);
+        choices.Add(new(L.T("Get Models…"), () => { ShowChat(); _ = chatWindow?.GetModelsAsync(); }));
+        items.Add(new(L.T("Select Model"), Items: choices));
         items.Add(TrayMenuItem.Separator);
-        items.Add(new(L.T("Stop the model"), () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
-        items.Add(new(L.T("Server log"), ShowLog));
+        if (running) items.Add(new(L.T("Stop the model"), () => _ = StopAsync()));
+        else if (Settings.LastModel is { } last && Library.Current.Resolve(last) is { } lastModel) items.Add(new(L.F("Load {0}", lastModel.Name), () => _ = LoadAsync(lastModel)));
+        items.Add(new(L.T("Server Log…"), ShowLog));
+        items.Add(TrayMenuItem.Separator);
+        items.Add(new(L.T("Settings…"), () => ShowSettings()));
+        var help = new List<TrayMenuItem>();
         if (Updater.CanUpdate)
         {
-            items.Add(Updater.Available is { } update
+            help.Add(Updater.Available is { } update
                 ? new(L.F("Install LLMTray {0}", update.Tag.DisplayVersion), () => _ = Updater.InstallAsync(), Enabled: !Updater.Busy)
-                : new(L.T("Check for updates"), () => { ShowWindow(); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
+                : new(L.T("Check for Updates…"), () => { ShowSettings("updates"); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
         }
+        help.Add(new(L.T("Set Up LLMTray…"), ShowSetup));
+        help.Add(TrayMenuItem.Separator);
+        help.Add(new(L.T("Report a Bug…"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/issues/new")));
+        help.Add(new(L.T("LLMTray on GitHub"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows")));
+        items.Add(new(L.T("Help"), Items: help));
+        items.Add(new(L.T("About LLMTray"), ShowAbout));
+        items.Add(TrayMenuItem.Separator);
         items.Add(new(L.T("Quit LLMTray"), () => _ = QuitAsync()));
         return items;
     }

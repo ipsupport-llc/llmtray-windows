@@ -186,17 +186,13 @@ try {
         Remove-Item $gemma -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    # The chat: opened from the window, a question typed and sent, the
+    # The chat (the app's window, adr/0014): a question typed and sent, the
     # answer streamed in and the chat saved with its title.
     try {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $np = [System.Windows.Automation.AutomationElement]::NameProperty
         $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $main = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
-        $main.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat'))).
-            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Start-Sleep -Seconds 3
-        $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat — LLMTray')))
+        $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
         if (-not $chatWindow) { throw 'the chat window did not open' }
         $box = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Message')))
         $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
@@ -224,13 +220,20 @@ try {
         throw
     }
 
-    # Each tab of the window, for a look at the layout.
+    # Settings, opened with the chat's gear, each tab photographed.
     try {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $nameProp = [System.Windows.Automation.AutomationElement]::NameProperty
-        $win = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
+        $chatWin = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray')))
-        foreach ($tab in 'Profiles', 'Tools', 'Server', 'General', 'Updates', 'About', 'Models') {
+        $chatWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Settings'))).
+            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 3
+        $win = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray Settings')))
+        if (-not $win) { throw 'Settings did not open from the chat' }
+        foreach ($tab in 'General', 'Models', 'Profiles', 'Tools', 'Server', 'Updates') {
             $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)))
             $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
             Start-Sleep -Seconds 2
