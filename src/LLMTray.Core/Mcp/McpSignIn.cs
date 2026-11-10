@@ -69,7 +69,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
 
     /// <summary>A renewal as a request takes it: a token, none (refused: sign in again), or a failure to say.</summary>
     public static string? Use(Renewal renewal) => renewal is { Token: null, Refused: false }
-        ? throw new McpException("the sign-in couldn't be renewed (its server didn't answer); try again in a moment", notSent: true)
+        ? throw new McpRenewalException()
         : renewal.Token;
 
     /// <summary>

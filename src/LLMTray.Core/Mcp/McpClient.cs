@@ -49,6 +49,9 @@ public sealed class McpAuthException(string message, int status, string? challen
     public string? Challenge { get; } = challenge;
 }
 
+/// <summary>The sign-in couldn't be renewed just now (its server didn't answer): not sent, tokens kept, not a crash.</summary>
+public sealed class McpRenewalException() : McpException("the sign-in couldn't be renewed (its server didn't answer); try again in a moment", notSent: true);
+
 /// <summary>
 /// A signed-in server's token for each request, and a refresh after a 401
 /// of <c>rejected</c> (null: the sign-in was refused, none to give). A

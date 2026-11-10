@@ -61,7 +61,8 @@ with the Mac app's rules unchanged:
   - `invalid_grant` means "Sign in again".
   - `invalid_client` drops a dynamic registration too.
   - A network failure keeps the tokens. The request fails as "couldn't be
-    renewed, try again", not as "sign in".
+    renewed, try again", not as "sign in", and it doesn't count as the
+    server crashing.
 - A server that answers 401 while running is stopped. Its tools are
   dropped until the user signs in.
 - **A 403 `insufficient_scope`** fails the call ("needs more access",
@@ -92,4 +93,6 @@ A client ID the user pastes, for servers that register no clients and
 need one's own app (Slack on the Mac). Signing in to command (stdio)
 servers, which take keys in their environment. Device-code flow. DNS
 rebinding is not checked: a host name is checked when the sign-in looks
-at it, not when it connects (as on the Mac).
+at it, not when it connects (as on the Mac). A public authorization page
+that redirects the browser elsewhere is the browser's to follow (RFC 9700
+§4.4 mix-up through redirects is left to the authorization server's `iss`).

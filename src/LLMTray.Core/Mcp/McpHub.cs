@@ -117,6 +117,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             }
             if (config.OAuth is { NeedsSignIn: false }) signIn?.MarkNeedsSignIn(config.Key);
             AddLog(r, "[LLMTray] the server asks to sign in");
+            // Its client goes now (not at the next need): no tools are offered from it meanwhile.
+            _ = Task.Run(() => StopAsync(config.Key));
         }
         Changed?.Invoke();
         return new McpAuthException(scope is { Length: > 0 }
@@ -139,7 +141,7 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         text = Blank(text, config);
         if (signIn?.Tokens(config.Key) is { } t)
         {
-            foreach (var secret in new[] { t.AccessToken, t.RefreshToken }.OfType<string>().Where(v => v.Length >= 8))
+            foreach (var secret in new[] { t.AccessToken, t.RefreshToken }.OfType<string>().Where(v => v.Length >= 4))
             {
                 text = text.Replace(secret, "••••", StringComparison.Ordinal);
             }
@@ -256,7 +258,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
                 AddLog(r, $"[LLMTray] didn't start: {said}");
                 lock (r.Log)
                 {
-                    if (e is not OperationCanceledException && !counted)
+                    // A sign-in server that didn't answer isn't this server crashing.
+                    if (e is not (OperationCanceledException or McpRenewalException) && !counted)
                     {
                         counted = true;
                         Crashed(r);
