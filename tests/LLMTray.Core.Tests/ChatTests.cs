@@ -254,6 +254,23 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ALowEffortTellsTheModelItsBudgetWithTheLatestMessageOnly()
+    {
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var options = new ChatOptions(null, Effort: ThinkingEffort.Low, Style: ThinkingStyle.Budget);
+        await chat.SendAsync("first", options);
+        await chat.SendAsync("second", options);
+        var last = bodies.Last(b => b["stream"]!.GetValue<bool>());
+        var messages = last["messages"]!.AsArray();
+        Assert.Equal("first", messages[0]!["content"]!.GetValue<string>());
+        Assert.StartsWith("[App note", messages[^1]!["content"]!.GetValue<string>());
+        Assert.EndsWith("\n\nsecond", messages[^1]!["content"]!.GetValue<string>());
+        Assert.Equal(512, last["thinking_budget_tokens"]!.GetValue<int>());
+        // Saved as the user wrote it.
+        Assert.Equal("second", chat.Messages[^2].Content);
+    }
+
+    [Fact]
     public async Task ATemporaryChatWritesNothing()
     {
         var store = new ChatStore(root);

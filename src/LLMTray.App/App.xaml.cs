@@ -236,6 +236,31 @@ public partial class App : Application
         if (newChat) chatWindow.NewChat();
     }
 
+    readonly Dictionary<string, (DateTime Written, LLMTray.Core.Chat.ThinkingStyle Style)> thinkingStyles = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether a model thinks, from the chat template in its GGUF header; cached until the file changes.</summary>
+    public LLMTray.Core.Chat.ThinkingStyle ThinkingStyleOf(ModelEntry model)
+    {
+        DateTime written;
+        try
+        {
+            written = File.GetLastWriteTimeUtc(model.FullPath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return LLMTray.Core.Chat.ThinkingStyle.None;
+        }
+        lock (thinkingStyles)
+        {
+            if (thinkingStyles.TryGetValue(model.FullPath, out var hit) && hit.Written == written) return hit.Style;
+        }
+        var template = LLMTray.Core.Licenses.GgufMetadata.ReadStrings(model.FullPath, ["tokenizer.chat_template"])
+            .GetValueOrDefault("tokenizer.chat_template");
+        var style = LLMTray.Core.Chat.Thinking.Style(template);
+        lock (thinkingStyles) thinkingStyles[model.FullPath] = (written, style);
+        return style;
+    }
+
     public void ShowLog()
     {
         if (Quitting) return;

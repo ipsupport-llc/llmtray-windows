@@ -46,7 +46,8 @@ sealed partial class ChatWindow : Window
         MinHeight = 40,
         VerticalContentAlignment = VerticalAlignment.Center,
     };
-    readonly ToggleButton thinking = new() { IsChecked = true, Content = L.T("Thinking") };
+    /// <summary>Thinking effort (adr/0011): shown for a model whose template thinks.</summary>
+    readonly DropDownButton thinking = new();
     readonly Button send = new();
     bool rendering;
     /// <summary>Keep the newest in view: on after sending, off when the user scrolls up.</summary>
@@ -87,6 +88,7 @@ sealed partial class ChatWindow : Window
             if (rendering) return;
             RenderStatus();
             RenderAttachNote();
+            RenderThinking();
         };
         regenerate.Click += (_, _) => _ = chat.RegenerateAsync(Options());
         send.Click += (_, _) => SendOrStop();
@@ -100,8 +102,20 @@ sealed partial class ChatWindow : Window
             e.Handled = true;
             SendOrStop();
         };
-        ToolTipService.SetToolTip(thinking, L.T("Let a thinking model reason before it answers"));
-        App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); };
+        ToolTipService.SetToolTip(thinking, L.T("Thinking effort: how long the model may think before it answers"));
+        var efforts = new MenuFlyout();
+        foreach (var effort in Enum.GetValues<ThinkingEffort>())
+        {
+            var item = new MenuFlyoutItem { Text = EffortName(effort) };
+            item.Click += (_, _) =>
+            {
+                App.Current.UpdateSettings(App.Current.Settings with { ThinkingEffort = effort });
+                RenderThinking();
+            };
+            efforts.Items.Add(item);
+        }
+        thinking.Flyout = efforts;
+        App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); };
         App.Current.ModelsChanged += RenderModels;
         AppWindow.Closing += (sender, args) =>
         {
@@ -135,8 +149,30 @@ sealed partial class ChatWindow : Window
 
         RenderModels();
         RenderStatus();
+        RenderThinking();
         RenderChats();
         Render();
+    }
+
+    static string EffortName(ThinkingEffort effort) => effort switch
+    {
+        ThinkingEffort.Off => L.T("Off"),
+        ThinkingEffort.Low => L.T("Low"),
+        ThinkingEffort.Medium => L.T("Medium"),
+        _ => L.T("High"),
+    };
+
+    /// <summary>The effort picker: only for a model that thinks; its label says the current effort.</summary>
+    void RenderThinking()
+    {
+        var app = App.Current;
+        var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
+        var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
+        var style = entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry);
+        thinking.Visibility = style == ThinkingStyle.None ? Visibility.Collapsed : Visibility.Visible;
+        var label = L.F("Thinking effort: {0}", EffortName(app.Settings.ThinkingEffort));
+        thinking.Content = label;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(thinking, label);
     }
 
     void AddKey(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
@@ -163,7 +199,8 @@ sealed partial class ChatWindow : Window
         var app = App.Current;
         // The model the answer comes from: the picked one, or whichever is loaded.
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
-        return new ChatOptions(picked, Thinking: thinking.IsChecked == true, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools);
+        return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
+            Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry));
     }
 
     void SendOrStop()
