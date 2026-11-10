@@ -42,6 +42,12 @@ public sealed class ChatMessage
     /// <summary>Tool calls this answer made.</summary>
     public int ToolCalls { get; set; }
 
+    /// <summary>The model's summary of earlier messages, put in their place by compaction (Mac isSummary).</summary>
+    public bool IsSummary { get; init; }
+
+    /// <summary>The chat no longer fits the model's context: compacting it lets the next answer through.</summary>
+    public bool ContextFull => Error?.Contains("exceeds the available context size", StringComparison.Ordinal) == true;
+
     /// <summary>What the Mac app wrote and this app doesn't show yet: saved back as it was.</summary>
     public PersistedMessage? Original { get; init; }
 }
@@ -125,6 +131,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Sources = [.. m.Sources],
                     Images = images,
                     ImageFilenames = names,
+                    IsSummary = m.IsSummary,
                     Original = m,
                 });
             }
@@ -137,7 +144,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null)
     {
         text = text.Trim();
-        if ((text.Length == 0 && images is not { Count: > 0 }) || Busy) return Task.CompletedTask;
+        if ((text.Length == 0 && images is not { Count: > 0 }) || Busy || Compacting) return Task.CompletedTask;
         lock (sync) Messages.Add(new ChatMessage
         {
             Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
@@ -148,7 +155,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// <summary>Asks again for the last answer.</summary>
     public Task RegenerateAsync(ChatOptions options)
     {
-        if (Busy) return Task.CompletedTask;
+        if (Busy || Compacting) return Task.CompletedTask;
         lock (sync)
         {
             if (Messages.Count == 0) return Task.CompletedTask;
@@ -488,6 +495,120 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         Changed?.Invoke();
     }
 
+    /// <summary>Removes a last answer that failed (before compacting and asking again).</summary>
+    public void DropFailedAnswer()
+    {
+        lock (sync)
+        {
+            if (Busy || Messages.Count == 0 || Messages[^1] is not { Role: "assistant", Error: not null }) return;
+            Messages.RemoveAt(Messages.Count - 1);
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>True while a compaction runs.</summary>
+    public bool Compacting { get; private set; }
+
+    const string CompactionPrompt =
+        "You are compacting an ongoing chat conversation to save context space. You'll be shown a "
+        + "chunk of earlier turns from the middle of the conversation (a beginning and an end are "
+        + "being kept as-is around it). Write a single concise paragraph -- not a list, not "
+        + "commentary addressed to anyone -- that preserves: what the user asked for or wanted; what "
+        + "was concluded, established as fact, or decided; concrete details a later turn might depend "
+        + "on again (names, numbers, file paths, chosen options, preferences); and the state of "
+        + "anything left unresolved. Write it as compressed background information for whoever "
+        + "continues this conversation next, not as a message to the user.";
+
+    /// <summary>
+    /// The part compaction replaces (Mac compactionRange): from the first
+    /// turn at or after <paramref name="keepStart"/> to the last turn
+    /// starting at or before count − <paramref name="keepEnd"/>; whole turns
+    /// only, and only up to the first message with pictures (they'd be gone).
+    /// An earlier summary is compacted again with the rest. Null when there's
+    /// nothing worth it.
+    /// </summary>
+    public static (int Start, int End)? CompactionRange(IReadOnlyList<ChatMessage> messages, int keepStart = 4, int keepEnd = 6)
+    {
+        bool IsTurnStart(int i) => messages[i].Role == "user";
+        if (messages.Count <= keepStart + keepEnd + 1) return null;
+        var start = Enumerable.Range(keepStart, messages.Count - keepStart).Cast<int?>()
+            .FirstOrDefault(i => IsTurnStart(i!.Value) || messages[i!.Value].IsSummary);
+        if (start is not int s) return null;
+        var end = messages.Count - keepEnd;
+        var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0);
+        if (media is int m) end = Math.Min(end, m);
+        while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
+        if (end <= s + 1 || end >= messages.Count) return null;
+        return (s, end);
+    }
+
+    /// <summary>
+    /// Replaces the middle of the chat with the model's summary of it (Mac
+    /// compactSession): a one-shot request, temperature 0.3, thinking off;
+    /// an empty or cut-off summary is refused. Null when done, else why not.
+    /// </summary>
+    public async Task<string?> CompactAsync(ChatOptions options, int keepStart = 4, int keepEnd = 6)
+    {
+        int mine;
+        (int Start, int End) range;
+        List<ChatMessage> middle;
+        lock (sync)
+        {
+            if (Busy || Compacting) return "The chat is busy.";
+            if (CompactionRange(Messages, keepStart, keepEnd) is not { } found) return "There's nothing to compact yet.";
+            range = found;
+            middle = Messages.GetRange(range.Start, range.End - range.Start);
+            mine = epoch;
+            Compacting = true;
+        }
+        Changed?.Invoke();
+        try
+        {
+            var transcript = string.Join("\n\n", middle.Select(m =>
+                $"{(m.Role == "user" ? "User" : "Assistant")}: {(m.Content.Length > 0 ? m.Content : m.Reasoning)}"));
+            var body = new JsonObject
+            {
+                ["messages"] = new JsonArray(
+                    new JsonObject { ["role"] = "system", ["content"] = CompactionPrompt },
+                    new JsonObject { ["role"] = "user", ["content"] = transcript }),
+                ["stream"] = false,
+                ["temperature"] = 0.3,
+                ["max_tokens"] = 2048,
+                ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false },
+            };
+            if (options.Model is not null) body["model"] = options.Model;
+            using var response = await http.PostAsync(new Uri(apiBase, "v1/chat/completions"),
+                new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return await ErrorOf(response, CancellationToken.None).ConfigureAwait(false);
+            var json = JsonNode.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var choice = json?["choices"]?[0];
+            var summary = choice?["message"]?["content"]?.GetValue<string>()?.Trim() ?? "";
+            // A thinking model can spend it all reasoning: an empty or cut-off summary isn't saved.
+            if (summary.Length == 0 || choice?["finish_reason"]?.GetValue<string>() == "length") return "The model's summary came back empty or cut off.";
+            lock (sync)
+            {
+                // Another chat meanwhile, or this one changed: the range is stale.
+                if (mine != epoch || Busy || range.End > Messages.Count || !Messages.GetRange(range.Start, range.End - range.Start).SequenceEqual(middle))
+                {
+                    return "The chat changed while it was being compacted.";
+                }
+                Messages.RemoveRange(range.Start, range.End - range.Start);
+                Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow });
+            }
+            Save();
+            return null;
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or InvalidOperationException or TaskCanceledException)
+        {
+            return $"Compaction failed: {e.Message}";
+        }
+        finally
+        {
+            lock (sync) Compacting = false;
+            Changed?.Invoke();
+        }
+    }
+
     public void Rename(string title)
     {
         lock (sync) Title = title.Trim();
@@ -687,6 +808,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
+                    IsSummary = m.IsSummary,
                     Seq = seq,
                 };
             }).ToList();

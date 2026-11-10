@@ -271,6 +271,36 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public void CompactionTakesWholeTurnsAndStopsAtPictures()
+    {
+        List<ChatMessage> chat = [];
+        for (var i = 0; i < 8; i++)
+        {
+            chat.Add(new ChatMessage { Role = "user", Content = $"q{i}" });
+            chat.Add(new ChatMessage { Role = "assistant", Content = $"a{i}" });
+        }
+        Assert.Equal((4, 10), ChatClient.CompactionRange(chat));
+        chat[6].Images.Add([1]);
+        Assert.Equal((4, 6), ChatClient.CompactionRange(chat));
+        Assert.Null(ChatClient.CompactionRange(chat.Take(10).ToList()));
+    }
+
+    [Fact]
+    public async Task CompactionPutsASummaryInTheMiddleAndSavesIt()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        for (var i = 0; i < 8; i++) await chat.SendAsync($"question {i}", new ChatOptions(null));
+        Assert.Null(await chat.CompactAsync(new ChatOptions(null)));
+        Assert.Equal(11, chat.Messages.Count);
+        Assert.True(chat.Messages[4].IsSummary);
+        Assert.Equal("\"Small Talk\"", chat.Messages[4].Content);
+        var compaction = bodies.Last(b => !b["stream"]!.GetValue<bool>());
+        Assert.Contains("User: question 2", compaction["messages"]![1]!["content"]!.GetValue<string>());
+        Assert.True(store.Load(chat.Id!.Value)!.Messages[4].IsSummary);
+    }
+
+    [Fact]
     public async Task ATemporaryChatWritesNothing()
     {
         var store = new ChatStore(root);

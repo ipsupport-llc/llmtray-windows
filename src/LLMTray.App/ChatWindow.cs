@@ -36,6 +36,7 @@ sealed partial class ChatWindow : Window
     readonly ScrollViewer scroller = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     readonly StackPanel messages = new() { Spacing = 14, MaxWidth = 860, Padding = new Thickness(24, 16, 24, 16) };
     readonly Button regenerate = new() { Content = L.T("Regenerate"), Visibility = Visibility.Collapsed };
+    readonly Button compact = new() { Content = L.T("Compact"), Visibility = Visibility.Collapsed };
     readonly TextBlock stats = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBox input = new()
     {
@@ -91,6 +92,8 @@ sealed partial class ChatWindow : Window
             RenderThinking();
         };
         regenerate.Click += (_, _) => _ = chat.RegenerateAsync(Options());
+        ToolTipService.SetToolTip(compact, L.T("Replace the middle of this chat with a summary the model writes, to save context"));
+        compact.Click += (_, _) => _ = CompactAsync(retry: false);
         send.Click += (_, _) => SendOrStop();
         input.PreviewKeyDown += (_, e) =>
         {
@@ -204,6 +207,24 @@ sealed partial class ChatWindow : Window
             Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry));
     }
 
+    /// <summary>Compacts the chat; with <paramref name="retry"/>, the question that didn't fit is asked again after.</summary>
+    async Task CompactAsync(bool retry)
+    {
+        var options = Options();
+        if (retry && chat.Messages.LastOrDefault() is { Role: "assistant", ContextFull: true })
+        {
+            // The failed answer goes first: the summary is made of what came before the question.
+            chat.DropFailedAnswer();
+        }
+        var problem = await chat.CompactAsync(options);
+        if (problem is not null)
+        {
+            DispatcherQueue.TryEnqueue(() => stats.Text = L.T(problem));
+            return;
+        }
+        if (retry) await chat.RegenerateAsync(options);
+    }
+
     void SendOrStop()
     {
         if (chat.Busy)
@@ -271,7 +292,8 @@ sealed partial class ChatWindow : Window
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         regenerate.Style = Ui.Resource<Style>("SubtleButtonStyle", regenerate.Style);
-        bar.Children.Add(regenerate);
+        compact.Style = regenerate.Style;
+        bar.Children.Add(Ui.Horizontal(regenerate, compact));
         stats.Foreground = Ui.Secondary;
         Grid.SetColumn(stats, 1);
         bar.Children.Add(stats);
@@ -371,7 +393,10 @@ sealed partial class ChatWindow : Window
         }
 
         var last = chat.Messages.LastOrDefault();
-        regenerate.Visibility = !chat.Busy && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
+        regenerate.Visibility = !chat.Busy && !chat.Compacting && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
+        compact.Visibility = !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null ? Visibility.Visible : Visibility.Collapsed;
+        compact.IsEnabled = !chat.Compacting;
+        compact.Content = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
         stats.Text = last is { Role: "assistant", Stats: { } s } && !last.Streaming && s.TokensPerSecond is double tps
             ? string.Create(System.Globalization.CultureInfo.CurrentCulture, $"{tps:0.0} tok/s")
             : "";
@@ -414,6 +439,21 @@ sealed partial class ChatWindow : Window
         }
 
         var stack = new StackPanel { Spacing = 6 };
+        if (message.IsSummary)
+        {
+            // Compaction's stand-in for the messages it replaced.
+            stack.Children.Add(Ui.Horizontal(new FontIcon { Glyph = "\uE8C6", FontSize = 12, Foreground = Ui.Secondary },
+                new TextBlock { Text = L.T("Summary of earlier messages"), FontSize = 12, Foreground = Ui.Secondary }));
+            stack.Children.Add(new Border
+            {
+                Child = new TextBlock { Text = message.Content, TextWrapping = TextWrapping.Wrap, FontStyle = Windows.UI.Text.FontStyle.Italic, IsTextSelectionEnabled = true, Foreground = Ui.Secondary },
+                BorderBrush = Ui.Stroke,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(14, 10, 14, 10),
+            });
+            return stack;
+        }
         var who = Ui.Horizontal(
             new Image { Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
             new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
@@ -473,6 +513,11 @@ sealed partial class ChatWindow : Window
         if (message.Error is { } error)
         {
             stack.Children.Add(Ui.Caption(error, Ui.Red));
+            // The chat outgrew the model's context: a summary of its middle makes room.
+            if (message.ContextFull && isLast && !chat.Busy && ChatClient.CompactionRange(chat.Messages.Take(chat.Messages.Count - 2).ToList()) is not null)
+            {
+                stack.Children.Add(Ui.Button(L.T("Compact the chat and try again"), () => _ = CompactAsync(retry: true), accent: true));
+            }
         }
 
         if (!message.Streaming && message.Sources.Count > 0)
