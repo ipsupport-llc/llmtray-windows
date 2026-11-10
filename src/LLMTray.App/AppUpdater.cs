@@ -246,8 +246,9 @@ sealed class AppUpdater
         {
             // The new installer, silent, once this process is gone; it closes
             // nothing else and starts nothing: the script starts the app.
-            // Setup replaces app\ only once the new files are in (adr/0007),
-            // so if it fails the launcher still starts the old version.
+            // Setup deletes nothing until its files are in (adr/0007); if it
+            // fails, the launcher starts whatever app\ holds and the update
+            // can be run again by hand.
             await RestartAsync(update,
                 $"start \"\" /wait \"{Cmd(file)}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
                 $"start \"\" \"{Cmd(Path.Combine(InstallRoot, "LLMTray.exe"))}\"");

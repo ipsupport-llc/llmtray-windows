@@ -102,7 +102,11 @@ begin
       begin
         Path := Dir + '\' + R.Name;
         if Rel = '' then Sub := R.Name else Sub := Rel + '\' + R.Name;
-        if (R.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        if (R.Attributes and $400) <> 0 then
+        begin
+          { A junction or link (FILE_ATTRIBUTE_REPARSE_POINT): never followed. }
+        end
+        else if (R.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
         begin
           Prune(Path, Sub);
           RemoveDir(Path);
