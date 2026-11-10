@@ -74,6 +74,8 @@ public sealed partial class MainWindow : Window
         };
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
+        App.Current.MemoryChanged += () => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
+        App.Current.DownloadsChanged += _ => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
         App.Current.ProfilesChanged += () =>
         {
             if (page is "profiles" or "models") RenderPageSoon();
@@ -189,6 +191,7 @@ public sealed partial class MainWindow : Window
             "server" => ServerPage(),
             "profiles" => ProfilesPage(),
             "tools" => ToolsPage(),
+            "memory" => MemoryPage(),
             "general" => GeneralPage(),
             "updates" => UpdatesPage(),
             "models" => ModelsPage(),

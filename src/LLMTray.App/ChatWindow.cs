@@ -232,7 +232,7 @@ sealed partial class ChatWindow : Window
         return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
             Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry),
             Count: (feature, model) => app.Telemetry.Record(feature, (model is null ? null : app.Library.Current.Resolve(model)?.FullPath) ?? app.Host.State.Model?.FullPath),
-            Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync);
+            Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync, Memory: app.Memory);
     }
 
     /// <summary>
@@ -1291,6 +1291,13 @@ sealed partial class ChatWindow : Window
                 var delete = new MenuFlyoutItem { Text = L.T("Delete") };
                 delete.Click += async (_, _) => await DeleteAsync(c);
                 menu.Items.Add(rename);
+                if (App.Current.Memory.Settings.Enabled)
+                {
+                    // "Don't remember this chat" (adr/0018): nothing more is learned from it.
+                    var remember = new ToggleMenuFlyoutItem { Text = L.T("Remember This Chat"), IsChecked = !App.Current.Memory.IsOptedOut(c.Id) };
+                    remember.Click += (_, _) => App.Current.Memory.SetOptedOut(c.Id, !remember.IsChecked, forgetLearned: false);
+                    menu.Items.Add(remember);
+                }
                 menu.Items.Add(delete);
                 item.ContextFlyout = menu;
                 chats.Items.Add(item);
@@ -1371,6 +1378,8 @@ sealed partial class ChatWindow : Window
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             if (c.Id == chat.Id) chat.New();
             store.Delete(c.Id);
+            // What was learned only from it goes too (adr/0018).
+            App.Current.Memory.ChatDeleted(c.Id);
         }
         catch (Exception)
         {

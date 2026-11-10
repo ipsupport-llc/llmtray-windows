@@ -78,6 +78,8 @@ public sealed class ProxyServer : IAsyncDisposable
 
     /// <summary>A request from an outside client (an app using the API), for usage statistics: counted, never looked into.</summary>
     public Action? OutsideRequest { get; set; }
+    /// <summary>Background work (memory's reading) that every request here preempts.</summary>
+    public Runtime.BackgroundWork? Background { get; set; }
 
     /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
     public const long MaxBodyBytes = 256L * 1024 * 1024;
@@ -129,6 +131,8 @@ public sealed class ProxyServer : IAsyncDisposable
         }
 
         if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke();
+        // A request: background work gives the model up now, and waits until it's done.
+        using var foreground = Background?.Foreground();
         var body = await ReadBodyAsync(request, context.RequestAborted).ConfigureAwait(false);
         ModelEntry? wanted = null;
         if (body.Count > 0)

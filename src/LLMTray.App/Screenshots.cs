@@ -25,7 +25,7 @@ static class Screenshots
             await Task.Delay(1500);
             if (app.Chat is { } chat) await SaveAsync(chat, Path.Combine(folder, "chat.png"));
             app.ShowSettings();
-            foreach (var tab in new[] { "general", "models", "profiles", "tools", "server", "updates" })
+            foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })
             {
                 app.SettingsWindow?.ShowPage(tab);
                 await Task.Delay(1200);

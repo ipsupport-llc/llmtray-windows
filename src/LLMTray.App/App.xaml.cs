@@ -58,6 +58,18 @@ public partial class App : Application
 
     /// <summary>The chat's tools (adr/0009); each profile switches them on.</summary>
     public LLMTray.Core.Tools.ToolBox Tools { get; private set; } = null!;
+    /// <summary>Memory between chats (adr/0018).</summary>
+    public LLMTray.Core.Memory.MemoryService Memory { get; private set; } = null!;
+    public LLMTray.Core.Runtime.EmbedServer Embedder { get; private set; } = null!;
+    public event Action? MemoryChanged;
+
+    /// <summary>Where the embedding model is kept: the app's data, not the models folder (it isn't a chat model).</summary>
+    public string EmbedderFile => Path.Combine(DataFolder, "embedder", LLMTray.Core.Runtime.EmbedModel.FileName);
+
+    /// <summary>Downloads the embedding model memory needs (about 600 MB), with the other downloads.</summary>
+    public void DownloadEmbedder() => Downloads.Enqueue(new DownloadJob(L.T("Embedding model for memory (bge-m3)"),
+        [new DownloadItem(LLMTray.Core.Runtime.EmbedModel.Url, EmbedderFile, LLMTray.Core.Runtime.EmbedModel.Size, LLMTray.Core.Runtime.EmbedModel.Sha256)]));
+
     /// <summary>The chat's folder tools (adr/0016).</summary>
     public LLMTray.Core.Folders.FolderTools Folders { get; private set; } = null!;
     public event Action? FoldersChanged;
@@ -233,6 +245,18 @@ public partial class App : Application
         // different threads can arrive out of order.
         Host.StateChanged += _ => dispatcher.TryEnqueue(() => OnHostChanged(Host.State));
 
+        // Memory (adr/0018): its reading is background work every request preempts; its vectors come
+        // from a second llama-server on the CPU.
+        var background = new LLMTray.Core.Runtime.BackgroundWork(Host);
+        Host.BeforeSwitch = background.Preempt;
+        Embedder = new LLMTray.Core.Runtime.EmbedServer(launcher, () => LlamaRuntime.Find(runtimeRoot).FirstOrDefault(b => b.Name == "cpu")?.ServerPath,
+            EmbedderFile, Path.Combine(DataFolder, "logs", "embed-server.log"));
+        Memory = new LLMTray.Core.Memory.MemoryService(Path.Combine(DataFolder, "memory"), background,
+            () => Embedder.IsInstalled ? Embedder : null, () => LLMTray.Core.Memory.MemoryService.LanguageName(L.Current), () => Host.State.Model?.Name);
+        Memory.Changed += () => dispatcher.TryEnqueue(() => MemoryChanged?.Invoke());
+        Downloads.Completed += _ => Memory.Poke();
+        Host.StateChanged += _ => Memory.Poke();
+
         Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),
             () => Settings.ShareUsage == true, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
             endpoint: Environment.GetEnvironmentVariable("LLMTRAY_TELEMETRY_ENDPOINT") is { Length: > 0 } dev && Uri.TryCreate(dev, UriKind.Absolute, out var devUri) ? devUri : null);
@@ -242,6 +266,7 @@ public partial class App : Application
         {
             ProfileOf = m => Profiles.ResolvedFor(m.FullPath),
             AppToken = appToken,
+            Background = background,
             OutsideRequest = () => Telemetry.Record(LLMTray.Core.Telemetry.TelemetryFeature.ApiServer, Host.State.Model?.FullPath),
         };
         try
@@ -625,6 +650,8 @@ public partial class App : Application
             if (control is not null) await control.DisposeAsync();
             if (proxy is not null) await proxy.DisposeAsync();
             if (Telemetry is not null) await Telemetry.DisposeAsync();
+            if (Memory is not null) await Memory.DisposeAsync();
+            if (Embedder is not null) await Embedder.DisposeAsync();
             await Host.DisposeAsync();
             // Servers are asked to end; the job ends whatever doesn't.
             if (Mcp is not null)

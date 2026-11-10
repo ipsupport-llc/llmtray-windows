@@ -146,6 +146,8 @@ public sealed class ModelHost : IAsyncDisposable
                     if (wanted is null) throw new NoModelLoadedException();
                     switching = true;
                     drained = active == 0 ? Task.CompletedTask : (idle ??= NewSignal()).Task;
+                    // Background work (memory's reading) gives its lease up now, not after its answer.
+                    BeforeSwitch?.Invoke();
                 }
                 try
                 {
@@ -171,6 +173,18 @@ public sealed class ModelHost : IAsyncDisposable
             {
                 gate.Release();
             }
+        }
+    }
+
+    /// <summary>Called when a model switch begins: background work is cancelled so the switch doesn't wait for it.</summary>
+    public Action? BeforeSwitch { get; set; }
+
+    /// <summary>The running server for <paramref name="wanted"/> if it's loaded and not switching; null otherwise. Never loads.</summary>
+    public Lease? TryAcquireLoaded(ModelEntry wanted)
+    {
+        lock (sync)
+        {
+            return !switching && running is { } r && Matches(r, wanted) ? Take(r) : null;
         }
     }
 

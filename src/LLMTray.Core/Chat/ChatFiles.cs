@@ -101,6 +101,9 @@ public sealed record ChatSessionFile
     public List<PersistedMessage> Messages { get; init; } = [];
     public int? LastSeq { get; init; }
 
+    /// <summary>The memory block this chat got (adr/0018); a name of its own, apart from the Mac's memorySnapshot.</summary>
+    public Memory.MemorySnapshot? WindowsMemorySnapshot { get; init; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Other { get; set; }
 }
