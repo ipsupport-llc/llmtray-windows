@@ -48,7 +48,8 @@ sealed class AppUpdater
             if (release is not null && ReleaseTag.TryParse("v" + release, out var tag, out _))
             {
                 Current = tag;
-                Kind = InstallKind.Portable;
+                // The installer leaves its uninstaller at the top (adr/0007).
+                Kind = File.Exists(Path.Combine(InstallRoot, "unins000.exe")) ? InstallKind.Installer : InstallKind.Portable;
             }
         }
     }
@@ -62,7 +63,88 @@ sealed class AppUpdater
     /// and the files never disagree.
     /// </summary>
     public bool ScoopManaged { get; } =
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "install.json")) && File.Exists(Path.Combine(AppContext.BaseDirectory, "manifest.json"));
+        File.Exists(Path.Combine(InstallRoot, "install.json")) && File.Exists(Path.Combine(InstallRoot, "manifest.json"));
+
+    /// <summary>
+    /// The top of the installed or unpacked LLMTray folder: the parent of
+    /// app\ (adr/0007), or the app's own folder in an older, flat layout.
+    /// </summary>
+    public static string InstallRoot { get; } = FindInstallRoot();
+
+    static string FindInstallRoot()
+    {
+        var dir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(dir);
+        // The launcher, the uninstaller or Scoop's record mark the top; any
+        // one is enough, so a lost launcher doesn't turn app\ into the top.
+        return string.Equals(Path.GetFileName(dir), "app", StringComparison.OrdinalIgnoreCase)
+            && parent is not null
+            && new[] { "LLMTray.exe", "unins000.exe", "install.json" }.Any(f => File.Exists(Path.Combine(parent, f)))
+            ? parent
+            : dir;
+    }
+
+    /// <summary>
+    /// The files the build put in app\, as paths relative to it
+    /// (app\files.txt, written by scripts/build-portable.ps1), or null.
+    /// </summary>
+    static List<string>? Inventory(string app)
+    {
+        try
+        {
+            return File.ReadAllLines(Path.Combine(app, "files.txt")).Where(l => l.Length > 0).ToList();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A portable copy updated from the flat layout (before adr/0007) still
+    /// has the old app's files at the top beside the new app\ folder. Only
+    /// the files the build lists in app\files.txt are removed there, and
+    /// only folders they leave empty: anything the user added stays.
+    /// LLMTray.dll at the top is the sign of the old layout and goes last,
+    /// so an interrupted tidy runs again at the next start.
+    /// </summary>
+    public void TidyOldLayout()
+    {
+        if (Kind != InstallKind.Portable || ScoopManaged) return;
+        var root = InstallRoot;
+        var app = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var marker = Path.Combine(root, "LLMTray.dll");
+        if (string.Equals(root, app, StringComparison.OrdinalIgnoreCase) || !File.Exists(marker)) return;
+        if (Inventory(app) is not { } files) return;
+        try
+        {
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var relative in files)
+            {
+                // The launcher has the old app's name; files.txt never leaves the folder.
+                if (relative.Equals("LLMTray.exe", StringComparison.OrdinalIgnoreCase) || relative.Equals("LLMTray.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                if (Path.IsPathRooted(relative) || relative.Split('\\', '/').Contains("..")) continue;
+                var file = Path.Combine(root, relative);
+                if (File.Exists(file)) File.Delete(file);
+                for (var dir = Path.GetDirectoryName(relative); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+                    folders.Add(dir);
+            }
+            // Deepest first, so a parent is empty once its children are gone.
+            foreach (var dir in folders.OrderByDescending(d => d.Length))
+            {
+                var path = Path.Combine(root, dir);
+                if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any()) Directory.Delete(path);
+            }
+            File.Delete(marker);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // In use or locked: tried again at the next start.
+        }
+    }
+
+    /// <summary>A path for a .cmd file: % would be read as a variable there.</summary>
+    static string Cmd(string path) => path.Replace("%", "%%");
 
     /// <summary>The running release; null in a development build.</summary>
     public ReleaseTag? Current { get; }
@@ -82,6 +164,7 @@ sealed class AppUpdater
     public void Start()
     {
         if (!CanUpdate) return;
+        TidyOldLayout();
         timer = dispatcher.CreateTimer();
         timer.Interval = TimeSpan.FromSeconds(15);
         timer.Tick += async (t, _) =>
@@ -159,6 +242,18 @@ sealed class AppUpdater
             await InstallPortableAsync(update, file);
             return;
         }
+        if (Kind == InstallKind.Installer)
+        {
+            // The new installer, silent, once this process is gone; it closes
+            // nothing else and starts nothing: the script starts the app.
+            // Setup deletes nothing until its files are in (adr/0007); if it
+            // fails, the launcher starts whatever app\ holds and the update
+            // can be run again by hand.
+            await RestartAsync(update,
+                $"start \"\" /wait \"{Cmd(file)}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
+                $"start \"\" \"{Cmd(Path.Combine(InstallRoot, "LLMTray.exe"))}\"");
+            return;
+        }
 
         Status = L.F("Installing LLMTray {0}…", update.Tag.DisplayVersion);
         Raise();
@@ -215,7 +310,12 @@ sealed class AppUpdater
             };
             lines.AddRange(afterExit);
             await File.WriteAllTextAsync(script, string.Join("\r\n", lines) + "\r\n");
-            Process.Start(new ProcessStartInfo("cmd.exe", $"/c \"{script}\"") { UseShellExecute = false, CreateNoWindow = true });
+            // /s: cmd drops only the outer quotes, so a path with & stays whole.
+            // The path comes through a variable, expanded once, so a % in it
+            // isn't read as another variable.
+            var start = new ProcessStartInfo("cmd.exe", "/s /c \"\"%LLMTRAY_RESTART%\"\"") { UseShellExecute = false, CreateNoWindow = true };
+            start.Environment["LLMTRAY_RESTART"] = script;
+            Process.Start(start);
         }
         catch (Exception e)
         {
@@ -236,7 +336,7 @@ sealed class AppUpdater
     /// </summary>
     async Task InstallPortableAsync(UpdateInfo update, string zip)
     {
-        var appDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var appDir = InstallRoot;
         var unpacked = Path.Combine(folder, update.Tag.DisplayVersion);
         try
         {
@@ -246,9 +346,23 @@ sealed class AppUpdater
             var root = File.Exists(Path.Combine(unpacked, "LLMTray.exe")) ? unpacked : Path.Combine(unpacked, "LLMTray");
             if (!File.Exists(Path.Combine(root, "LLMTray.exe"))) throw new IOException("the update has no LLMTray.exe");
             var exe = Path.Combine(appDir, "LLMTray.exe");
+            if (Directory.Exists(Path.Combine(root, "app")))
+            {
+                // app\ is ours: mirrored, so files a version dropped go too.
+                // At the top only the launcher and README.txt are copied;
+                // whatever else is there stays.
+                await RestartAsync(update,
+                    $"robocopy \"{Cmd(Path.Combine(root, "app"))}\" \"{Cmd(Path.Combine(appDir, "app"))}\" /MIR /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                    // 8 and up: some files didn't copy; the launcher stays as it was.
+                    "if errorlevel 8 goto run",
+                    $"robocopy \"{Cmd(root)}\" \"{Cmd(appDir)}\" LLMTray.exe README.txt /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                    ":run",
+                    $"start \"\" \"{Cmd(exe)}\"");
+                return;
+            }
             await RestartAsync(update,
-                $"robocopy \"{root}\" \"{appDir}\" /E /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
-                $"start \"\" \"{exe}\"");
+                $"robocopy \"{Cmd(root)}\" \"{Cmd(appDir)}\" /E /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"start \"\" \"{Cmd(exe)}\"");
         }
         catch (Exception e)
         {

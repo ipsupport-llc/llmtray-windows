@@ -171,11 +171,13 @@ jobs:
         shell: pwsh
         env:
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
-        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release $env:DISPLAY_VERSION -Zip "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}-portable.zip"
+        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release $env:DISPLAY_VERSION -Zip "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}-portable.zip" -Setup dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msix-portable-${{ matrix.platform }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   publish:
@@ -198,15 +200,17 @@ jobs:
           cat > notes.md <<'NOTES'
           Builds for Windows 11 (22H2 or later): `x64` for most PCs, `ARM64` for Snapdragon laptops.
 
-          **Installer (`.msix`).** Signed with a self-signed certificate until the app gets a public one, so the first install needs administrator rights:
+          **Setup (`-setup.exe`).** Installs LLMTray for your user only, without administrator rights, with a Start menu shortcut and an uninstaller in **Settings › Apps**. If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
+
+          **Package (`.msix`).** Signed with a self-signed certificate until the app gets a public one, so the first install needs administrator rights:
 
           1. Download `LLMTray-signing.cer`, open it, and choose **Install Certificate**.
           2. Pick **Local Machine**, then **Place all certificates in the following store**, **Trusted People**.
           3. Open the `.msix` for your PC and choose **Install**.
 
-          **Portable (`-portable.zip`).** No installation and no administrator rights: unpack it anywhere you can write to and run `LLMTray\LLMTray.exe`. If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
+          **Portable (`-portable.zip`).** No installation and no administrator rights: unpack it anywhere you can write to and run `LLMTray\LLMTray.exe` (the `app` folder beside it holds the rest). If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
 
-          Both update themselves: the app checks for new releases at start and on **Check for updates**.
+          All three update themselves: the app checks for new releases at start and on **Check for updates**.
           NOTES
           flags=()
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)

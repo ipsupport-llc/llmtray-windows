@@ -6,6 +6,7 @@
   </Configurations>
   <Folder Name="/src/">
     <Project Path="src/LLMTray.Core/LLMTray.Core.csproj" />
+    <Project Path="src/LLMTray.Launcher/LLMTray.Launcher.csproj" />
     <Project Path="src/LLMTray.App/LLMTray.App.csproj">
       <Platform Solution="Any CPU" Project="x64" />
       <Deploy />

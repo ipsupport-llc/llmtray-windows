@@ -6,8 +6,8 @@ namespace LLMTray.Core.Updates;
 
 public enum UpdateChannel { Stable, Beta }
 
-/// <summary>How this copy was installed: an MSIX package, or the portable ZIP (adr/0004).</summary>
-public enum InstallKind { Package, Portable }
+/// <summary>How this copy was installed: an MSIX package, the portable ZIP (adr/0004) or the installer (adr/0007).</summary>
+public enum InstallKind { Package, Portable, Installer }
 
 /// <summary>A release asset: the package for one architecture.</summary>
 public sealed record ReleaseAsset(string Name, Uri Url, long Size, string? Sha256);
@@ -48,11 +48,13 @@ public sealed class UpdateChecker(HttpClient http, string repository = "ipsuppor
             .Select(x => new UpdateInfo(x.r.Tag, x.r.Page, x.asset!))
             .FirstOrDefault();
 
-    /// <summary>The name release.yml gives a package or a portable ZIP.</summary>
-    public static string PackageName(ReleaseTag tag, string architecture, InstallKind kind = InstallKind.Package) =>
-        kind == InstallKind.Portable
-            ? $"LLMTray-{tag.DisplayVersion}-{architecture}-portable.zip"
-            : $"LLMTray-{tag.DisplayVersion}-{architecture}.msix";
+    /// <summary>The name release.yml gives a package, a portable ZIP or an installer.</summary>
+    public static string PackageName(ReleaseTag tag, string architecture, InstallKind kind = InstallKind.Package) => kind switch
+    {
+        InstallKind.Portable => $"LLMTray-{tag.DisplayVersion}-{architecture}-portable.zip",
+        InstallKind.Installer => $"LLMTray-{tag.DisplayVersion}-{architecture}-setup.exe",
+        _ => $"LLMTray-{tag.DisplayVersion}-{architecture}.msix",
+    };
 
     /// <summary>Every release, page by page (GitHub's Link rel="next"), at most 10 pages.</summary>
     async Task<IReadOnlyList<Release>> FetchAsync(CancellationToken cancellationToken)

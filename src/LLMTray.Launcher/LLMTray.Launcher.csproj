@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The small LLMTray.exe at the top of the portable folder and the install
+    folder (adr/0007): it starts app\LLMTray.exe, which sits beside the
+    hundreds of runtime files, and exits. Native AOT: no .NET beside it.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>LLMTray</AssemblyName>
+    <RootNamespace>LLMTray.Launcher</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <ApplicationIcon>..\LLMTray.App\Assets\AppIcon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+</Project>

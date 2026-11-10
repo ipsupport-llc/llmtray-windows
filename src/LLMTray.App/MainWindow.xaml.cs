@@ -453,6 +453,7 @@ public sealed partial class MainWindow : Window
         check.IsEnabled = !updater.Busy;
         var copy = updater.ScoopManaged ? L.F("Installed with Scoop, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Portable ? L.F("The portable copy, for {0}.", updater.Architecture)
+            : updater.Kind == InstallKind.Installer ? L.F("Installed with the LLMTray installer, for {0}.", updater.Architecture)
             : L.F("The installed copy, for {0}.", updater.Architecture);
         yield return Ui.Card(
             Ui.Row(L.T("Version"), copy, Ui.Value(updater.Current!.DisplayVersion)),

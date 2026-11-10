@@ -51,6 +51,7 @@ public class UpdateTests
         ]);
         Assert.Equal("LLMTray-0.2.0-beta.1-x64-portable.zip", UpdateChecker.Pick([release], UpdateChannel.Beta, "x64", InstallKind.Portable)!.Package.Name);
         Assert.EndsWith(".msix", UpdateChecker.Pick([release], UpdateChannel.Beta, "x64")!.Package.Name);
+        Assert.Equal("LLMTray-0.2.0-beta.1-ARM64-setup.exe", UpdateChecker.PackageName(t, "ARM64", InstallKind.Installer));
     }
 
     [Theory]

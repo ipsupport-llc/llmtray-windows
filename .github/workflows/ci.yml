@@ -211,7 +211,7 @@ jobs:
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Build the portable ZIP
         shell: pwsh
-        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip
+        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip -Setup out
       - name: Unpack and start it
         shell: pwsh
         run: |
@@ -232,6 +232,38 @@ jobs:
           if (-not $models) { throw 'the portable app did not serve the API' }
           Write-Host "portable API up; models: $($models.data.id -join ', ')"
           Stop-Process -Name LLMTray -Force
+      # The installer (adr/0007): installed silently for this user, started, the API checked, uninstalled.
+      - name: Install and start it
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem out -Filter *-setup.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs/LLMTray'
+          # Again over itself, as an update does: a file the build doesn't list goes.
+          'stale' | Set-Content (Join-Path $dir 'app/stale.dll')
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the second setup exited with $($p.ExitCode)" }
+          if (Test-Path (Join-Path $dir 'app/stale.dll')) { throw 'the update left a file of an older version' }
+          foreach ($f in 'LLMTray.exe', 'README.txt', 'unins000.exe', 'app/LLMTray.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "the install has no $f" }
+          }
+          Get-ChildItem $dir | Format-Table Name, Length
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'LLMTray.lnk'))) { throw 'no Start menu shortcut' }
+          Start-Process (Join-Path $dir 'LLMTray.exe')
+          $deadline = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep -Seconds 2
+            try { $models = Invoke-RestMethod http://127.0.0.1:8765/v1/models } catch { $models = $null }
+          } until ($models -or (Get-Date) -gt $deadline)
+          if (-not $models) { throw 'the installed app did not serve the API' }
+          Write-Host "installed API up"
+          Stop-Process -Name LLMTray -Force
+          Start-Sleep -Seconds 3
+          $u = Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstall exited with $($u.ExitCode)" }
+          Start-Sleep -Seconds 5
+          if (Test-Path (Join-Path $dir 'app/LLMTray.exe')) { throw 'the uninstaller left the app' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -239,4 +271,5 @@ jobs:
           path: |
             smoke/
             out/*.zip
+            out/*-setup.exe
           retention-days: 7

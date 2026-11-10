@@ -39,7 +39,9 @@ static class SignInStartup
             return task.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy;
         }
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        return key?.GetValue(RunValue) is string value && value.Contains(Environment.ProcessPath ?? "\0", StringComparison.OrdinalIgnoreCase);
+        return key?.GetValue(RunValue) is string value
+            && (value.Contains(Environment.ProcessPath ?? "\0", StringComparison.OrdinalIgnoreCase)
+                || value.Contains(Path.Combine(AppUpdater.InstallRoot, "LLMTray.exe"), StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Null when done; otherwise why it couldn't be.</summary>
@@ -65,7 +67,10 @@ static class SignInStartup
         try
         {
             using var key = Registry.CurrentUser.CreateSubKey(RunKey);
-            if (on) key.SetValue(RunValue, $"\"{Environment.ProcessPath}\" {BackgroundArgument}");
+            // The launcher at the top of the folder when there is one: it survives updates.
+            var launcher = Path.Combine(AppUpdater.InstallRoot, "LLMTray.exe");
+            var exe = File.Exists(launcher) ? launcher : Environment.ProcessPath;
+            if (on) key.SetValue(RunValue, $"\"{exe}\" {BackgroundArgument}");
             else key.DeleteValue(RunValue, throwOnMissingValue: false);
             return null;
         }
