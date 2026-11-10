@@ -310,7 +310,11 @@ sealed class AppUpdater
             lines.AddRange(afterExit);
             await File.WriteAllTextAsync(script, string.Join("\r\n", lines) + "\r\n");
             // /s: cmd drops only the outer quotes, so a path with & stays whole.
-            Process.Start(new ProcessStartInfo("cmd.exe", $"/s /c \"\"{script}\"\"") { UseShellExecute = false, CreateNoWindow = true });
+            // The path comes through a variable, expanded once, so a % in it
+            // isn't read as another variable.
+            var start = new ProcessStartInfo("cmd.exe", "/s /c \"\"%LLMTRAY_RESTART%\"\"") { UseShellExecute = false, CreateNoWindow = true };
+            start.Environment["LLMTRAY_RESTART"] = script;
+            Process.Start(start);
         }
         catch (Exception e)
         {
@@ -348,7 +352,10 @@ sealed class AppUpdater
                 // whatever else is there stays.
                 await RestartAsync(update,
                     $"robocopy \"{Cmd(Path.Combine(root, "app"))}\" \"{Cmd(Path.Combine(appDir, "app"))}\" /MIR /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                    // 8 and up: some files didn't copy; the launcher stays as it was.
+                    "if errorlevel 8 goto run",
                     $"robocopy \"{Cmd(root)}\" \"{Cmd(appDir)}\" LLMTray.exe README.txt /IS /IT /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                    ":run",
                     $"start \"\" \"{Cmd(exe)}\"");
                 return;
             }
