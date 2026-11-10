@@ -108,7 +108,9 @@ try {
         $window = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($name, 'LLMTray')))
         $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            (New-Object System.Windows.Automation.PropertyCondition($name, 'Get models…')))
+            (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($name, 'Get models…')),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))))
         $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Start-Sleep -Seconds 10
         Save-Screenshot '3-get-models'
@@ -149,7 +151,7 @@ try {
         if ((Invoke-RestMethod "$api/v1/models").data.id -contains $wanted) { throw "$wanted is listed before it was downloaded" }
 
         $window = $A::RootElement.FindFirst($Scope::Children, (New-Object System.Windows.Automation.PropertyCondition($NameProp, 'LLMTray')))
-        (Wait-Element $window { $args[0].Current.Name -eq 'Get models…' } 'Get models…').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        (Wait-Element $window { $args[0].Current.Name -eq 'Get models…' -and $args[0].Current.ControlType -eq [System.Windows.Automation.ControlType]::Button } 'Get models…').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         # The reachability check must be over, or it could switch the source back.
         Wait-Element $window { $args[0].Current.Name -like 'Hugging Face: *Kaggle: reachable*' } 'Kaggle reachable' | Out-Null
         (Wait-Element $window { $args[0].Current.Name -eq 'Kaggle' } 'Kaggle').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -227,7 +229,9 @@ try {
         $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
         $chatWin = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray')))
-        $chatWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Settings'))).
+        $chatWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Settings')),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))))).
             GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Start-Sleep -Seconds 3
         $win = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,

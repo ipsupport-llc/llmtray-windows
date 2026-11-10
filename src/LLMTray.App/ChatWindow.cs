@@ -1068,7 +1068,7 @@ sealed partial class ChatWindow : Window
             }
             var want = picked ?? loaded;
             model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
-            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models: Get models… in LLMTray") : L.T("Choose a model");
+            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
         }
         finally
         {
