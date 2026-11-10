@@ -223,7 +223,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
-          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--show-log', '--show-popover'
+          # Each window photographs itself into smoke/ui (adr/0014): the chat, Settings' tabs, About.
+          $shots = Join-Path (Get-Location) 'smoke/ui'
+          Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--screenshots', "`"$shots`""
           $deadline = (Get-Date).AddSeconds(90)
           do {
             Start-Sleep -Seconds 2
@@ -250,6 +252,11 @@ jobs:
           & $cli frobnicate 2>$null
           if ($LASTEXITCODE -ne 2) { throw "a bad command exited $LASTEXITCODE, not 2" }
           Write-Host "llmtray: $($status.text); $($listed.models.Count) models"
+          # The windows' own photographs (the last is About).
+          $until = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path (Join-Path $shots 'about.png')) -and -not (Test-Path (Join-Path $shots 'screenshots-failed.txt')) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+          Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
+          if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }
           Stop-Process -Name LLMTray -Force
           # The bad command's exit code 2 is still in $LASTEXITCODE: the step itself passed.
           exit 0

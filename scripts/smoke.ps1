@@ -108,7 +108,9 @@ try {
         $window = $auto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($name, 'LLMTray')))
         $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            (New-Object System.Windows.Automation.PropertyCondition($name, 'Get models…')))
+            (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($name, 'Get models…')),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))))
         $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Start-Sleep -Seconds 10
         Save-Screenshot '3-get-models'
@@ -134,8 +136,12 @@ try {
         function Wait-Element($root, [scriptblock]$match, [string]$what) {
             $deadline = (Get-Date).AddSeconds(30)
             do {
-                $found = $root.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
-                    Where-Object { & $match $_ } | Select-Object -First 1
+                # The tree changes under the walk (a dialog opening, a notice going): a failed walk is tried again.
+                try {
+                    $found = $root.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+                        Where-Object { try { & $match $_ } catch { $false } } | Select-Object -First 1
+                }
+                catch { $found = $null }
                 if ($found) { return $found }
                 Start-Sleep -Milliseconds 500
             } until ((Get-Date) -gt $deadline)
@@ -149,7 +155,7 @@ try {
         if ((Invoke-RestMethod "$api/v1/models").data.id -contains $wanted) { throw "$wanted is listed before it was downloaded" }
 
         $window = $A::RootElement.FindFirst($Scope::Children, (New-Object System.Windows.Automation.PropertyCondition($NameProp, 'LLMTray')))
-        (Wait-Element $window { $args[0].Current.Name -eq 'Get models…' } 'Get models…').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        (Wait-Element $window { $args[0].Current.Name -eq 'Get models…' -and $args[0].Current.ControlType -eq [System.Windows.Automation.ControlType]::Button } 'Get models…').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         # The reachability check must be over, or it could switch the source back.
         Wait-Element $window { $args[0].Current.Name -like 'Hugging Face: *Kaggle: reachable*' } 'Kaggle reachable' | Out-Null
         (Wait-Element $window { $args[0].Current.Name -eq 'Kaggle' } 'Kaggle').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -186,22 +192,29 @@ try {
         Remove-Item $gemma -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    # The chat: opened from the window, a question typed and sent, the
+    # The chat (the app's window, adr/0014): a question typed and sent, the
     # answer streamed in and the chat saved with its title.
     try {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $np = [System.Windows.Automation.AutomationElement]::NameProperty
         $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $main = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
-        $main.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat'))).
-            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Start-Sleep -Seconds 3
-        $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'Chat — LLMTray')))
+        $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
         if (-not $chatWindow) { throw 'the chat window did not open' }
-        $box = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Message')))
-        $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
-        $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Send'))).
-            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        # The window builds itself as it goes (notices come and go): each control is waited for.
+        function Find-InChat([string]$what, $type) {
+            $until = (Get-Date).AddSeconds(20)
+            do {
+                $found = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition($np, $what)),
+                    (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $type)))))
+                if (-not $found) { Start-Sleep -Milliseconds 500 }
+            } until ($found -or (Get-Date) -gt $until)
+            if (-not $found) { throw "no $what in the chat window" }
+            return $found
+        }
+        (Find-InChat 'Message' ([System.Windows.Automation.ControlType]::Edit)).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).
+            SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
+        (Find-InChat 'Send' ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $package = Get-AppxPackage IPSupportLLC.LLMTray
         $sessions = Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalState\sessions"
         $deadline = (Get-Date).AddMinutes(5)
@@ -224,14 +237,25 @@ try {
         throw
     }
 
-    # Each tab of the window, for a look at the layout.
+    # Settings, opened with the chat's gear, each tab photographed.
     try {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $nameProp = [System.Windows.Automation.AutomationElement]::NameProperty
-        $win = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
+        $chatWin = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray')))
-        foreach ($tab in 'Profiles', 'Tools', 'Server', 'General', 'Updates', 'About', 'Models') {
-            $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)))
+        $chatWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Settings')),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))))).
+            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Seconds 3
+        $win = $rootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray Settings')))
+        if (-not $win) { throw 'Settings did not open from the chat' }
+        foreach ($tab in 'General', 'Models', 'Profiles', 'Tools', 'Server', 'Updates') {
+            $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))))
             $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
             Start-Sleep -Seconds 2
             Save-Screenshot "tab-$($tab.ToLower())"

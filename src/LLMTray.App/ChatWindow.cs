@@ -32,7 +32,16 @@ sealed partial class ChatWindow : Window
     readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     readonly ComboBox model = new() { MinWidth = 220, PlaceholderText = L.T("Choose a model") };
     readonly Microsoft.UI.Xaml.Shapes.Ellipse dot = Ui.Dot(Ui.Gray, 8);
-    readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 260 };
+    readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    readonly ProgressRing loading = new() { Width = 12, Height = 12, IsActive = false };
+    /// <summary>Under the model picker: its size and where it runs, or why it isn't running.</summary>
+    readonly TextBlock facts = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+    readonly Button startStop = new();
+    readonly ColumnDefinition sideColumn = new() { Width = new GridLength(260) };
+    UIElement? sideFrame;
+    /// <summary>When it last lost the front: a click on the tray icon takes it first.</summary>
+    DateTime deactivatedAt;
+    bool foreground;
     readonly ScrollViewer scroller = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     readonly StackPanel messages = new() { Spacing = 14, MaxWidth = 860, Padding = new Thickness(24, 16, 24, 16) };
     readonly Button regenerate = new() { Content = L.T("Regenerate"), Visibility = Visibility.Collapsed };
@@ -62,7 +71,8 @@ sealed partial class ChatWindow : Window
 
     public ChatWindow()
     {
-        Title = L.T("Chat — LLMTray");
+        // The app's window (adr/0014): the chat.
+        Title = "LLMTray";
         SystemBackdrop = new MicaBackdrop();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         store = App.Current.Chats;
@@ -119,22 +129,35 @@ sealed partial class ChatWindow : Window
         }
         thinking.Flyout = efforts;
         App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); };
+        App.Current.ModelsChanged += RenderStatus;
         App.Current.ModelsChanged += () => { RenderModels(); RenderThinking(); };
         App.Current.ThinkingStylesChanged += RenderThinking;
+        // Closing the chat keeps LLMTray in the notification area; with no icon there, nothing
+        // would bring it back, so then it quits.
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
             args.Cancel = true;
-            sender.Hide();
+            if (App.Current.HasTrayIcon) sender.Hide();
+            else _ = App.Current.QuitAsync();
         };
 
         // Keys: Ctrl+N a new chat, Ctrl+F search, Esc stops an answer.
         AddKey(VirtualKey.N, VirtualKeyModifiers.Control, NewChat);
         AddKey(VirtualKey.F, VirtualKeyModifiers.Control, () => search.Focus(FocusState.Keyboard));
+        // Ctrl+, Settings, as on the Mac (⌘,).
+        AddKey((VirtualKey)0xBC, VirtualKeyModifiers.Control, () => App.Current.ShowSettings());
         AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, () => { if (chat.Busy) chat.Stop(); });
         Activated += (_, e) =>
         {
-            if (e.WindowActivationState != WindowActivationState.Deactivated) input.Focus(FocusState.Programmatic);
+            foreground = e.WindowActivationState != WindowActivationState.Deactivated;
+            if (foreground) input.Focus(FocusState.Programmatic);
+            else
+            {
+                deactivatedAt = DateTime.UtcNow;
+                // Lost to the taskbar (the tray icon's click), not to another app.
+                deactivatedToTaskbar = ForegroundIsTaskbar();
+            }
         };
         if (Content is FrameworkElement root)
         {
@@ -337,20 +360,54 @@ sealed partial class ChatWindow : Window
         sidebar.Children.Add(search);
         Grid.SetRow(chats, 2);
         sidebar.Children.Add(chats);
-        var sideFrame = new Border { Child = sidebar, Background = Ui.Resource<Brush>("LayerFillColorDefaultBrush", Ui.CardBackground), BorderBrush = Ui.Stroke, BorderThickness = new Thickness(0, 0, 1, 0) };
+        sideFrame = new Border { Child = sidebar, Background = Ui.Resource<Brush>("LayerFillColorDefaultBrush", Ui.CardBackground), BorderBrush = Ui.Stroke, BorderThickness = new Thickness(0, 0, 1, 0) };
 
-        // Header: title, model, status
-        var header = new Grid { Padding = new Thickness(20, 10, 16, 10), ColumnSpacing = 12 };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.Children.Add(title);
+        // Header (adr/0014, Mac ChatHeaderView): the chat and the server on one line,
+        // the model and what to do with it on the next, the notices under them.
+        var sideToggle = Ui.IconButton("\uE700", L.T("Show or hide the chats"), ToggleSidebar);
+        var settings = Ui.IconButton("\uE713", L.T("Settings"), () => App.Current.ShowSettings());
+        var server = Ui.Horizontal(dot, status, loading);
+        server.Spacing = 6;
+        ToolTipService.SetToolTip(server, L.T("Server log"));
+        var serverButton = new Button { Content = server, Style = Ui.Resource<Style>("SubtleButtonStyle", null!), Padding = new Thickness(8, 4, 8, 4) };
+        serverButton.Click += (_, _) => App.Current.ShowLog();
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(serverButton, L.T("Server log"));
+        var first = new Grid { ColumnSpacing = 6 };
+        first.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        first.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        first.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        first.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        first.Children.Add(sideToggle);
+        Grid.SetColumn(title, 1);
+        first.Children.Add(title);
+        Grid.SetColumn(serverButton, 2);
+        first.Children.Add(serverButton);
+        Grid.SetColumn(settings, 3);
+        first.Children.Add(settings);
+
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(model, L.T("Model"));
-        Grid.SetColumn(model, 1);
-        header.Children.Add(model);
-        var state = Ui.Horizontal(dot, status);
-        Grid.SetColumn(state, 2);
-        header.Children.Add(state);
+        var getModels = Ui.IconButton("\uE896", L.T("Get models…"), () => _ = GetModelsAsync());
+        startStop.Style = Ui.Resource<Style>("SubtleButtonStyle", null!);
+        startStop.Click += (_, _) => StartOrStop();
+        facts.Foreground = Ui.Secondary;
+        var second = new Grid { ColumnSpacing = 8 };
+        second.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        second.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        second.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        second.Children.Add(model);
+        Grid.SetColumn(facts, 1);
+        second.Children.Add(facts);
+        var actions = Ui.Horizontal(getModels, startStop);
+        actions.Spacing = 2;
+        Grid.SetColumn(actions, 2);
+        second.Children.Add(actions);
+
+        var header = new StackPanel { Padding = new Thickness(12, 8, 12, 8), Spacing = 6 };
+        header.Children.Add(first);
+        header.Children.Add(second);
+        var notices = new Notices(updates: true).Panel;
+        notices.Margin = new Thickness(16, 0, 16, 4);
+        header.Children.Add(notices);
 
         scroller.Content = messages;
         // Scrolling up to read stops following the answer; back at the end follows again.
@@ -406,7 +463,7 @@ sealed partial class ChatWindow : Window
         main.Children.Add(composer);
 
         var root = new Grid();
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(260) });
+        root.ColumnDefinitions.Add(sideColumn);
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         root.Children.Add(sideFrame);
         Grid.SetColumn(main, 1);
@@ -935,10 +992,86 @@ sealed partial class ChatWindow : Window
 
     void RenderStatus()
     {
-        var host = App.Current.Host.State;
+        var app = App.Current;
+        var host = app.Host.State;
         var (text, color) = Status.Of(host);
         status.Text = text;
         dot.Fill = color;
+        loading.IsActive = host.Status == HostStatus.Loading;
+        loading.Visibility = loading.IsActive ? Visibility.Visible : Visibility.Collapsed;
+        // What's running and where, or why not; the API's address when nothing is.
+        var problem = host.Status == HostStatus.Failed ? host.Message : app.ProxyError;
+        var running = host.Status is HostStatus.Running or HostStatus.Loading ? host.Model : null;
+        var line = new List<string>();
+        if (running is not null) line.Add(Ui.Size(running.SizeBytes));
+        if (Status.Device(host) is { } device) line.Add(device);
+        if (line.Count == 0) line.Add(L.F("API at {0}", Core.AppInfo.ApiBaseUrl));
+        facts.Text = problem ?? string.Join(" · ", line);
+        facts.Foreground = problem is null ? Ui.Secondary : Ui.Red;
+        ToolTipService.SetToolTip(facts, facts.Text);
+        // Start the picked model, or stop the one running.
+        var stop = running is not null;
+        startStop.Content = new FontIcon { Glyph = stop ? "\uE71A" : "\uE768", FontSize = 14 };
+        var tip = stop ? L.T("Unload the model") : L.T("Load the model");
+        ToolTipService.SetToolTip(startStop, tip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(startStop, tip);
+        startStop.IsEnabled = stop || PickedOrLast() is not null;
+    }
+
+    /// <summary>The model in the picker, or the last one loaded.</summary>
+    Core.Models.ModelEntry? PickedOrLast()
+    {
+        var catalog = App.Current.Library.Current;
+        var name = (model.SelectedItem as ComboBoxItem)?.Tag as string ?? App.Current.Settings.LastModel;
+        return name is null ? null : catalog.Resolve(name);
+    }
+
+    void StartOrStop()
+    {
+        var host = App.Current.Host.State;
+        if (host.Status is HostStatus.Running or HostStatus.Loading) _ = App.Current.StopAsync();
+        else if (PickedOrLast() is { } entry) _ = App.Current.LoadAsync(entry);
+    }
+
+    void ToggleSidebar()
+    {
+        var shown = sideColumn.Width.Value > 0;
+        sideColumn.Width = new GridLength(shown ? 0 : 260);
+        if (sideFrame is not null) sideFrame.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>In front now, or was until the click on the tray icon (the taskbar) took the front from it.</summary>
+    public bool IsForeground => foreground || (deactivatedToTaskbar && DateTime.UtcNow - deactivatedAt < TimeSpan.FromSeconds(2));
+
+    bool deactivatedToTaskbar;
+
+    static bool ForegroundIsTaskbar()
+    {
+        var name = new System.Text.StringBuilder(64);
+        return GetClassNameW(GetForegroundWindow(), name, name.Capacity) > 0
+            && name.ToString() is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow" or "TopLevelWindowForOverflowXamlIsland";
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int capacity);
+
+    /// <summary>Get models (Mac: the header's download button): the download window over the chat.</summary>
+    public async Task GetModelsAsync()
+    {
+        try
+        {
+            AppWindow.Show();
+            Activate();
+            var dialog = new DownloadDialog { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // Another dialog is open: the user finishes that one first.
+        }
     }
 
     void RenderModels()
@@ -955,12 +1088,14 @@ sealed partial class ChatWindow : Window
             }
             var want = picked ?? loaded;
             model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
-            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models: Get models… in LLMTray") : L.T("Choose a model");
+            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
         }
         finally
         {
             rendering = false;
         }
+        // Load follows the picker as it is now.
+        RenderStatus();
     }
 
     void RenderChats()

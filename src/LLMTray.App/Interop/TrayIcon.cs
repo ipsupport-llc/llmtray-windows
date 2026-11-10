@@ -3,8 +3,8 @@ using System.Runtime.InteropServices;
 
 namespace LLMTray.App.Interop;
 
-/// <summary>One line of the tray menu; <c>null</c> text is a separator.</summary>
-sealed record TrayMenuItem(string? Text, Action? Action = null, bool Checked = false, bool Enabled = true)
+/// <summary>One line of the tray menu; <c>null</c> text is a separator; with <see cref="Items"/>, a submenu.</summary>
+sealed record TrayMenuItem(string? Text, Action? Action = null, bool Checked = false, bool Enabled = true, IReadOnlyList<TrayMenuItem>? Items = null)
 {
     public static readonly TrayMenuItem Separator = new(Text: null);
 }
@@ -131,29 +131,44 @@ sealed class TrayIcon : IDisposable
     {
         var items = Menu?.Invoke() ?? [];
         if (items.Count == 0) return;
-        var menu = Native.CreatePopupMenu();
-        try
+        // Every command, in submenus too, by its id (1-based).
+        var commands = new List<TrayMenuItem>();
+        IntPtr Build(IReadOnlyList<TrayMenuItem> list)
         {
-            for (var i = 0; i < items.Count; i++)
+            var handle = Native.CreatePopupMenu();
+            foreach (var item in list)
             {
-                var item = items[i];
                 if (item.Text is null)
                 {
-                    Native.AppendMenuW(menu, Native.MF_SEPARATOR, UIntPtr.Zero, null);
+                    Native.AppendMenuW(handle, Native.MF_SEPARATOR, UIntPtr.Zero, null);
                     continue;
                 }
-                var flags = Native.MF_STRING | (item.Checked ? Native.MF_CHECKED : 0) | (item.Enabled ? 0 : Native.MF_GRAYED);
                 // & is the mnemonic marker in menus: shown literally.
-                Native.AppendMenuW(menu, flags, (UIntPtr)(i + 1), item.Text.Replace("&", "&&"));
+                var text = item.Text.Replace("&", "&&");
+                var flags = Native.MF_STRING | (item.Checked ? Native.MF_CHECKED : 0) | (item.Enabled ? 0 : Native.MF_GRAYED);
+                if (item.Items is { } children)
+                {
+                    var sub = Build(children);
+                    Native.AppendMenuW(handle, flags | Native.MF_POPUP, (nuint)sub, text);
+                    continue;
+                }
+                commands.Add(item);
+                Native.AppendMenuW(handle, flags, (UIntPtr)commands.Count, text);
             }
+            return handle;
+        }
+        var menu = Build(items);
+        try
+        {
             // Without this the menu doesn't close when the user clicks elsewhere.
             Native.SetForegroundWindow(window);
             var chosen = Native.TrackPopupMenuEx(menu, Native.TPM_RETURNCMD | Native.TPM_RIGHTBUTTON | Native.TPM_NONOTIFY, x, y, window, IntPtr.Zero);
             Native.PostMessageW(window, 0, IntPtr.Zero, IntPtr.Zero);
-            if (chosen > 0 && chosen <= items.Count) items[chosen - 1].Action?.Invoke();
+            if (chosen > 0 && chosen <= commands.Count) commands[chosen - 1].Action?.Invoke();
         }
         finally
         {
+            // Destroying the top menu destroys the submenus attached to it.
             Native.DestroyMenu(menu);
         }
     }
@@ -174,7 +189,7 @@ sealed class TrayIcon : IDisposable
         public const uint NIF_MESSAGE = 0x1, NIF_ICON = 0x2, NIF_TIP = 0x4, NIF_SHOWTIP = 0x80;
         public const uint NOTIFYICON_VERSION_4 = 4;
         public const uint WM_LBUTTONUP = 0x0202, WM_CONTEXTMENU = 0x007B, NIN_SELECT = 0x0400, NIN_KEYSELECT = 0x0401;
-        public const uint MF_STRING = 0x0, MF_GRAYED = 0x1, MF_CHECKED = 0x8, MF_SEPARATOR = 0x800;
+        public const uint MF_STRING = 0x0, MF_GRAYED = 0x1, MF_CHECKED = 0x8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
         public const uint TPM_RIGHTBUTTON = 0x2, TPM_NONOTIFY = 0x80, TPM_RETURNCMD = 0x100;
         public const uint IMAGE_ICON = 1, LR_LOADFROMFILE = 0x10;
         public const int SM_CXSMICON = 49, SM_CYSMICON = 50;

@@ -14,7 +14,7 @@ namespace LLMTray.App;
 public partial class App : Application
 {
     MainWindow? window;
-    PopoverWindow? popover;
+    AboutWindow? about;
     LogWindow? log;
     TrayIcon? tray;
     JobObjectLauncher? launcher;
@@ -183,22 +183,29 @@ public partial class App : Application
         control.Start();
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
-        tray.Activated += () => (popover ??= new PopoverWindow()).Toggle();
+        // A left click shows the chat, or hides it when it's already in front (Mac: the popover).
+        tray.Activated += ToggleChat;
         tray.Menu = TrayMenu;
         if (!tray.IsAdded) RetryTray();
 
-        // Started at sign-in: only the tray icon until the user opens the window.
+        // Started at sign-in: only the tray icon until the user opens the chat.
         // A fresh install opens the setup wizard instead (adr/0010).
         if (!SignInStartup.StartedInBackground())
         {
             if (LLMTray.Core.Setup.SetupWizard.ShouldOpen(Settings) && !Environment.GetCommandLineArgs().Contains("--no-setup")) ShowSetup();
-            else ShowWindow();
+            else ShowChat();
         }
         ListenForSecondLaunch();
-        // For screenshots in CI and for support: open the panel or the log at start.
+        // For screenshots in CI and for support: open the log or Settings at start, or photograph every window.
         var commandLine = Environment.GetCommandLineArgs();
         if (commandLine.Contains("--show-log")) ShowLog();
-        if (commandLine.Contains("--show-popover")) dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => (popover ??= new PopoverWindow()).Toggle());
+        if (commandLine.Contains("--show-settings")) ShowSettings();
+        // The tray panel became the chat (adr/0014): an old shortcut still shows something.
+        if (commandLine.Contains("--show-popover")) ShowChat();
+        if (Array.IndexOf(commandLine, "--screenshots") is var at and >= 0 && at + 1 < commandLine.Length)
+        {
+            _ = Screenshots.TakeAsync(commandLine[at + 1]);
+        }
         Updater.Start();
 
         if (Settings.LoadLastModelOnStart && Settings.LastModel is { } last && Library.Current.Resolve(last) is { } model)
@@ -207,10 +214,11 @@ public partial class App : Application
         }
     }
 
-    public void ShowWindow() => ShowWindow(null);
+    /// <summary>The app's window (adr/0014): the chat.</summary>
+    public void ShowWindow() => ShowChat();
 
-    /// <summary>Opens the window, on a tab if given, and the download window if asked.</summary>
-    public void ShowWindow(string? page, bool getModels = false)
+    /// <summary>Settings, on a tab if given, with the download window over it if asked.</summary>
+    public void ShowSettings(string? page = null, bool getModels = false)
     {
         if (Quitting) return;
         window ??= new MainWindow();
@@ -218,6 +226,22 @@ public partial class App : Application
         window.Activate();
         if (page is not null) window.ShowPage(page);
         if (getModels) _ = window.GetModelsAsync();
+    }
+
+    internal MainWindow? SettingsWindow => window;
+
+    internal AboutWindow? About => about;
+
+    public void ShowAbout()
+    {
+        if (Quitting) return;
+        if (about is null)
+        {
+            about = new AboutWindow();
+            about.Closed += (_, _) => about = null;
+        }
+        about.AppWindow.Show();
+        about.Activate();
     }
 
     ChatWindow? chatWindow;
@@ -241,9 +265,8 @@ public partial class App : Application
     internal void SetupClosed(SetupWindow closed, bool showWindow)
     {
         if (setupWindow == closed) setupWindow = null;
-        // After a first run: the window with the models and settings, open
-        // before the wizard goes.
-        if (showWindow) ShowWindow();
+        // After a first run: the chat, open before the wizard goes.
+        if (showWindow) ShowChat();
     }
 
     /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it; nulls forget it.</summary>
@@ -258,6 +281,19 @@ public partial class App : Application
         chatWindow.AppWindow.Show();
         chatWindow.Activate();
         if (newChat) chatWindow.NewChat();
+    }
+
+    internal ChatWindow? Chat => chatWindow;
+
+    /// <summary>The tray icon's left click: the chat shown, or hidden when it's already in front.</summary>
+    void ToggleChat()
+    {
+        if (chatWindow is { } open && open.AppWindow.IsVisible && open.IsForeground)
+        {
+            open.AppWindow.Hide();
+            return;
+        }
+        ShowChat();
     }
 
     readonly Dictionary<string, (DateTime Written, LLMTray.Core.Chat.ThinkingStyle Style)> thinkingStyles = new(StringComparer.OrdinalIgnoreCase);
@@ -401,26 +437,51 @@ public partial class App : Application
         catch (UnauthorizedAccessException) { }
     }
 
+    /// <summary>
+    /// The tray icon's right-click menu (adr/0014), the Mac quick menu's
+    /// lines: what's running, the chat, a model, the server, Settings, Help,
+    /// About, Quit.
+    /// </summary>
     IReadOnlyList<TrayMenuItem> TrayMenu()
     {
         var state = Host.State;
-        var items = new List<TrayMenuItem> { new(L.T("Chat"), () => ShowChat()), new(L.T("Open LLMTray"), ShowWindow), new(L.T("Set Up LLMTray…"), ShowSetup), TrayMenuItem.Separator };
-        var models = Library.Rescan().Models;
-        foreach (var model in models.Take(20))
+        var running = state.Status is HostStatus.Running or HostStatus.Loading;
+        var (status, _) = Status.Of(state);
+        var items = new List<TrayMenuItem>
         {
-            var loaded = state.Model?.FullPath == model.FullPath && state.Status is HostStatus.Running or HostStatus.Loading;
-            items.Add(new(model.Name, () => _ = LoadAsync(model), Checked: loaded));
-        }
-        if (models.Count == 0) items.Add(new(L.T("No models in the models folder"), Enabled: false));
+            // The status line: the log when something went wrong.
+            new(status, state.Status == HostStatus.Failed ? ShowLog : null, Enabled: state.Status == HostStatus.Failed),
+            TrayMenuItem.Separator,
+            new(L.T("Open Chat"), () => ShowChat()),
+            new(L.T("New Chat"), () => ShowChat(newChat: true)),
+        };
+        var models = Library.Rescan().Models;
+        var choices = models.Take(30).Select(model => new TrayMenuItem(model.Name, () => _ = LoadAsync(model),
+            Checked: running && state.Model?.FullPath == model.FullPath)).ToList();
+        if (models.Count == 0) choices.Add(new(L.T("No models in the models folder"), Enabled: false));
+        choices.Add(TrayMenuItem.Separator);
+        choices.Add(new(L.T("Get Models…"), () => { ShowChat(); _ = chatWindow?.GetModelsAsync(); }));
+        items.Add(new(L.T("Select Model"), Items: choices));
         items.Add(TrayMenuItem.Separator);
-        items.Add(new(L.T("Stop the model"), () => _ = StopAsync(), Enabled: state.Status is HostStatus.Running or HostStatus.Loading));
-        items.Add(new(L.T("Server log"), ShowLog));
+        if (running) items.Add(new(L.T("Stop the model"), () => _ = StopAsync()));
+        else if (Settings.LastModel is { } last && Library.Current.Resolve(last) is { } lastModel) items.Add(new(L.F("Load {0}", lastModel.Name), () => _ = LoadAsync(lastModel)));
+        items.Add(new(L.T("Server Log…"), ShowLog));
+        items.Add(TrayMenuItem.Separator);
+        items.Add(new(L.T("Settings…"), () => ShowSettings()));
+        var help = new List<TrayMenuItem>();
         if (Updater.CanUpdate)
         {
-            items.Add(Updater.Available is { } update
+            help.Add(Updater.Available is { } update
                 ? new(L.F("Install LLMTray {0}", update.Tag.DisplayVersion), () => _ = Updater.InstallAsync(), Enabled: !Updater.Busy)
-                : new(L.T("Check for updates"), () => { ShowWindow(); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
+                : new(L.T("Check for Updates…"), () => { ShowSettings("updates"); _ = Updater.CheckAsync(manual: true); }, Enabled: !Updater.Busy));
         }
+        help.Add(new(L.T("Set Up LLMTray…"), ShowSetup));
+        help.Add(TrayMenuItem.Separator);
+        help.Add(new(L.T("Report a Bug…"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/issues/new")));
+        help.Add(new(L.T("LLMTray on GitHub"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows")));
+        items.Add(new(L.T("Help"), Items: help));
+        items.Add(new(L.T("About LLMTray"), ShowAbout));
+        items.Add(TrayMenuItem.Separator);
         items.Add(new(L.T("Quit LLMTray"), () => _ = QuitAsync()));
         return items;
     }
@@ -452,7 +513,7 @@ public partial class App : Application
         {
             // Closing the job ends every child, a model still loading included.
             launcher?.Dispose();
-            popover?.Close();
+            about?.Close();
             log?.Close();
             chatWindow?.Close();
             window?.Close();

@@ -183,4 +183,23 @@ static class Ui
         >= 1L << 20 => string.Format(CultureInfo.CurrentCulture, "{0:0} MB", bytes / (double)(1L << 20)),
         _ => string.Format(CultureInfo.CurrentCulture, "{0} KB", bytes / 1024),
     };
+
+    /// <summary>A window of <paramref name="width"/> × <paramref name="height"/> DIPs in the middle of its screen, never bigger than it.</summary>
+    public static void Center(Window window, int width, int height, int minWidth = 0, int minHeight = 0)
+    {
+        var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(window)) / 96.0;
+        if (scale <= 0) scale = 1;
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary).WorkArea;
+        var w = (int)Math.Min(width * scale, area.Width * 0.95);
+        var h = (int)Math.Min(height * scale, area.Height * 0.95);
+        window.AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h));
+        if (window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter && minWidth > 0)
+        {
+            presenter.PreferredMinimumWidth = (int)Math.Min(minWidth * scale, w);
+            presenter.PreferredMinimumHeight = (int)Math.Min(minHeight * scale, h);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern uint GetDpiForWindow(IntPtr hwnd);
 }
