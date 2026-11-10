@@ -36,6 +36,8 @@ sealed class SetupWindow : Window
     bool webToolsTouched;
     bool? signIn;
     bool checkUpdates = App.Current.Settings.CheckForUpdates;
+    /// <summary>Usage statistics, shown as they are (on for a new install); Finish applies a change.</summary>
+    bool shareUsage = App.Current.Settings.ShareUsage == true;
     UpdateChannel channel = App.Current.Updater.Channel;
     string? pickedTitle;
     string? hardware;
@@ -413,10 +415,13 @@ sealed class SetupWindow : Window
         channelBox.Items.Add(new ComboBoxItem { Content = L.T("Beta") });
         channelBox.SelectedIndex = channel == UpdateChannel.Beta ? 1 : 0;
         channelBox.SelectionChanged += (_, _) => channel = channelBox.SelectedIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
+        var usage = Ui.Toggle(shareUsage, on => shareUsage = on, L.T("Share anonymous usage statistics"));
         body.Children.Add(Ui.Card(
             Ui.Row(L.T("Start LLMTray when you sign in"), L.T("It starts in the notification area, without opening this window."), startup),
             Ui.Row(L.T("Check for updates automatically"), null, check),
-            Ui.Row(L.T("Update channel"), L.T("Beta: pre-release builds with features still being tested."), channelBox)));
+            Ui.Row(L.T("Update channel"), L.T("Beta: pre-release builds with features still being tested."), channelBox),
+            // The first report goes only after today ends: there's time to turn it off.
+            Ui.Row(L.T("Share anonymous usage statistics"), MainWindow.UsageConsent, usage)));
     }
 
     void Done()
@@ -447,6 +452,7 @@ sealed class SetupWindow : Window
         }
         if (signIn is bool on) _ = SignInStartup.SetAsync(on);
         if (checkUpdates != app.Settings.CheckForUpdates) app.UpdateSettings(app.Settings with { CheckForUpdates = checkUpdates });
+        if (shareUsage != (app.Settings.ShareUsage == true)) app.SetShareUsage(shareUsage);
         if (channel != app.Updater.Channel) app.Updater.SetChannel(channel);
         Close(applyChoices: true);
         // Really closed, not hidden: nothing of it stays behind.

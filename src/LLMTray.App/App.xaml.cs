@@ -97,6 +97,69 @@ public partial class App : Application
     /// <summary>For the app's own requests to its local API: no proxy, no timeout (answers stream).</summary>
     public HttpClient Local { get; } = new(new SocketsHttpHandler { UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
 
+    /// <summary>The app's own requests to its API carry this, so usage statistics count only outside clients' (adr/0019).</summary>
+    readonly string appToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+
+    /// <summary>Anonymous daily usage statistics (adr/0019).</summary>
+    public LLMTray.Core.Telemetry.TelemetryService Telemetry { get; private set; } = null!;
+
+    /// <summary>Usage statistics on or off. On: a new random install id. Off: the id and what wasn't sent are gone.</summary>
+    public void SetShareUsage(bool on)
+    {
+        // Off: the setting first, so nothing counts after the counters go. On: from nothing, as a new install.
+        if (!on) UpdateSettings(Settings with { ShareUsage = false, UsageId = null });
+        Telemetry.Forget();
+        if (on)
+        {
+            UpdateSettings(Settings with { ShareUsage = true, UsageId = Guid.NewGuid() });
+            Telemetry.Touch();
+        }
+    }
+
+    /// <summary>Reset ID: another random install id; what wasn't sent under the old one goes.</summary>
+    public void ResetUsageId()
+    {
+        // The new id first: a count from now on is the new install's.
+        UpdateSettings(Settings with { UsageId = Guid.NewGuid() });
+        Telemetry.Forget();
+        Telemetry.Touch();
+    }
+
+    /// <summary>This PC and this build, as a report says them: coarse, nothing that names the user.</summary>
+    LLMTray.Core.Telemetry.TelemetryEnvironment UsageEnvironment()
+    {
+        var os = Environment.OSVersion.Version;
+        var arch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            System.Runtime.InteropServices.Architecture.X64 => "amd64",
+            _ => "other",
+        };
+        var memory = (int)Math.Round(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1_073_741_824.0);
+        return new(Updater.Current?.DisplayVersion ?? "0.0.0-dev", $"{os.Major}.{os.Minor}.{os.Build}", memory, L.Current, arch);
+    }
+
+    /// <summary>LLMTRAY_TELEMETRY_ENDPOINT, for development: only https, or http to this PC.</summary>
+    static Uri? DevelopmentEndpoint() =>
+        Environment.GetEnvironmentVariable("LLMTRAY_TELEMETRY_ENDPOINT") is { Length: > 0 } dev && Uri.TryCreate(dev, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)) ? uri : null;
+
+    /// <summary>Its own client: the system proxy, no cookies, a short timeout, an honest agent.</summary>
+    static HttpClient CreateTelemetryClient()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            UseProxy = true,
+            DefaultProxyCredentials = CredentialCache.DefaultCredentials,
+            UseCookies = false,
+            AllowAutoRedirect = false,
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"LLMTray-Windows/{typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0"}");
+        return client;
+    }
+
     public event Action? ModelsChanged;
     public event Action<DownloadState>? DownloadsChanged;
     public event Action<HostState>? HostChanged;
@@ -111,7 +174,14 @@ public partial class App : Application
         DispatcherShutdownMode = DispatcherShutdownMode.OnExplicitShutdown;
         DataFolder = FindDataFolder();
         settingsStore = new SettingsStore(Path.Combine(DataFolder, "settings.json"));
+        // No settings yet: a new install (adr/0019: usage statistics on, shown in the wizard and Settings).
+        var firstRun = !File.Exists(settingsStore.File);
         Settings = settingsStore.Load();
+        if (Settings.ShareUsage is null)
+        {
+            // An install from before that never chose: an update never turns it on.
+            UpdateSettings(Settings with { ShareUsage = firstRun, UsageId = firstRun ? Guid.NewGuid() : null });
+        }
         // Before any window or menu: their text comes from here (adr/0006).
         L.Load(Settings.Language);
         if (Settings.ModelsFolder is null) Directory.CreateDirectory(AppPaths.DefaultModelsFolder);
@@ -130,6 +200,11 @@ public partial class App : Application
         Downloads.Completed += job =>
         {
             Library.Rescan();
+            // A model downloaded: a count only (adr/0019). Not the embedding model memory uses.
+            if (job.Items.Any(i => i.Destination.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) && !i.Destination.Contains("embedder", StringComparison.OrdinalIgnoreCase)))
+            {
+                Telemetry?.Record(LLMTray.Core.Telemetry.TelemetryFeature.ModelDownload);
+            }
             // The wizard's chat model: loaded once it's here.
             if (loadAfterDownload is { } wanted && wanted.Job == job)
             {
@@ -193,7 +268,22 @@ public partial class App : Application
         Downloads.Completed += _ => Memory.Poke();
         Host.StateChanged += _ => Memory.Poke();
 
-        proxy = new ProxyServer(Host, Library) { ProfileOf = m => Profiles.ResolvedFor(m.FullPath), Background = background };
+        Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),
+            () => Settings is { ShareUsage: true, UsageId: not null }, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
+            endpoint: DevelopmentEndpoint(),
+            // Nothing goes before the setup wizard (which shows the choice) was finished or closed once.
+            maySend: () => Settings.SetupCompleted is not null);
+        // Off: whatever a crash left behind goes too.
+        if (Settings.ShareUsage != true) Telemetry.Forget();
+        Telemetry.Touch();
+        Local.DefaultRequestHeaders.Add(ProxyServer.AppHeader, appToken);
+        proxy = new ProxyServer(Host, Library)
+        {
+            ProfileOf = m => Profiles.ResolvedFor(m.FullPath),
+            AppToken = appToken,
+            Background = background,
+            OutsideRequest = model => Telemetry.Record(LLMTray.Core.Telemetry.TelemetryFeature.ApiServer, model.FullPath),
+        };
         try
         {
             await proxy.StartAsync();
@@ -574,6 +664,7 @@ public partial class App : Application
             Program.ShowEvent.Set();
             if (control is not null) await control.DisposeAsync();
             if (proxy is not null) await proxy.DisposeAsync();
+            if (Telemetry is not null) await Telemetry.DisposeAsync();
             if (Memory is not null) await Memory.DisposeAsync();
             if (Embedder is not null) await Embedder.DisposeAsync();
             await Host.DisposeAsync();

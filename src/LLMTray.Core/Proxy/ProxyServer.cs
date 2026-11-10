@@ -22,7 +22,7 @@ public sealed class ProxyServer : IAsyncDisposable
     static readonly HashSet<string> HopByHop = new(StringComparer.OrdinalIgnoreCase)
     {
         "Connection", "Keep-Alive", "Proxy-Connection", "Transfer-Encoding", "Upgrade", "TE", "Trailer",
-        "Host", "Content-Length", "Authorization",
+        "Host", "Content-Length", "Authorization", AppHeader,
     };
 
     /// <summary>
@@ -70,6 +70,14 @@ public sealed class ProxyServer : IAsyncDisposable
     /// </summary>
     public Func<ModelEntry, Profiles.ResolvedProfile>? ProfileOf { get; set; }
 
+    /// <summary>The header the app's own requests carry, with <see cref="AppToken"/>: anything else is an outside client.</summary>
+    public const string AppHeader = "X-LLMTray-App";
+
+    /// <summary>A per-run secret the app's own requests carry.</summary>
+    public string? AppToken { get; set; }
+
+    /// <summary>A request from an outside client (an app using the API), for usage statistics: counted, never looked into.</summary>
+    public Action<ModelEntry>? OutsideRequest { get; set; }
     /// <summary>Background work (memory's reading) that every request here preempts.</summary>
     public Runtime.BackgroundWork? Background { get; set; }
 
@@ -179,6 +187,8 @@ public sealed class ProxyServer : IAsyncDisposable
 
         using (lease)
         {
+            // An outside client's request that reached a model: counted (its family only), never looked into.
+            if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke(lease.Model);
             await ForwardAsync(context, lease, body).ConfigureAwait(false);
         }
     }

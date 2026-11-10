@@ -231,6 +231,7 @@ sealed partial class ChatWindow : Window
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
         return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
             Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry),
+            Count: (feature, model) => app.Telemetry.Record(feature, (model is null ? null : app.Library.Current.Resolve(model)?.FullPath) ?? app.Host.State.Model?.FullPath),
             Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync, Memory: app.Memory);
     }
 
