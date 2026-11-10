@@ -16,6 +16,8 @@ sealed class FakeMcpServer : IMcpTransport
     public bool HangStart;
     /// <summary>Takes the call, then goes away without answering.</summary>
     public bool DieOnCall;
+    /// <summary>Runs the call, then answers with content that can't be read.</summary>
+    public bool BadResult;
     public string ToolDescription = "Echo the text back.";
     public string SecondTool = "";
 
@@ -50,6 +52,7 @@ sealed class FakeMcpServer : IMcpTransport
                     .. SecondTool.Length == 0 ? Array.Empty<JsonNode>() : [new JsonObject { ["name"] = "other", ["description"] = SecondTool }],
                 ]),
             },
+            "tools/call" when BadResult => new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = 42, ["text"] = "done" }) },
             "tools/call" when !Hang => new JsonObject
             {
                 ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "echo: " + message["params"]!["arguments"]!["text"] }),
@@ -215,7 +218,10 @@ public sealed class McpTests : IDisposable
         await hub.EnableAsync(hub.Current(added.Key)!, default);
         Assert.Empty(await hub.DeclaredAsync(new HashSet<string>(), default));
 
-        await hub.AcceptToolAsync(hub.Current(added.Key)!, "other", default);
+        var other = (await hub.ToolsAsync(added, default)).Single(t => t.Name == "other");
+        // What the user saw has changed again: not accepted.
+        await Assert.ThrowsAsync<McpException>(() => hub.AcceptToolAsync(hub.Current(added.Key)!, "other", "old", default));
+        await hub.AcceptToolAsync(hub.Current(added.Key)!, "other", other.DefinitionHash, default);
         Assert.Equal("fake_other", Assert.Single(await hub.DeclaredAsync(new HashSet<string>(), default)).ModelName);
     }
 
@@ -227,6 +233,9 @@ public sealed class McpTests : IDisposable
         await using var hub = new McpHub(store, new HttpClient(), "test", root, transport: _ => fake);
         await hub.ReviewAndEnableAsync(store.Add(new McpServerConfig { Name = "Fake", Command = "fake" }), default);
         var echo = Assert.Single(await hub.DeclaredAsync(new HashSet<string>(), default));
+        fake.BadResult = true;
+        await Assert.ThrowsAsync<McpTimeoutException>(() => hub.CallAsync(echo, new JsonObject { ["text"] = "hi" }, default));
+        fake.BadResult = false;
         fake.DieOnCall = true;
         await Assert.ThrowsAsync<McpTimeoutException>(() => hub.CallAsync(echo, new JsonObject { ["text"] = "hi" }, default));
     }
@@ -261,8 +270,9 @@ public sealed class McpTests : IDisposable
     [Fact]
     public void BatchFilesGetACmdLineThatCantRunMore()
     {
-        Assert.Equal("/d /s /c \"\"C:\\a b\\npx.cmd\" \"-y\" \"x&calc\" \"C:\\dir\\\\\"\"",
-            McpHub.CmdLine(@"C:\a b\npx.cmd", ["-y", "x&calc", @"C:\dir\"]));
+        Assert.Equal("/d /v:off /s /c \"\"C:\\a b\\npx.cmd\" \"-y\" \"x&calc\" \"C:\\dir\\\\\" \"C:\\s\\\\\\\\\"\"",
+            McpHub.CmdLine(@"C:\a b\npx.cmd", ["-y", "x&calc", @"C:\dir\", @"C:\s\\"]));
+        Assert.Throws<McpException>(() => McpHub.CmdLine("npx.cmd", ["a!TOKEN!b"]));
         Assert.Throws<McpException>(() => McpHub.CmdLine("npx.cmd", ["x\" & calc & \""]));
         Assert.Throws<McpException>(() => McpHub.CmdLine("npx.cmd", ["%PATH%"]));
     }

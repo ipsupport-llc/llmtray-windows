@@ -143,7 +143,15 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
         try
         {
             var result = await RequestAsync("tools/call", new JsonObject { ["name"] = tool, ["arguments"] = arguments }, limit.Token, id, sent).ConfigureAwait(false);
-            return McpProtocol.ResultText(result);
+            try
+            {
+                return McpProtocol.ResultText(result);
+            }
+            catch (Exception e) when (e is InvalidOperationException or FormatException or JsonException or KeyNotFoundException or InvalidCastException)
+            {
+                // It ran (it answered), but the answer can't be read: whatever it did may have happened.
+                throw new McpTimeoutException($"its answer couldn't be read ({e.Message})");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -188,10 +196,16 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
             if (sent is not null) sent.Value = true;
             var sending = transport.SendAsync(McpProtocol.Request(id, method, @params), cancellationToken);
             var first = await Task.WhenAny(waiter.Task, sending).ConfigureAwait(false);
-            if (first == sending)
+            if (first == sending && !waiter.Task.IsCompletedSuccessfully)
             {
-                // Sent (or failed sending): a failure is the request's; otherwise the answer is still to come.
-                await sending.ConfigureAwait(false);
+                // Sent (or failed sending): a failure is the request's, unless its answer is already here.
+                try
+                {
+                    await sending.ConfigureAwait(false);
+                }
+                catch when (waiter.Task.IsCompletedSuccessfully)
+                {
+                }
             }
             else
             {
@@ -267,6 +281,9 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
     Process? process;
     IDisposable? owner;
     Task? readingOut;
+    /// <summary>Set once the process is owned and read: an exit before that waits for it.</summary>
+    readonly TaskCompletionSource set = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    Task? disposing;
     readonly SemaphoreSlim writing = new(1, 1);
     int closed;
     int disposed;
@@ -293,7 +310,15 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         foreach (var (k, v) in environment) info.Environment[k] = v;
         process = new Process { StartInfo = info, EnableRaisingEvents = true };
         process.Exited += (_, _) => _ = ExitedAsync();
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch
+        {
+            set.TrySetResult();
+            throw;
+        }
         try
         {
             owner = own?.Invoke(process);
@@ -302,10 +327,12 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         {
             // Not owned is not run: it could outlive the app.
             Kill(process);
+            set.TrySetResult();
             throw;
         }
         readingOut = ReadOutAsync(process.StandardOutput);
         _ = ReadErrAsync(process.StandardError);
+        set.TrySetResult();
         return Task.CompletedTask;
     }
 
@@ -323,6 +350,7 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
     /// <summary>Exited: what it wrote before it went is read first (a last answer counts), a moment at most.</summary>
     async Task ExitedAsync()
     {
+        await set.Task.ConfigureAwait(false);
         if (readingOut is { } reading)
         {
             try
@@ -473,12 +501,27 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         Closed?.Invoke(why);
     }
 
-    /// <summary>Once, whoever calls it: stdin closed, a moment to exit, then it and everything it started are ended.</summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>
+    /// Once, whoever calls it, and every caller waits for the same end:
+    /// stdin closed, a moment to exit, then it and everything it started are ended.
+    /// </summary>
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) == 1) return;
+        lock (writing)
+        {
+            disposing ??= EndAsync();
+            return new ValueTask(disposing);
+        }
+    }
+
+    async Task EndAsync()
+    {
+        Interlocked.Exchange(ref disposed, 1);
         Close("stopped");
-        if (process is not { } p) return;
+        if (process is null) return;
+        // Not while it's still being started and owned.
+        await set.Task.ConfigureAwait(false);
+        var p = process;
         try
         {
             p.StandardInput.Close();
@@ -490,6 +533,14 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
             catch (OperationCanceledException)
             {
                 Kill(p);
+                using var killed = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                try
+                {
+                    await p.WaitForExitAsync(killed.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
             }
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or ObjectDisposedException or System.ComponentModel.Win32Exception)
@@ -547,8 +598,10 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
                 Close("the server ended the session");
                 throw new McpException("the server ended the session");
             }
-            // Refused (4xx) is surely not done; a server error (5xx) may have been half way.
-            if (!response.IsSuccessStatusCode) throw new McpException($"the server answered HTTP {(int)response.StatusCode}", notSent: (int)response.StatusCode is >= 400 and < 500);
+            // Refused (4xx) is surely not done, except a timeout or a limit a proxy may say after passing it on;
+            // a server error (5xx) may have been half way.
+            var code = (int)response.StatusCode;
+            if (!response.IsSuccessStatusCode) throw new McpException($"the server answered HTTP {code}", notSent: code is >= 400 and < 500 and not (408 or 425 or 429));
             if (response.StatusCode == System.Net.HttpStatusCode.Accepted || response.Content.Headers.ContentLength == 0) return;
             if (response.Content.Headers.ContentLength > MaxMessage) throw new McpException("the server's answer is over 8 MB");
             var type = response.Content.Headers.ContentType?.MediaType ?? "";
@@ -632,14 +685,25 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
         }
     }
 
-    void Close(string why)
+    /// <summary>Closed once: every read in flight is cancelled with it.</summary>
+    bool Close(string why)
     {
-        if (Interlocked.Exchange(ref closed, 1) == 0) Closed?.Invoke(why);
+        if (Interlocked.Exchange(ref closed, 1) != 0) return false;
+        try
+        {
+            closing.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        Closed?.Invoke(why);
+        return true;
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (session is not null && Volatile.Read(ref closed) == 0)
+        // Closed first (reads cancelled now, not after the goodbye); only the first caller says goodbye.
+        if (Close("stopped") && session is not null)
         {
             try
             {
@@ -649,17 +713,9 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
                 (await http.SendAsync(request, timeout.Token).ConfigureAwait(false)).Dispose();
             }
-            catch (Exception e) when (e is HttpRequestException or OperationCanceledException)
+            catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException)
             {
             }
-        }
-        Close("stopped");
-        try
-        {
-            closing.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
         }
     }
 }

@@ -24,6 +24,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     {
         public McpClient? Client;
         public IReadOnlyList<McpTool>? Tools;
+        /// <summary>The client <see cref="Tools"/> came from.</summary>
+        public McpClient? ToolsFrom;
         /// <summary>Bumped when the server says its tools changed: a listing begun before doesn't count.</summary>
         public int ToolsVersion;
         public readonly List<string> Log = [];
@@ -116,13 +118,17 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             var connection = transport?.Invoke(config)
                 ?? (config.IsCommand ? Stdio(config, r) : new McpHttpTransport(http, new Uri(config.Url!), config.Headers));
             var client = new McpClient(connection, clientVersion);
-            var started = false;
+            var counted = false;
             client.Closed += why =>
             {
                 lock (r.Log)
                 {
-                    // Our own stop isn't a crash; a server that goes by itself is.
-                    if (why != "stopped" && started) Crashed(r);
+                    // Our own stop isn't a crash; a server that goes by itself is, while starting too.
+                    if (why != "stopped" && !counted)
+                    {
+                        counted = true;
+                        Crashed(r);
+                    }
                     r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"stopped: {why}";
                 }
                 AddLog(r, $"[LLMTray] the server stopped: {why}");
@@ -143,6 +149,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             try
             {
                 await client.StartAsync(cancellationToken).ConfigureAwait(false);
+                // Gone as soon as it was up (counted as it went).
+                if (client.IsClosed) throw new McpException("it stopped right after starting", notSent: true);
             }
             catch (Exception e)
             {
@@ -150,13 +158,16 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
                 AddLog(r, $"[LLMTray] didn't start: {e.Message}");
                 lock (r.Log)
                 {
-                    if (e is not OperationCanceledException) Crashed(r);
+                    if (e is not OperationCanceledException && !counted)
+                    {
+                        counted = true;
+                        Crashed(r);
+                    }
                     r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"didn't start: {e.Message}";
                 }
                 Changed?.Invoke();
                 throw;
             }
-            started = true;
             r.Client = client;
             r.Status = "running";
             Changed?.Invoke();
@@ -216,43 +227,65 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     }
 
     /// <summary>
-    /// <c>/d /s /c ""script" "arg" …"</c>: with /s cmd drops only the outer
-    /// quotes, and inside quotes &amp;, |, &lt;, &gt;, ^ and ( ) are plain text.
+    /// <c>/d /v:off /s /c ""script" "arg" …"</c>: with /s cmd drops only the
+    /// outer quotes; inside quotes &amp;, |, &lt;, &gt;, ^ and ( ) are plain
+    /// text, and /v:off keeps !name! as it is.
     /// </summary>
     public static string CmdLine(string script, IReadOnlyList<string> arguments)
     {
+        var position = 0;
         foreach (var a in arguments.Prepend(script))
         {
-            if (a.IndexOfAny(['"', '%', '\r', '\n', '\0']) >= 0)
+            if (a.IndexOfAny(['"', '%', '!', '\r', '\n', '\0']) >= 0)
             {
-                throw new McpException($"the argument {a} has a character cmd.exe would run rather than pass (\", % or a line break)", notSent: true);
+                // Not echoed: it could carry a line break into the log.
+                throw new McpException($"argument {position} has a character cmd.exe would act on rather than pass (\", %, ! or a line break)", notSent: true);
             }
+            position++;
         }
-        // A trailing backslash would escape the closing quote for the script's own parser.
-        static string Quote(string a) => "\"" + (a.EndsWith('\\') ? a + "\\" : a) + "\"";
-        return "/d /s /c \"" + string.Join(" ", arguments.Prepend(script).Select(Quote)) + "\"";
+        return "/d /v:off /s /c \"" + string.Join(" ", arguments.Prepend(script).Select(Quote)) + "\"";
+    }
+
+    /// <summary>Quoted for the program the script runs: a trailing run of backslashes is doubled, so the closing quote stays a quote.</summary>
+    static string Quote(string a)
+    {
+        var trailing = a.Length - a.TrimEnd('\\').Length;
+        return "\"" + a + new string('\\', trailing) + "\"";
     }
 
     /// <summary>The server's tools as it lists them now (started if needed).</summary>
-    public async Task<IReadOnlyList<McpTool>> ToolsAsync(McpServerConfig config, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<McpTool>> ToolsAsync(McpServerConfig config, CancellationToken cancellationToken) =>
+        (await ListedAsync(config, cancellationToken).ConfigureAwait(false)).Tools;
+
+    /// <summary>A running client and the tools that very client listed, current (no change announced since).</summary>
+    async Task<(McpClient Client, IReadOnlyList<McpTool> Tools)> ListedAsync(McpServerConfig config, CancellationToken cancellationToken)
     {
         var r = Of(config.Key);
-        if (r.Tools is { } cached && r.Client is { IsClosed: false })
+        for (var attempt = 0; ; attempt++)
         {
-            r.LastUsed = DateTimeOffset.UtcNow;
-            return cached;
+            var client = await ClientAsync(config, cancellationToken).ConfigureAwait(false);
+            lock (r.Log)
+            {
+                if (r.Tools is { } cached && r.ToolsFrom == client && !client.IsClosed) return (client, cached);
+            }
+            int version;
+            lock (r.Log) version = r.ToolsVersion;
+            var tools = await client.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+            var current = false;
+            lock (r.Log)
+            {
+                // Changed again while listing: this list is already old.
+                if (version == r.ToolsVersion && !client.IsClosed)
+                {
+                    r.Tools = tools;
+                    r.ToolsFrom = client;
+                    current = true;
+                }
+            }
+            Changed?.Invoke();
+            if (current) return (client, tools);
+            if (attempt >= 2) throw new McpException($"{config.Name} keeps changing its tools", notSent: true);
         }
-        var client = await ClientAsync(config, cancellationToken).ConfigureAwait(false);
-        int version;
-        lock (r.Log) version = r.ToolsVersion;
-        var tools = await client.ListToolsAsync(cancellationToken).ConfigureAwait(false);
-        lock (r.Log)
-        {
-            // Changed again while listing: this list is already old; the next need lists again.
-            if (version == r.ToolsVersion && !client.IsClosed) r.Tools = tools;
-        }
-        Changed?.Invoke();
-        return tools;
     }
 
     /// <summary>
@@ -282,11 +315,15 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         await ToolsAsync(config, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>One tool accepted as the server lists it now; no other tool changes.</summary>
-    public async Task AcceptToolAsync(McpServerConfig config, string toolName, CancellationToken cancellationToken)
+    /// <summary>
+    /// One tool accepted, the very definition the user saw (its hash); no
+    /// other tool changes. Changed again since: refused, shown again.
+    /// </summary>
+    public async Task AcceptToolAsync(McpServerConfig config, string toolName, string seenHash, CancellationToken cancellationToken)
     {
         var tool = (await ToolsAsync(config, cancellationToken).ConfigureAwait(false)).FirstOrDefault(t => t.Name == toolName)
             ?? throw new McpException($"{config.Name} doesn't list {toolName} any more", notSent: true);
+        if (tool.DefinitionHash != seenHash) throw new McpException($"{toolName} changed again; look at it once more", notSent: true);
         store.Update(config.Key, c =>
         {
             var reviewed = new Dictionary<string, string>(c.Reviewed) { [tool.Name] = tool.DefinitionHash };
@@ -348,17 +385,18 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             McpClient client;
             try
             {
-                // Listed again when the server said its tools changed or it started again.
-                var live = (await ToolsAsync(now, cancellationToken).ConfigureAwait(false)).FirstOrDefault(t => t.Name == tool.Tool.Name);
+                // The tool as listed by the very client that gets the call (listed again after a change or a restart).
+                var (listing, tools) = await ListedAsync(now, cancellationToken).ConfigureAwait(false);
+                var live = tools.FirstOrDefault(t => t.Name == tool.Tool.Name);
                 if (live is null || live.DefinitionHash != tool.Tool.DefinitionHash)
                 {
                     throw new McpException($"{tool.Tool.Name} changed since it was reviewed; review it in Settings first", notSent: true);
                 }
-                client = await ClientAsync(now, cancellationToken).ConfigureAwait(false);
+                client = listing;
             }
-            catch (McpTimeoutException e)
+            catch (Exception e) when (e is McpTimeoutException or McpException { NotSent: false })
             {
-                // Starting or listing timed out: the call itself never went.
+                // Starting or listing failed (even with the server's own error): the call itself never went.
                 throw new McpException(e.Message, notSent: true);
             }
             try
@@ -392,7 +430,11 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             if (r.Client is { } client)
             {
                 r.Client = null;
-                lock (r.Log) r.Tools = null;
+                lock (r.Log)
+                {
+                    r.Tools = null;
+                    r.ToolsFrom = null;
+                }
                 await client.DisposeAsync().ConfigureAwait(false);
                 r.Status = "stopped";
             }

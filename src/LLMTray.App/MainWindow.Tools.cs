@@ -54,7 +54,7 @@ public sealed partial class MainWindow
                     if (!reviewed)
                     {
                         rows.Add(Ui.Row(tool.Title ?? tool.Name, L.T("New or changed since you reviewed it: hidden from the chat until you accept it."),
-                            Ui.Button(L.T("Accept"), () => _ = AcceptMcpToolAsync(server, tool.Name))));
+                            Ui.Button(L.T("Accept"), () => _ = AcceptMcpToolAsync(server, tool.Name, tool.DefinitionHash))));
                         continue;
                     }
                     var free = server.RunWithoutAsking.Contains(tool.DefinitionHash);
@@ -139,14 +139,14 @@ public sealed partial class MainWindow
     }
 
     /// <summary>This one tool as the server lists it now; the others stay as they were.</summary>
-    async Task AcceptMcpToolAsync(McpServerConfig server, string tool)
+    async Task AcceptMcpToolAsync(McpServerConfig server, string tool, string seenHash)
     {
         mcpBusy.Add(server.Key);
         RenderPage();
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            if (App.Current.Mcp.Current(server.Key) is { } now) await App.Current.Mcp.AcceptToolAsync(now, tool, timeout.Token);
+            if (App.Current.Mcp.Current(server.Key) is { } now) await App.Current.Mcp.AcceptToolAsync(now, tool, seenHash, timeout.Token);
             mcpError = null;
         }
         catch (Exception e)

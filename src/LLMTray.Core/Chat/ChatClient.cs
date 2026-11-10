@@ -417,8 +417,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     async Task<(Tools.ToolOutcome Outcome, bool Read)> RunMcpAsync(Mcp.McpDeclared mcp, Tools.ToolCall call, ChatOptions options, ChatMessage answer, bool outsideText,
         HashSet<string> deniedThisTurn, CancellationToken token)
     {
-        // A standing allowance is this server's tool as reviewed: never one of another server with the same definition.
-        var hash = mcp.Server.Key + "\0" + mcp.Tool.DefinitionHash;
+        // A standing allowance is this server's tool as reviewed: never one of another server with the same
+        // definition, nor of a server added later under the same name with another command or address.
+        var hash = mcp.Server.Key + "\0" + mcp.Server.Summary + "\0" + mcp.Tool.DefinitionHash;
         JsonObject arguments;
         try
         {
