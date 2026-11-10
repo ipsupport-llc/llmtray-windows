@@ -77,7 +77,7 @@ public sealed class ProxyServer : IAsyncDisposable
     public string? AppToken { get; set; }
 
     /// <summary>A request from an outside client (an app using the API), for usage statistics: counted, never looked into.</summary>
-    public Action? OutsideRequest { get; set; }
+    public Action<ModelEntry>? OutsideRequest { get; set; }
     /// <summary>Background work (memory's reading) that every request here preempts.</summary>
     public Runtime.BackgroundWork? Background { get; set; }
 
@@ -130,7 +130,6 @@ public sealed class ProxyServer : IAsyncDisposable
             return;
         }
 
-        if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke();
         // A request: background work gives the model up now, and waits until it's done.
         using var foreground = Background?.Foreground();
         var body = await ReadBodyAsync(request, context.RequestAborted).ConfigureAwait(false);
@@ -188,6 +187,8 @@ public sealed class ProxyServer : IAsyncDisposable
 
         using (lease)
         {
+            // An outside client's request that reached a model: counted (its family only), never looked into.
+            if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke(lease.Model);
             await ForwardAsync(context, lease, body).ConfigureAwait(false);
         }
     }

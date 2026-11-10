@@ -106,9 +106,10 @@ public partial class App : Application
     /// <summary>Usage statistics on or off. On: a new random install id. Off: the id and what wasn't sent are gone.</summary>
     public void SetShareUsage(bool on)
     {
+        // Counters from before go either way: on starts over as a new install.
+        Telemetry.Forget();
         UpdateSettings(Settings with { ShareUsage = on, UsageId = on ? Guid.NewGuid() : null });
-        if (!on) Telemetry.Forget();
-        else Telemetry.Touch();
+        if (on) Telemetry.Touch();
     }
 
     /// <summary>Reset ID: another random install id; what wasn't sent under the old one goes.</summary>
@@ -132,6 +133,11 @@ public partial class App : Application
         var memory = (int)Math.Round(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1_073_741_824.0);
         return new(Updater.Current?.DisplayVersion ?? "0.0.0-dev", $"{os.Major}.{os.Minor}.{os.Build}", memory, L.Current, arch);
     }
+
+    /// <summary>LLMTRAY_TELEMETRY_ENDPOINT, for development: only https, or http to this PC.</summary>
+    static Uri? DevelopmentEndpoint() =>
+        Environment.GetEnvironmentVariable("LLMTRAY_TELEMETRY_ENDPOINT") is { Length: > 0 } dev && Uri.TryCreate(dev, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)) ? uri : null;
 
     /// <summary>Its own client: the system proxy, no cookies, a short timeout, an honest agent.</summary>
     static HttpClient CreateTelemetryClient()
@@ -258,8 +264,12 @@ public partial class App : Application
         Host.StateChanged += _ => Memory.Poke();
 
         Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),
-            () => Settings.ShareUsage == true, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
-            endpoint: Environment.GetEnvironmentVariable("LLMTRAY_TELEMETRY_ENDPOINT") is { Length: > 0 } dev && Uri.TryCreate(dev, UriKind.Absolute, out var devUri) ? devUri : null);
+            () => Settings is { ShareUsage: true, UsageId: not null }, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
+            endpoint: DevelopmentEndpoint(),
+            // Nothing goes before the setup wizard (which shows the choice) was finished or closed once.
+            maySend: () => Settings.SetupCompleted is not null);
+        // Off: whatever a crash left behind goes too.
+        if (Settings.ShareUsage != true) Telemetry.Forget();
         Telemetry.Touch();
         Local.DefaultRequestHeaders.Add(ProxyServer.AppHeader, appToken);
         proxy = new ProxyServer(Host, Library)
@@ -267,7 +277,7 @@ public partial class App : Application
             ProfileOf = m => Profiles.ResolvedFor(m.FullPath),
             AppToken = appToken,
             Background = background,
-            OutsideRequest = () => Telemetry.Record(LLMTray.Core.Telemetry.TelemetryFeature.ApiServer, Host.State.Model?.FullPath),
+            OutsideRequest = model => Telemetry.Record(LLMTray.Core.Telemetry.TelemetryFeature.ApiServer, model.FullPath),
         };
         try
         {

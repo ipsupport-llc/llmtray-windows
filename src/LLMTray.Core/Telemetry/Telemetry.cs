@@ -91,6 +91,8 @@ public sealed class TelemetryUsage
     /// <summary>Families, sorted, each once.</summary>
     public List<string> Families { get; set; } = [];
 
+    public TelemetryUsage Clone() => new() { Features = new(Features), Families = [.. Families] };
+
     public void Add(string feature)
     {
         Features[feature] = Math.Min(Features.GetValueOrDefault(feature) + 1, TelemetryReport.MaxFeatureCount);
@@ -114,15 +116,18 @@ public sealed class TelemetryCounters
     public Dictionary<string, TelemetryUsage> Days { get; set; } = [];
     /// <summary>A 429's Retry-After, or a backoff after a failure: no send before it.</summary>
     public DateTimeOffset? NotBefore { get; set; }
+    /// <summary>Days already sent: a clock set back doesn't count into one again (a resend would replace it with less).</summary>
+    public List<string> Sent { get; set; } = [];
 
     /// <summary>The app ran today: a report for today, even with nothing counted.</summary>
     public void Touch(string day)
     {
-        if (!Days.ContainsKey(day)) Days[day] = new TelemetryUsage();
+        if (!Days.ContainsKey(day) && !Sent.Contains(day)) Days[day] = new TelemetryUsage();
     }
 
     public void Record(string? feature, string? family, string day)
     {
+        if (Sent.Contains(day)) return;
         if (!Days.TryGetValue(day, out var usage)) Days[day] = usage = new TelemetryUsage();
         if (feature is not null) usage.Add(feature);
         if (family is not null) usage.AddFamily(family);
@@ -137,6 +142,7 @@ public sealed class TelemetryCounters
         {
             if (TelemetryDay.Parse(day) is null || string.CompareOrdinal(day, oldest) < 0 || string.CompareOrdinal(day, newest) > 0) Days.Remove(day);
         }
+        Sent.RemoveAll(d => string.CompareOrdinal(d, TelemetryDay.Add(oldest, -2)) < 0);
     }
 
     /// <summary>The finished days to send, oldest first.</summary>
@@ -149,6 +155,7 @@ public sealed class TelemetryCounters
         {
             case TelemetryOutcome.Result.Sent or TelemetryOutcome.Result.Dropped:
                 Days.Remove(day);
+                if (!Sent.Contains(day)) Sent.Add(day);
                 NotBefore = null;
                 return true;
             default:
@@ -260,6 +267,20 @@ public sealed record TelemetryOutcome(TelemetryOutcome.Result Kind, string? Code
 
     public const int DefaultBackoff = 3600;
 
+    /// <summary>Retry-After as seconds or an HTTP date, at most two days; null when it can't be read.</summary>
+    public static int? RetryAfter(string? value, DateTimeOffset? now = null)
+    {
+        var v = value?.Trim();
+        if (string.IsNullOrEmpty(v)) return null;
+        var max = (long)TelemetryCounters.MaxWait.TotalSeconds;
+        if (long.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var secs)) return (int)Math.Min(secs, max);
+        if (DateTimeOffset.TryParseExact(v, "r", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
+        {
+            return (int)Math.Clamp((long)(at - (now ?? DateTimeOffset.UtcNow)).TotalSeconds, 0, max);
+        }
+        return null;
+    }
+
     /// <summary><paramref name="status"/> null: no answer (a timeout, no network).</summary>
     public static TelemetryOutcome Classify(int? status, string? body, string? retryAfter)
     {
@@ -275,7 +296,7 @@ public sealed record TelemetryOutcome(TelemetryOutcome.Result Kind, string? Code
         return s switch
         {
             204 => new(Result.Sent),
-            429 => new(Result.RetryLater, Seconds: int.TryParse(retryAfter?.Trim(), out var secs) && secs >= 0 ? Math.Min(secs, (int)TelemetryCounters.MaxWait.TotalSeconds) : null),
+            429 => new(Result.RetryLater, Seconds: RetryAfter(retryAfter)),
             408 or >= 500 and <= 599 => new(Result.RetryLater),
             >= 400 and < 500 => new(Result.Dropped, code is { Length: > 0 } ? code : s switch { 413 => "payload_too_large", 415 => "unsupported_media_type", _ => $"http_{s}" }),
             _ => new(Result.RetryLater),
@@ -302,7 +323,9 @@ public sealed class TelemetryService : IAsyncDisposable
     readonly Func<Guid?> installId;
     readonly Func<TelemetryEnvironment> environment;
     readonly Func<DateTimeOffset> clock;
+    readonly Func<bool> maySend;
     readonly object sync = new();
+    Timer? saveSoon;
     readonly SemaphoreSlim sending = new(1, 1);
     readonly Timer timer;
     TelemetryCounters counters;
@@ -310,9 +333,11 @@ public sealed class TelemetryService : IAsyncDisposable
 
     /// <param name="http">A client of its own: no cookies, no cache, a short timeout, "LLMTray/&lt;version&gt;" as its agent.</param>
     /// <param name="installId">The install id while telemetry is on.</param>
+    /// <param name="maySend">Whether the user has had the choice in front of them (the setup wizard was shown): nothing goes before.</param>
     public TelemetryService(string file, HttpClient http, Func<bool> enabled, Func<Guid?> installId, Func<TelemetryEnvironment> environment,
-        Func<DateTimeOffset>? clock = null, Uri? endpoint = null)
+        Func<DateTimeOffset>? clock = null, Uri? endpoint = null, Func<bool>? maySend = null)
     {
+        this.maySend = maySend ?? (() => true);
         this.file = file;
         this.http = http;
         this.enabled = enabled;
@@ -321,7 +346,7 @@ public sealed class TelemetryService : IAsyncDisposable
         this.clock = clock ?? (() => DateTimeOffset.Now);
         Target = endpoint ?? Endpoint;
         counters = Load();
-        timer = new Timer(_ => _ = SendAsync(), null, TimeSpan.FromSeconds(10), TimeSpan.FromHours(3));
+        timer = new Timer(_ => _ = SendAsync(), null, TimeSpan.FromSeconds(10), TimeSpan.FromHours(1));
     }
 
     public Uri Target { get; }
@@ -358,20 +383,30 @@ public sealed class TelemetryService : IAsyncDisposable
     /// <summary>A use of a feature (and the model family it used); nothing while telemetry is off.</summary>
     public void Record(string? feature, string? modelPath = null)
     {
-        if (!enabled()) return;
         lock (sync)
         {
+            // Checked under the lock Forget takes: a count can't land after turning off.
+            if (!enabled()) return;
             counters.Record(feature, modelPath is null ? null : TelemetryFamily.Of(modelPath), Today);
-            SaveLocked();
+            // Written a few seconds later, once: not a disk write per request.
+            saveSoon ??= new Timer(_ =>
+            {
+                lock (sync)
+                {
+                    saveSoon?.Dispose();
+                    saveSoon = null;
+                    if (enabled()) SaveLocked();
+                }
+            }, null, TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
         }
     }
 
     /// <summary>The app ran today.</summary>
     public void Touch()
     {
-        if (!enabled()) return;
         lock (sync)
         {
+            if (!enabled()) return;
             counters.Touch(Today);
             SaveLocked();
         }
@@ -383,10 +418,13 @@ public sealed class TelemetryService : IAsyncDisposable
         lock (sync)
         {
             send?.Cancel();
+            saveSoon?.Dispose();
+            saveSoon = null;
             counters = new TelemetryCounters();
             try
             {
                 File.Delete(file);
+                File.Delete(file + ".tmp");
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -399,7 +437,7 @@ public sealed class TelemetryService : IAsyncDisposable
     {
         if (installId() is not { } id) return null;
         TelemetryUsage usage;
-        lock (sync) usage = counters.Days.GetValueOrDefault(Today) ?? new TelemetryUsage();
+        lock (sync) usage = counters.Days.GetValueOrDefault(Today)?.Clone() ?? new TelemetryUsage();
         try
         {
             return TelemetryReport.Make(id, Today, Today, clock(), environment(), usage).Body(indented: true);
@@ -413,21 +451,23 @@ public sealed class TelemetryService : IAsyncDisposable
     /// <summary>Sends the finished days, oldest first, unless off or waiting.</summary>
     public async Task SendAsync()
     {
-        if (!enabled() || installId() is not { } id) return;
+        if (!enabled() || installId() is not { } id || !maySend()) return;
         if (!await sending.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
             var now = clock();
+            // One day for the whole send: midnight passing meanwhile doesn't mix two.
+            var today = TelemetryDay.Of(now);
             List<(string Day, TelemetryUsage Usage)> pending;
             CancellationToken token;
             lock (sync)
             {
-                counters.Touch(Today);
-                counters.Prune(Today, now);
+                counters.Touch(today);
+                counters.Prune(today, now);
                 if (counters.NotBefore is { } wait && (wait - now > TelemetryCounters.MaxWait)) counters.NotBefore = null;
                 SaveLocked();
                 if (counters.NotBefore is { } nb && nb > now) return;
-                pending = counters.Pending(Today).Select(d => (d, counters.Days[d])).ToList();
+                pending = counters.Pending(today).Select(d => (d, counters.Days[d].Clone())).ToList();
                 send = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 token = send.Token;
             }
@@ -436,7 +476,7 @@ public sealed class TelemetryService : IAsyncDisposable
                 TelemetryOutcome outcome;
                 try
                 {
-                    var body = TelemetryReport.Make(id, day, Today, now, environment(), usage).Body();
+                    var body = TelemetryReport.Make(id, day, today, now, environment(), usage).Body();
                     using var request = new HttpRequestMessage(HttpMethod.Post, Target) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
                     using var response = await http.SendAsync(request, token).ConfigureAwait(false);
                     var text = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
@@ -467,5 +507,14 @@ public sealed class TelemetryService : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync() => await timer.DisposeAsync().ConfigureAwait(false);
+    public async ValueTask DisposeAsync()
+    {
+        await timer.DisposeAsync().ConfigureAwait(false);
+        lock (sync)
+        {
+            saveSoon?.Dispose();
+            saveSoon = null;
+            if (enabled()) SaveLocked();
+        }
+    }
 }

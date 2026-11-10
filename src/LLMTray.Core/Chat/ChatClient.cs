@@ -300,6 +300,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         CancellationToken token;
         int mine;
         JsonArray history;
+        // Whether this turn's chat is temporary, as it was when the turn began (the chat shown may change meanwhile).
+        bool temporaryTurn;
         // The memory block (adr/0018): this chat's own while it holds, else chosen anew (and kept with the chat).
         var block = options.Memory?.BlockFor(memorySnapshot, Temporary, null);
         lock (sync)
@@ -307,6 +309,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             memory = options.Memory;
             if (block is not null) memorySnapshot = block;
             answer.Seq = ++lastSeq;
+            temporaryTurn = Temporary;
             history = History(Messages, options, block?.Text);
             // Low and Medium: the model is told its budget with this message only (never saved).
             if (options.Thinking && Chat.Thinking.BudgetToTell(options.Style, options.Effort) is int budget) AddNote(history, Chat.Thinking.Note(budget));
@@ -462,7 +465,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         answer.ToolCalls++;
                     }
                     // Usage statistics (adr/0019): a tool that ran, in a chat that's kept.
-                    if (!outcome.Failed && !Temporary) options.Count?.Invoke(Telemetry.TelemetryFeature.ToolCalls, null);
+                    if (!outcome.Failed && !temporaryTurn) options.Count?.Invoke(Telemetry.TelemetryFeature.ToolCalls, null);
                     ran[key] = outcome.Result;
                     history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = outcome.Result });
                 }
@@ -509,9 +512,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Requests = requests,
             TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
         };
-        // Usage statistics (adr/0019): an answer that came through, in a chat that's kept; only a count and the model's family.
-        if (!Temporary && answer.Error is null && answer.Content.Length > 0) options.Count?.Invoke(Telemetry.TelemetryFeature.Chat, options.Model);
         if (mine != epoch) return;
+        // Usage statistics (adr/0019): an answer that came through, in a chat that's kept; only a count and the model's family.
+        if (!temporaryTurn && answer.Error is null && answer.Content.Length > 0) options.Count?.Invoke(Telemetry.TelemetryFeature.Chat, options.Model);
         Save();
         QueueForMemory();
         Changed?.Invoke();

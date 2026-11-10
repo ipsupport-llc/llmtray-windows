@@ -11,7 +11,8 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
   wizard's "Staying up to date" step shows it, with the consent text,
   and Finish applies a change. An install from before this that never
   chose is written off. The first report goes only after the first local
-  day ends, so it can be turned off before anything is sent.
+  day ends, and only once the setup wizard (which shows the choice) was
+  finished or closed, so it can be turned off before anything is sent.
 - **Settings › General › Usage statistics.** A toggle with the consent
   text, **What's sent** (today's report as it would go, exactly), and
   **Reset ID**. Off: the install ID and the unsent counters are deleted,
@@ -19,11 +20,14 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
   ID: a new random ID.
 - **One report per local day**, from `telemetry.json` (at most 7 days
   back, as the server takes). It is sent 10 seconds after start and every
-  3 hours while running, finished days only, oldest first. Answers are
+  hour while running, finished days only, oldest first. A day once sent
+  isn't counted into again (a clock set back), since a resend replaces
+  the day on the server. Counts are written a few seconds later, not on
+  every request. Answers are
   handled as on the Mac:
   - 204: sent;
   - another 4xx: that day is dropped;
-  - 429: wait for its Retry-After, two days at most;
+  - 429: wait for its Retry-After (seconds or a date), two days at most;
   - 408, 5xx or no answer: an hour.
 - **The report** is the server's: `product: llmtray`, `install_id`,
   `day`, `app_version`, `os: windows`, `os_version` (`10.0.26100`),
@@ -32,10 +36,13 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
   server validates it.
 - **What counts:**
   - `chat`: an answer that came through, in a chat that's kept, never a
-    temporary one;
+    temporary one. That is decided as the turn began, whichever chat is
+    shown when it ends;
   - `tool_calls`: a tool that ran;
-  - `api_server`: a request to the API from an outside client. The app's
-    own requests carry a per-run secret header, which the proxy strips;
+  - `api_server`: a request from an outside client that reached a model,
+    with that model's family. The app's own requests carry a per-run
+    header, which the proxy strips (it tells them apart; it isn't a
+    credential);
   - `model_download`: a model downloaded. Memory's embedding model
     doesn't count.
 
@@ -45,7 +52,7 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
   or repositories.
 - Its own HTTP client (the system proxy, no cookies, 15 s, `User-Agent:
   LLMTray-Windows/<version>`). `LLMTRAY_TELEMETRY_ENDPOINT` points a
-  development build elsewhere.
+  development build elsewhere, if it's https or http to this PC.
 
 ## Not yet
 
