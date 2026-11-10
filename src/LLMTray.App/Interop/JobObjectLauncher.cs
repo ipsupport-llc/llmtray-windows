@@ -16,9 +16,12 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
 {
     readonly SafeFileHandle job;
 
-    public JobObjectLauncher()
+    public JobObjectLauncher() => job = NewJob();
+
+    /// <summary>A job that kills what's in it when its last handle closes.</summary>
+    static SafeFileHandle NewJob()
     {
-        job = Native.CreateJobObjectW(IntPtr.Zero, null);
+        var job = Native.CreateJobObjectW(IntPtr.Zero, null);
         if (job.IsInvalid) throw new Win32Exception();
         var info = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
         {
@@ -26,8 +29,11 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
         };
         if (!Native.SetInformationJobObject(job, Native.JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf(info)))
         {
-            throw new Win32Exception();
+            var error = new Win32Exception();
+            job.Dispose();
+            throw error;
         }
+        return job;
     }
 
     public IChildProcess Start(LaunchPlan plan)
@@ -67,6 +73,24 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
             throw error;
         }
         return new Child(process, info.dwProcessId);
+    }
+
+    /// <summary>
+    /// Gives a process started elsewhere (an MCP server) a job of its own
+    /// that kills it and all it starts when the job is disposed (its server
+    /// stopped) or the app exits, however it exits. Throws when the process
+    /// can't be put in it: the caller then ends the process.
+    /// </summary>
+    public static IDisposable Own(System.Diagnostics.Process process)
+    {
+        var own = NewJob();
+        if (!Native.AssignProcessToJobObject(own, process.SafeHandle))
+        {
+            var error = new Win32Exception();
+            own.Dispose();
+            throw new InvalidOperationException($"the server couldn't be tied to LLMTray ({error.Message})", error);
+        }
+        return own;
     }
 
     /// <summary>The app's environment plus the plan's, sorted as CreateProcess wants it.</summary>
