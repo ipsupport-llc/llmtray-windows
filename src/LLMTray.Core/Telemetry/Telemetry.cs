@@ -142,7 +142,8 @@ public sealed class TelemetryCounters
         {
             if (TelemetryDay.Parse(day) is null || string.CompareOrdinal(day, oldest) < 0 || string.CompareOrdinal(day, newest) > 0) Days.Remove(day);
         }
-        Sent.RemoveAll(d => string.CompareOrdinal(d, TelemetryDay.Add(oldest, -2)) < 0);
+        // Kept by count, not by the clock: a clock that jumped ahead mustn't forget what was sent.
+        if (Sent.Count > 60) Sent.RemoveRange(0, Sent.Count - 60);
     }
 
     /// <summary>The finished days to send, oldest first.</summary>
@@ -326,6 +327,9 @@ public sealed class TelemetryService : IAsyncDisposable
     readonly Func<bool> maySend;
     readonly object sync = new();
     Timer? saveSoon;
+    bool disposed;
+    /// <summary>Days being sent now: nothing more is counted into them (a clock set back), so an answer can't drop an unsent count.</summary>
+    readonly HashSet<string> inFlight = [];
     readonly SemaphoreSlim sending = new(1, 1);
     readonly Timer timer;
     TelemetryCounters counters;
@@ -386,7 +390,7 @@ public sealed class TelemetryService : IAsyncDisposable
         lock (sync)
         {
             // Checked under the lock Forget takes: a count can't land after turning off.
-            if (!enabled()) return;
+            if (disposed || !enabled() || inFlight.Contains(Today)) return;
             counters.Record(feature, modelPath is null ? null : TelemetryFamily.Of(modelPath), Today);
             // Written a few seconds later, once: not a disk write per request.
             saveSoon ??= new Timer(_ =>
@@ -395,7 +399,7 @@ public sealed class TelemetryService : IAsyncDisposable
                 {
                     saveSoon?.Dispose();
                     saveSoon = null;
-                    if (enabled()) SaveLocked();
+                    if (!disposed && enabled()) SaveLocked();
                 }
             }, null, TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
         }
@@ -406,7 +410,7 @@ public sealed class TelemetryService : IAsyncDisposable
     {
         lock (sync)
         {
-            if (!enabled()) return;
+            if (disposed || !enabled()) return;
             counters.Touch(Today);
             SaveLocked();
         }
@@ -462,12 +466,15 @@ public sealed class TelemetryService : IAsyncDisposable
             CancellationToken token;
             lock (sync)
             {
+                // Checked again under the lock Forget takes: turned off meanwhile writes nothing.
+                if (disposed || !enabled() || installId() != id) return;
                 counters.Touch(today);
                 counters.Prune(today, now);
                 if (counters.NotBefore is { } wait && (wait - now > TelemetryCounters.MaxWait)) counters.NotBefore = null;
                 SaveLocked();
                 if (counters.NotBefore is { } nb && nb > now) return;
                 pending = counters.Pending(today).Select(d => (d, counters.Days[d].Clone())).ToList();
+                foreach (var (d, _) in pending) inFlight.Add(d);
                 send = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 token = send.Token;
             }
@@ -494,7 +501,7 @@ public sealed class TelemetryService : IAsyncDisposable
                 lock (sync)
                 {
                     // Turned off or reset meanwhile: its answer is ignored.
-                    if (token.IsCancellationRequested || !enabled() || installId() != id) return;
+                    if (disposed || token.IsCancellationRequested || !enabled() || installId() != id) return;
                     var go = counters.Apply(outcome, day, clock());
                     SaveLocked();
                     if (!go) return;
@@ -503,6 +510,7 @@ public sealed class TelemetryService : IAsyncDisposable
         }
         finally
         {
+            lock (sync) inFlight.Clear();
             sending.Release();
         }
     }
@@ -515,6 +523,9 @@ public sealed class TelemetryService : IAsyncDisposable
             saveSoon?.Dispose();
             saveSoon = null;
             if (enabled()) SaveLocked();
+            // Nothing after this: a send still awaiting its answer applies nothing.
+            disposed = true;
+            send?.Cancel();
         }
     }
 }

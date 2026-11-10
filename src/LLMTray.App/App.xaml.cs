@@ -106,17 +106,22 @@ public partial class App : Application
     /// <summary>Usage statistics on or off. On: a new random install id. Off: the id and what wasn't sent are gone.</summary>
     public void SetShareUsage(bool on)
     {
-        // Counters from before go either way: on starts over as a new install.
+        // Off: the setting first, so nothing counts after the counters go. On: from nothing, as a new install.
+        if (!on) UpdateSettings(Settings with { ShareUsage = false, UsageId = null });
         Telemetry.Forget();
-        UpdateSettings(Settings with { ShareUsage = on, UsageId = on ? Guid.NewGuid() : null });
-        if (on) Telemetry.Touch();
+        if (on)
+        {
+            UpdateSettings(Settings with { ShareUsage = true, UsageId = Guid.NewGuid() });
+            Telemetry.Touch();
+        }
     }
 
     /// <summary>Reset ID: another random install id; what wasn't sent under the old one goes.</summary>
     public void ResetUsageId()
     {
-        Telemetry.Forget();
+        // The new id first: a count from now on is the new install's.
         UpdateSettings(Settings with { UsageId = Guid.NewGuid() });
+        Telemetry.Forget();
         Telemetry.Touch();
     }
 

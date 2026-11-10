@@ -512,9 +512,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Requests = requests,
             TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
         };
-        if (mine != epoch) return;
-        // Usage statistics (adr/0019): an answer that came through, in a chat that's kept; only a count and the model's family.
+        // Usage statistics (adr/0019): an answer that came through, in a chat that's kept (as the turn began); only a count and the family.
         if (!temporaryTurn && answer.Error is null && answer.Content.Length > 0) options.Count?.Invoke(Telemetry.TelemetryFeature.Chat, options.Model);
+        if (mine != epoch) return;
         Save();
         QueueForMemory();
         Changed?.Invoke();
