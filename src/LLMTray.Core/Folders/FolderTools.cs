@@ -19,6 +19,8 @@ public sealed class FolderTurn(string chatKey, bool temporary,
     public bool AfterRead { get; set; }
     /// <summary>The user said no once this turn: nothing more is asked until their next message.</summary>
     public bool Refused { get; set; }
+    /// <summary>"Only this time": folders allowed for the call running now, and gone with it.</summary>
+    public List<(string Root, FolderLevel Level)> Once { get; } = [];
     public Func<FolderGrantRequest, CancellationToken, Task<FolderGrantChoice>> Ask { get; } = ask;
     public Func<ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>> Review { get; } = review;
 }
@@ -130,6 +132,7 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
     {
         if (places.IsDenied(path)) return (null, "LLMTray never opens that place (system, app or private data). Don't ask again.");
         if (grants.Access(path, turn.ChatKey, turn.Temporary) is { } have && have.Level >= level) return (have.Root, null);
+        if (turn.Once.FirstOrDefault(o => o.Level >= level && places.Inside(path, o.Root)) is { Root: { } onceRoot }) return (onceRoot, null);
         if (grants.IsDeniedInChat(path, turn.ChatKey)) return (null, "the user didn't allow this folder in this chat. Don't ask again unless the user does.");
         if (turn.Refused) return (null, "the user said no to a folder this turn; don't ask again until they write.");
         if (level == FolderLevel.Change && turn.Temporary) return (null, "a temporary chat can only look, not change files.");
@@ -149,7 +152,11 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
             turn.Refused = true;
             return (null, "the user didn't allow this folder. Don't ask again unless the user does.");
         }
-        if (choice == FolderGrantChoice.Once) return (folder, null);
+        if (choice == FolderGrantChoice.Once)
+        {
+            turn.Once.Add((folder, level));
+            return (folder, null);
+        }
         if (turn.Temporary && choice is FolderGrantChoice.Hour or FolderGrantChoice.Always) choice = FolderGrantChoice.Chat;
         grants.Grant(folder, level, choice, turn.ChatKey);
         return (folder, null);
@@ -160,6 +167,7 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
     {
         if (!Enabled) return new ToolOutcome(Error("folder tools are switched off in Settings"), null, true);
         IsFolderTool(call.Name, out var change);
+        turn.Once.Clear();
         try
         {
             return change ? await ChangeAsync(call, turn, cancellationToken).ConfigureAwait(false) : await FilesAsync(call, turn, cancellationToken).ConfigureAwait(false);
@@ -192,7 +200,8 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
         if (pattern is { Length: > 0 } p && p.IndexOfAny(['*', '?']) < 0) pattern = p.StartsWith('.') ? "*" + p : p.Contains('.') ? p : "*." + p;
         if (pattern is { Length: 0 }) pattern = null;
         string result;
-        using (platform.Hold(Chain(grantRoot!, path, Directory.Exists(path))))
+        // Every folder from the drive's root to it held: none on the way can turn into a link meanwhile.
+        using (platform.Hold(Directory.Exists(path) ? [.. FolderChanges.Chain(path), path] : FolderChanges.Chain(path)))
         {
             if (Directory.Exists(path))
             {
@@ -217,21 +226,6 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
             result += "change_files (new folders, moves, renames, Recycle Bin) needs the user's approval of the plan: describe it and call it when they agree.\n";
         }
         return new ToolOutcome(result, null, false);
-    }
-
-    /// <summary>The folders from the grant's root to <paramref name="path"/> (itself too when it's a folder).</summary>
-    static List<string> Chain(string root, string path, bool includeSelf)
-    {
-        var chain = new List<string>();
-        var current = includeSelf ? path : Path.GetDirectoryName(path);
-        while (current is not null && current.Length >= FolderPlaces.Trim(root).Length)
-        {
-            chain.Add(current);
-            if (current.Length == FolderPlaces.Trim(root).Length) break;
-            current = Path.GetDirectoryName(current);
-        }
-        chain.Reverse();
-        return chain;
     }
 
     /// <summary>The ops of a call: <c>ops</c> (or a like name) as a list, or one op given bare.</summary>
@@ -278,13 +272,13 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
         var planned = new List<string>();
         var problems = new List<string>();
         var roots = grants.Roots(turn.ChatKey, false).Select(r => r.Root).ToList();
-        var asked = new HashSet<string>(StringComparer.FromComparison(places.Comparison));
+        // Granted folders as they are now (a grant given during this call counts): none is itself moved or trashed.
+        bool IsRoot(string path) => grants.Roots(turn.ChatKey, false).Any(r => places.Same(r.Root, path)) || turn.Once.Any(o => places.Same(o.Root, path));
         async Task<string?> Changeable(string path)
         {
             var folder = Directory.Exists(path) && !planned.Any(p => places.Same(p, path)) ? path : Path.GetDirectoryName(path) ?? path;
             if (grants.Access(path, turn.ChatKey, false) is { Level: FolderLevel.Change }) return null;
             var (_, error) = await AccessAsync(path, FolderLevel.Change, turn, $"change_files in {places.Show(folder)}", cancellationToken).ConfigureAwait(false);
-            asked.Add(folder);
             return error;
         }
         bool Planned(string path) => planned.Any(p => places.Same(p, path));
@@ -327,14 +321,23 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
                     if (toWritten is null && a.String("name") is { Length: > 0 } newName) to = Path.Combine(Path.GetDirectoryName(from) ?? from, newName);
                     else to = Resolve(toWritten);
                     if (to is null) { problems.Add($"op {i + 1}: move needs to"); continue; }
+                    if (a.String("name") is { } given && !PlainName(given)) { problems.Add($"op {i + 1}: \"{given}\" isn't a plain name (no folders, .., : or a trailing dot)"); continue; }
                     if (a.String("name") is { Length: > 0 } name && toWritten is not null && (Directory.Exists(to) || Planned(to))) to = Path.Combine(to, name);
                     else if ((Directory.Exists(to) && !places.Same(to, from)) || Planned(to)) to = Path.Combine(to, Path.GetFileName(from));
+                    // Made whole again after the name was added: checked as it really is.
+                    if (places.Resolve(to, roots) is not { } whole) { problems.Add($"op {i + 1}: that destination isn't a path LLMTray can use"); continue; }
+                    to = whole;
+                    if (FolderPlaces.IsSecretName(Path.GetFileName(from)) && !FolderPlaces.IsSecretName(Path.GetFileName(to)))
+                    {
+                        problems.Add($"op {i + 1}: {Path.GetFileName(from)} looks like a key or secret and keeps a name that says so");
+                        continue;
+                    }
                     if (await Changeable(from).ConfigureAwait(false) is { } e1) return new ToolOutcome(Error(e1), null, true);
                     if (await Changeable(to).ConfigureAwait(false) is { } e2) return new ToolOutcome(Error(e2), null, true);
                     var isFolder = Directory.Exists(from);
                     if (!isFolder && !File.Exists(from)) { problems.Add($"op {i + 1}: {places.Show(from)} wasn't found"); continue; }
                     if (places.IsHiddenName(Path.GetFileName(from))) { problems.Add($"op {i + 1}: {places.Show(from)} wasn't found"); continue; }
-                    if (roots.Any(r => places.Same(r, from))) { problems.Add($"op {i + 1}: a granted folder itself isn't moved"); continue; }
+                    if (IsRoot(from)) { problems.Add($"op {i + 1}: a granted folder itself isn't moved"); continue; }
                     if (isFolder && places.Inside(to, from)) { problems.Add($"op {i + 1}: a folder can't go into itself"); continue; }
                     if (!string.Equals(Path.GetPathRoot(from), Path.GetPathRoot(to), StringComparison.OrdinalIgnoreCase))
                     {
@@ -364,7 +367,7 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
                     if (!isFolder && !File.Exists(path)) { problems.Add($"op {i + 1}: {places.Show(path)} wasn't found"); continue; }
                     var info = isFolder ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path);
                     if (places.IsHiddenName(info.Name)) { problems.Add($"op {i + 1}: {places.Show(path)} wasn't found"); continue; }
-                    if (roots.Any(r => places.Same(r, path))) { problems.Add($"op {i + 1}: a granted folder itself isn't trashed"); continue; }
+                    if (IsRoot(path)) { problems.Add($"op {i + 1}: a granted folder itself isn't trashed"); continue; }
                     if (FolderReader.KindOf(info) == FolderReader.Kind.Link) { problems.Add($"op {i + 1}: {places.Show(path)} is a link; remove it in Explorer"); continue; }
                     if (!platform.CanRecycle(path)) { problems.Add($"op {i + 1}: {places.Show(path)} is on a drive without a Recycle Bin LLMTray can use"); continue; }
                     if (isFolder && reader.HoldsProtected(path)) { problems.Add($"op {i + 1}: {places.Show(path)} holds protected items and isn't trashed whole"); continue; }
@@ -392,14 +395,20 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
         {
             return new ToolOutcome("The user didn't approve the plan; nothing was changed. Don't propose it again unless they ask.", null, false);
         }
-        var result = await changes.RunAsync(plan, approved, p => grants.Access(p, turn.ChatKey, false) is { Level: FolderLevel.Change } g ? g.Root : null, cancellationToken)
-            .ConfigureAwait(false);
+        string? RootOf(string p) => grants.Access(p, turn.ChatKey, false) is { Level: FolderLevel.Change } g ? g.Root
+            : turn.Once.FirstOrDefault(o => o.Level == FolderLevel.Change && places.Inside(p, o.Root)).Root;
+        var result = await changes.RunAsync(plan, approved, RootOf, cancellationToken).ConfigureAwait(false);
         LastResult = result;
         Ran?.Invoke();
         var text = result.Text;
         if (problems.Count > 0) text += "\nNot proposed (fix and ask again if needed): " + string.Join("; ", problems.Take(20));
         return new ToolOutcome(text, null, result.Failed > 0);
     }
+
+    /// <summary>A name for a rename: one name, an ordinary one.</summary>
+    static bool PlainName(string name) =>
+        name.Length > 0 && name.IndexOfAny(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) < 0 && name is not ("." or "..")
+        && !name.EndsWith('.') && !name.EndsWith(' ') && FolderPlaces.Plain(Path.Combine(Path.GetTempPath(), name));
 
     /// <summary>"x (1).pdf", "x - Copy.pdf", "x copy.pdf": the original's path if it's named so.</summary>
     public static string? LooksLikeACopy(string path)

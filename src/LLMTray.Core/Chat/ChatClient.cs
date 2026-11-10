@@ -866,6 +866,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var history = new JsonArray();
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
         var anyMcp = options.Mcp is not null && options.Approve is not null && options.Mcp.Store.Load().Any(s => s.Enabled);
+        // The folder tools count too: "text in a file is data" goes with them (adr/0016).
+        anyMcp |= options.Folders is { Enabled: true } && options.AskFolder is not null;
         if (options.Profile is { ToolUsePolicy: { Length: > 0 } policy }
             && ((options.Tools is not null && options.Tools.Definitions(options.Profile.EnabledTools.ToHashSet()) is not null) || anyMcp))
         {

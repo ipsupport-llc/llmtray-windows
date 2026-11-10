@@ -60,7 +60,8 @@ public sealed class FolderGrants(string file, FolderPlaces places, Func<DateTime
         try
         {
             using var stream = File.OpenRead(file);
-            return JsonSerializer.Deserialize(stream, FolderJson.Default.ListFolderGrant) ?? [];
+            // A grant of a place never granted (the file edited by hand) counts for nothing.
+            return (JsonSerializer.Deserialize(stream, FolderJson.Default.ListFolderGrant) ?? []).Where(g => places.CanGrant(g.Path)).ToList();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -83,7 +84,7 @@ public sealed class FolderGrants(string file, FolderPlaces places, Func<DateTime
     /// </summary>
     public void Grant(string folder, FolderLevel level, FolderGrantChoice choice, string chatKey, string origin = "chat")
     {
-        folder = FolderPlaces.Trim(folder);
+        folder = places.Real(FolderPlaces.Trim(System.IO.Path.GetFullPath(folder))) ?? throw new UnauthorizedAccessException("that folder can't be granted");
         if (!places.CanGrant(folder)) throw new UnauthorizedAccessException("that folder can't be granted");
         lock (sync)
         {

@@ -296,7 +296,8 @@ sealed partial class ChatWindow : Window
             body.Children.Add(new TextBlock { Text = App.Current.Folders.Places.Show(request.Folder), FontFamily = Ui.Mono, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
             lifetime = new RadioButtons { Header = L.T("Allow") };
             foreach (var (_, label) in choices) lifetime.Items.Add(label);
-            lifetime.SelectedIndex = 2;
+            // The narrowest by default: more is the user's choice.
+            lifetime.SelectedIndex = 0;
             body.Children.Add(lifetime);
             body.Children.Add(Ui.Caption(L.T("Folders and their access are listed in Settings › Tools, where you can revoke them.")));
             return new ContentDialog

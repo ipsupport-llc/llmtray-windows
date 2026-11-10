@@ -47,7 +47,7 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
         }
         foreach (var e in all)
         {
-            if (places.IsHiddenName(e.Name)) continue;
+            if (places.IsHiddenName(e.Name) || places.IsDenied(e.FullName)) continue;
             if (!hidden && (e.Name.StartsWith('.') || (e.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)) continue;
             yield return e;
         }
@@ -235,6 +235,10 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
     public string? Unreadable(FileInfo f)
     {
         if (FolderPlaces.IsSecretName(f.Name, f.Directory?.Name)) return "its name says it holds a key or secret: its contents aren't read";
+        if (f.FullName.Split(Path.DirectorySeparatorChar).Any(n => string.Equals(n, ".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "it's inside a .git folder (a repository's history and settings): its contents aren't read";
+        }
         if (InCloud(f)) return "it's in the cloud, not downloaded: reading it would download it";
         if (KindOf(f) == Kind.Link) return "it's a link: not followed";
         if (platform.LinkCount(f.FullName) > 1) return "it has more than one name (hard links): its contents aren't read";
@@ -253,7 +257,8 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
             lines.Append("Contents: ").Append(why).Append('\n');
             return lines.ToString();
         }
-        await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        // Opened once, checked on that handle (not a link, one name), and read from it.
+        await using var stream = platform.OpenRead(file);
         var first = new byte[8192];
         var read = await stream.ReadAtLeastAsync(first, first.Length, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
         var (isText, encoding) = Classify(first.AsSpan(0, read));
@@ -381,7 +386,7 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
                 string? h;
                 try
                 {
-                    await using var s = new FileStream(f.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await using var s = platform.OpenRead(f.FullName);
                     h = await HashAsync(s, cancellationToken, 1L << 30, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)

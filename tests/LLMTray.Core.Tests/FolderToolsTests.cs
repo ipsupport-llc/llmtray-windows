@@ -5,7 +5,21 @@ namespace LLMTray.Core.Tests;
 
 public sealed class FolderToolsTests : IDisposable
 {
-    readonly string root = Path.Combine(Path.GetTempPath(), "llmtray-folders-" + Guid.NewGuid().ToString("N"));
+    readonly string root = TestRoot("llmtray-folders-");
+
+    /// <summary>
+    /// A scratch folder outside AppData (Windows' temp folder is inside it,
+    /// and AppData is never shown), as it really is (macOS' /var is a link).
+    /// </summary>
+    internal static string TestRoot(string prefix)
+    {
+        var baseFolder = Environment.GetEnvironmentVariable("RUNNER_TEMP") is { Length: > 0 } runner ? runner
+            : OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "llmtray-tests")
+            : Path.GetTempPath();
+        var folder = Path.Combine(baseFolder, prefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        return new FolderPlaces(folder, new Dictionary<string, string>(), []).Real(folder) ?? folder;
+    }
     readonly string home;
     readonly string downloads;
     readonly string data;
@@ -226,6 +240,94 @@ public sealed class FolderToolsTests : IDisposable
         Assert.Single(tools.Definitions(temporary: true));
         enabled = false;
         Assert.Empty(tools.Definitions(temporary: false));
+    }
+
+    [Fact]
+    public void StreamsDevicesAndTrailingDotsArentPaths()
+    {
+        Assert.Null(places.Resolve("~/Downloads/.env:secret", []));
+        Assert.Null(places.Resolve("~/Downloads/.env::$DATA", []));
+        Assert.Null(places.Resolve("~/Downloads/NUL", []));
+        Assert.Null(places.Resolve("~/Downloads/con.txt", []));
+        Assert.Null(places.Resolve("~/Downloads/a.txt.", []));
+        Assert.Null(places.Resolve(@"\\server\share\x", []));
+        Assert.Null(places.Resolve("~/Downloads/*.pdf", []));
+        Assert.True(FolderPlaces.IsSecretName(".env-production"));
+        Assert.True(FolderPlaces.IsSecretName("prod.env"));
+        Assert.True(FolderPlaces.IsSecretName("api_keys.txt"));
+    }
+
+    [Fact]
+    public async Task ANameCantLeadOutOfTheGrant()
+    {
+        var outside = Path.Combine(home, "Outside");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(downloads, "a.txt"), "x");
+        grants.Grant(downloads, FolderLevel.Change, FolderGrantChoice.Always, "chat1");
+        var asked = new List<FolderGrantRequest>();
+        var r = await tools.RunAsync(Call("change_files", $$"""{"ops": [{"op": "move", "from": "~/Downloads/a.txt", "to": "~/Downloads", "name": "../Outside/a.txt"}]}"""),
+            Turn(FolderGrantChoice.Deny, asked: asked), default);
+        Assert.True(r.Failed);
+        Assert.True(File.Exists(Path.Combine(downloads, "a.txt")));
+        Assert.False(File.Exists(Path.Combine(outside, "a.txt")));
+    }
+
+    [Fact]
+    public async Task AKeyFileKeepsANameThatSaysSo()
+    {
+        File.WriteAllText(Path.Combine(downloads, ".env"), "TOKEN=1");
+        grants.Grant(downloads, FolderLevel.Change, FolderGrantChoice.Always, "chat1");
+        var r = await tools.RunAsync(Call("change_files", """{"ops": [{"op": "move", "from": "~/Downloads/.env", "to": "~/Downloads/notes.txt"}]}"""), Turn(FolderGrantChoice.Deny), default);
+        Assert.True(r.Failed);
+        Assert.True(File.Exists(Path.Combine(downloads, ".env")));
+    }
+
+    [Fact]
+    public async Task OnlyThisTimeCoversTheWholePlanAndNothingAfter()
+    {
+        File.WriteAllText(Path.Combine(downloads, "a.txt"), "a");
+        File.WriteAllText(Path.Combine(downloads, "b.txt"), "b");
+        var asked = new List<FolderGrantRequest>();
+        var turn = Turn(FolderGrantChoice.Once, asked: asked);
+        var r = await tools.RunAsync(Call("change_files", """{"ops": [{"op": "mkdir", "path": "~/Downloads/T"}, {"from": "~/Downloads/a.txt", "to": "~/Downloads/T"}, {"from": "~/Downloads/b.txt", "to": "~/Downloads/T"}]}"""), turn, default);
+        Assert.False(r.Failed, r.Result);
+        Assert.Single(asked);
+        Assert.True(File.Exists(Path.Combine(downloads, "T", "b.txt")));
+        Assert.Null(grants.Access(downloads, "chat1", false));
+    }
+
+    [Fact]
+    public async Task APartialUndoCanBeTriedAgain()
+    {
+        File.WriteAllText(Path.Combine(downloads, "a.txt"), "a");
+        grants.Grant(downloads, FolderLevel.Change, FolderGrantChoice.Always, "chat1");
+        var r = await tools.RunAsync(Call("change_files", """{"ops": [{"from": "~/Downloads/a.txt", "to": "~/Downloads/b.txt"}]}"""), Turn(FolderGrantChoice.Deny), default);
+        Assert.False(r.Failed, r.Result);
+        // Its old place is taken: not undone, and still offered.
+        File.WriteAllText(Path.Combine(downloads, "a.txt"), "someone else's");
+        var plan = tools.Changes.Last()!.Value.Plan;
+        string? RootOf(string p) => places.Inside(p, downloads) ? downloads : null;
+        var first = await tools.Changes.UndoAsync(plan, RootOf);
+        Assert.Equal(1, first.Failed);
+        Assert.Equal("someone else's", File.ReadAllText(Path.Combine(downloads, "a.txt")));
+        Assert.NotNull(tools.Changes.Last());
+        File.Delete(Path.Combine(downloads, "a.txt"));
+        var second = await tools.Changes.UndoAsync(plan, RootOf);
+        Assert.Equal(0, second.Failed);
+        Assert.Equal("a", File.ReadAllText(Path.Combine(downloads, "a.txt")));
+        Assert.Null(tools.Changes.Last());
+    }
+
+    [Fact]
+    public async Task UndoKeepsAFolderThatGotSomethingNew()
+    {
+        grants.Grant(downloads, FolderLevel.Change, FolderGrantChoice.Always, "chat1");
+        var r = await tools.RunAsync(Call("change_files", """{"ops": [{"op": "mkdir", "path": "~/Downloads/New"}]}"""), Turn(FolderGrantChoice.Deny), default);
+        Assert.False(r.Failed, r.Result);
+        File.WriteAllText(Path.Combine(downloads, "New", "desktop.ini"), "mine");
+        var undo = await tools.Changes.UndoAsync(tools.Changes.Last()!.Value.Plan, p => places.Inside(p, downloads) ? downloads : null);
+        Assert.Equal(1, undo.Failed);
+        Assert.True(File.Exists(Path.Combine(downloads, "New", "desktop.ini")));
     }
 
     [Fact]

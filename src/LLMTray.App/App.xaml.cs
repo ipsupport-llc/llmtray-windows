@@ -402,7 +402,7 @@ public partial class App : Application
         var home = Special(Environment.SpecialFolder.UserProfile);
         var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Downloads"] = WindowsFolders.Downloads(),
+            ["Downloads"] = LLMTray.Core.Folders.WindowsFolderPlatform.Downloads(),
             ["Documents"] = Special(Environment.SpecialFolder.MyDocuments),
             ["Desktop"] = Special(Environment.SpecialFolder.DesktopDirectory),
             ["Pictures"] = Special(Environment.SpecialFolder.MyPictures),
@@ -416,7 +416,7 @@ public partial class App : Application
             Special(Environment.SpecialFolder.LocalApplicationData), DataFolder, AppContext.BaseDirectory,
         }.Where(d => d.Length > 0).ToList();
         var places = new LLMTray.Core.Folders.FolderPlaces(home, known, denied);
-        var platform = new WindowsFolders();
+        var platform = new LLMTray.Core.Folders.WindowsFolderPlatform();
         var grants = new LLMTray.Core.Folders.FolderGrants(Path.Combine(DataFolder, "folder-grants.json"), places);
         var changes = new LLMTray.Core.Folders.FolderChanges(Path.Combine(DataFolder, "folder-journal"), places, platform);
         grants.Changed += () => dispatcher?.TryEnqueue(() => FoldersChanged?.Invoke());
