@@ -442,6 +442,7 @@ sealed partial class ChatWindow : Window
         {
             messages.Children.Clear();
             renderedCount = 0;
+            live = null;
             var empty = new StackPanel { Spacing = 6, Margin = new Thickness(0, 120, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
             empty.Children.Add(new TextBlock { Text = chat.Temporary ? L.T("A temporary chat") : L.T("Ask anything"), FontSize = 22, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
             empty.Children.Add(Ui.Caption(chat.Temporary
@@ -458,8 +459,32 @@ sealed partial class ChatWindow : Window
                 renderedCount = 0;
             }
             var from = Math.Max(0, renderedCount - 1);
-            while (messages.Children.Count > from) messages.Children.RemoveAt(messages.Children.Count - 1);
-            for (var i = from; i < chat.Messages.Count; i++) messages.Children.Add(MessageView(chat.Messages[i], i == chat.Messages.Count - 1));
+            var lastMessage = chat.Messages[^1];
+            if (renderedCount == chat.Messages.Count && live is { } answer && answer.Message == lastMessage && lastMessage.Streaming && answer.Update())
+            {
+                // The answer being written grows in place: nothing on screen is made again.
+            }
+            else
+            {
+                while (messages.Children.Count > from) messages.Children.RemoveAt(messages.Children.Count - 1);
+                live = null;
+                for (var i = from; i < chat.Messages.Count; i++)
+                {
+                    var message = chat.Messages[i];
+                    var isLast = i == chat.Messages.Count - 1;
+                    // In place while it can show all of it; otherwise drawn whole (an MCP record, an error, a picture).
+                    if (isLast && message.Streaming && message.Role == "assistant" && !message.IsSummary
+                        && new LiveAnswer(this, message) is var candidate && candidate.Update())
+                    {
+                        live = candidate;
+                        messages.Children.Add(candidate.Root);
+                    }
+                    else
+                    {
+                        messages.Children.Add(MessageView(message, isLast));
+                    }
+                }
+            }
             renderedCount = chat.Messages.Count;
             renderedEpoch = chat.Epoch;
         }
@@ -526,10 +551,7 @@ sealed partial class ChatWindow : Window
             });
             return stack;
         }
-        var who = Ui.Horizontal(
-            new Image { Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
-            new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
-        stack.Children.Add(who);
+        stack.Children.Add(Who(message));
 
         if (message.Reasoning.Length > 0)
         {
@@ -592,29 +614,7 @@ sealed partial class ChatWindow : Window
             }
         }
 
-        if (message.McpCalls.Count > 0)
-        {
-            // What each MCP call did, as approved: saved with the answer.
-            var calls = new StackPanel { Spacing = 2 };
-            foreach (var call in message.McpCalls)
-            {
-                var outcome = call.Outcome switch
-                {
-                    "done" => L.T("done"),
-                    "failed" => L.T("failed"),
-                    "denied" => L.T("denied"),
-                    "unknown" => L.T("outcome unknown"),
-                    _ => L.T("not sent"),
-                };
-                var line = Ui.Caption($"{call.Server} · {call.Tool} {call.Arguments} — {outcome}",
-                    call.Outcome is "done" ? null : call.Outcome == "denied" ? Ui.Gray : Ui.Orange);
-                line.IsTextSelectionEnabled = true;
-                line.MaxLines = 3;
-                line.TextTrimming = TextTrimming.CharacterEllipsis;
-                calls.Children.Add(line);
-            }
-            stack.Children.Add(calls);
-        }
+        if (message.McpCalls.Count > 0) stack.Children.Add(McpCallsView(message));
 
         if (!message.Streaming && message.Sources.Count > 0)
         {
@@ -645,6 +645,157 @@ sealed partial class ChatWindow : Window
             stack.Children.Add(actions);
         }
         return stack;
+    }
+
+    /// <summary>What each MCP call did, as approved: saved with the answer.</summary>
+    static UIElement McpCallsView(ChatMessage message)
+    {
+        var calls = new StackPanel { Spacing = 2 };
+        foreach (var call in message.McpCalls)
+        {
+            var outcome = call.Outcome switch
+            {
+                "done" => L.T("done"),
+                "failed" => L.T("failed"),
+                "denied" => L.T("denied"),
+                "unknown" => L.T("outcome unknown"),
+                _ => L.T("not sent"),
+            };
+            var line = Ui.Caption($"{call.Server} · {call.Tool} {call.Arguments} — {outcome}",
+                call.Outcome is "done" ? null : call.Outcome == "denied" ? Ui.Gray : Ui.Orange);
+            line.IsTextSelectionEnabled = true;
+            line.MaxLines = 3;
+            line.TextTrimming = TextTrimming.CharacterEllipsis;
+            calls.Children.Add(line);
+        }
+        return calls;
+    }
+
+    /// <summary>The app's mark, decoded once for every answer (a new image per answer would blink in).</summary>
+    static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? mark;
+
+    static UIElement Who(ChatMessage message) => Ui.Horizontal(
+        new Image { Source = mark ??= new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
+        new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
+
+    LiveAnswer? live;
+
+    /// <summary>
+    /// The answer being written, changed in place as it grows (Mac: the
+    /// bubble updates, nothing blinks): its name line, thoughts, text,
+    /// waiting ring and tool line are made once and kept; only the last
+    /// paragraph or two of the text are made again. Anything else showing
+    /// up mid-answer (an error, an MCP record, a picture) draws it whole.
+    /// </summary>
+    sealed class LiveAnswer(ChatWindow window, ChatMessage message)
+    {
+        public ChatMessage Message { get; } = message;
+        UIElement? calls;
+        int callsShown;
+        public StackPanel Root { get; } = new() { Spacing = 6 };
+        readonly UIElement who = Who(message);
+        Expander? thought;
+        TextBlock? thoughtText;
+        Border? card;
+        readonly StackPanel body = new() { Spacing = 8 };
+        readonly ProgressRing waiting = new() { IsActive = true, Width = 16, Height = 16, HorizontalAlignment = HorizontalAlignment.Left };
+        TextBlock? doingText;
+        UIElement? doing;
+        int blocks;
+
+        /// <summary>False when the answer now needs drawing whole.</summary>
+        public bool Update()
+        {
+            var m = Message;
+            // Only what this view draws: an error or a picture needs the whole view.
+            if (m.Error is not null || m.Images.Count > 0 || !m.Streaming) return false;
+            var parts = new List<UIElement> { who };
+            if (m.Reasoning.Length > 0)
+            {
+                if (thought is null)
+                {
+                    thoughtText = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Ui.Secondary, FontSize = 13 };
+                    thought = new Expander
+                    {
+                        Content = thoughtText,
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                        IsExpanded = window.openThoughts.Contains(m),
+                    };
+                    thought.Expanding += (_, _) => window.openThoughts.Add(m);
+                    thought.Collapsed += (_, _) => window.openThoughts.Remove(m);
+                }
+                var header = m.Content.Length == 0 ? L.T("Thinking…") : L.T("Thought process");
+                if (!Equals(thought.Header, header)) thought.Header = header;
+                var reasoning = m.Reasoning.Trim();
+                if (thoughtText!.Text != reasoning) thoughtText.Text = reasoning;
+                parts.Add(thought);
+            }
+            if (m.Content.Length > 0 || m.Reasoning.Length == 0)
+            {
+                card ??= new Border
+                {
+                    Child = body,
+                    Background = Ui.CardBackground,
+                    BorderBrush = Ui.Stroke,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(14, 10, 14, 10),
+                };
+                if (m.Content.Length == 0)
+                {
+                    if (body.Children.Count != 1 || body.Children[0] != waiting)
+                    {
+                        body.Children.Clear();
+                        body.Children.Add(waiting);
+                        blocks = 0;
+                    }
+                }
+                else
+                {
+                    if (body.Children.Count > 0 && body.Children[0] == waiting) body.Children.Clear();
+                    // Paragraphs before the last two don't change as the text grows.
+                    var parsed = Markdown.Parse(m.Content);
+                    var keep = Math.Min(Math.Max(0, blocks - 2), parsed.Count);
+                    while (body.Children.Count > keep) body.Children.RemoveAt(body.Children.Count - 1);
+                    for (var i = keep; i < parsed.Count; i++) body.Children.Add(BlockView(parsed[i]));
+                    blocks = parsed.Count;
+                }
+                parts.Add(card);
+            }
+            if (m.Activity is { } activity)
+            {
+                if (doing is null)
+                {
+                    doingText = Ui.Caption("");
+                    doing = Ui.Horizontal(new ProgressRing { IsActive = true, Width = 14, Height = 14 }, doingText);
+                }
+                doingText!.Text = Activity(activity);
+                parts.Add(doing);
+            }
+            if (m.McpCalls.Count > 0)
+            {
+                // The records of MCP calls, made again only when one is added.
+                if (calls is null || callsShown != m.McpCalls.Count)
+                {
+                    calls = McpCallsView(m);
+                    callsShown = m.McpCalls.Count;
+                }
+                parts.Add(calls);
+            }
+            // Only a part coming or going changes the column, and the others stay where they are
+            // (taken out and put back, an open thought would lose its place and selection).
+            for (var i = Root.Children.Count - 1; i >= 0; i--)
+            {
+                if (!parts.Contains(Root.Children[i])) Root.Children.RemoveAt(i);
+            }
+            for (var i = 0; i < parts.Count; i++)
+            {
+                if (i < Root.Children.Count && Root.Children[i] == parts[i]) continue;
+                Root.Children.Insert(i, parts[i]);
+            }
+            return true;
+        }
     }
 
     /// <summary>What the answer shows while a tool runs.</summary>

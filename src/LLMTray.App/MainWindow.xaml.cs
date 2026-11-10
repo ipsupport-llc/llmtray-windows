@@ -76,10 +76,11 @@ public sealed partial class MainWindow : Window
         {
             state = s;
             RenderHeader();
-            if (page is "models" or "server") RenderPageSoon();
+            // Drawn again only when what these pages show of it changed, not for every report.
+            if (page is "models" or "server" && HostKey(s) != renderedHostKey) RenderPageSoon();
         };
         App.Current.DownloadsChanged += RenderDownloads;
-        App.Current.McpChanged += () => { if (page == "tools") RenderPageSoon(); };
+        App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.ProfilesChanged += () =>
         {
             RenderRestartBar();
@@ -88,7 +89,11 @@ public sealed partial class MainWindow : Window
         App.Current.Updater.Changed += () =>
         {
             RenderUpdateBar();
-            if (page == "updates") RenderPageSoon();
+            if (page != "updates") return;
+            // Progress and status change in place; the page is made again only when its rows change.
+            // The status line follows even while a full redraw waits for the user to leave a field.
+            liveUpdates?.Invoke();
+            if (UpdatesKey() != renderedUpdatesKey) RenderPageSoon();
         };
 
         state = App.Current.Host.State;
@@ -293,9 +298,35 @@ public sealed partial class MainWindow : Window
         return focused is ComboBoxItem;
     }
 
+    string? renderedHostKey, renderedToolsKey, renderedUpdatesKey;
+    Action? liveUpdates;
+
+    static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Message}";
+
+    /// <summary>What the Tools tab shows of the servers (an open log follows its lines).</summary>
+    string ToolsKey() => string.Join("\n", App.Current.Mcp.Store.Load().Select(c =>
+    {
+        var st = App.Current.Mcp.State(c);
+        // Not listed and listed-empty differ; an open log changes with its last line even at its 200-line cap.
+        var tools = st.Tools is null ? "?" : string.Join(",", st.Tools.Select(t => t.DefinitionHash));
+        var log = mcpLogOpen.Contains(c.Key) ? $"{st.Log.Count}:{st.Log.LastOrDefault()}" : "";
+        var reviewed = string.Join(",", c.Reviewed.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Key + "=" + kv.Value));
+        return $"{c.Key}|{c.Name}|{c.Enabled}|{st.Status}|{st.Running}|{tools}|{reviewed}|{string.Join(",", c.RunWithoutAsking.Order(StringComparer.Ordinal))}|{log}";
+    }));
+
+    string UpdatesKey()
+    {
+        var u = App.Current.Updater;
+        return $"{u.CanUpdate}|{u.Available?.Tag.DisplayVersion}|{u.Channel}";
+    }
+
     void RenderPage()
     {
         pendingRender = false;
+        renderedHostKey = HostKey(state);
+        renderedToolsKey = page == "tools" ? ToolsKey() : null;
+        renderedUpdatesKey = UpdatesKey();
+        liveUpdates = null;
         PageContent.Children.Clear();
         var parts = page switch
         {
@@ -471,6 +502,18 @@ public sealed partial class MainWindow : Window
         };
         var check = Ui.Button(L.T("Check Now"), () => _ = updater.CheckAsync(manual: true));
         check.IsEnabled = !updater.Busy;
+        Button? install = updater.Available is not null ? Ui.Button(L.T("Install and restart"), () => _ = updater.InstallAsync(), accent: true) : null;
+        var status = Ui.Caption(updater.Status ?? "");
+        status.Visibility = updater.Status is null ? Visibility.Collapsed : Visibility.Visible;
+        liveUpdates = () =>
+        {
+            check.IsEnabled = !updater.Busy;
+            channel.IsEnabled = !updater.Busy;
+            if (install is not null) install.IsEnabled = !updater.Busy;
+            if (auto.IsOn != app.Settings.CheckForUpdates) auto.IsOn = app.Settings.CheckForUpdates;
+            status.Text = updater.Status ?? "";
+            status.Visibility = updater.Status is null ? Visibility.Collapsed : Visibility.Visible;
+        };
         var copy = updater.ScoopManaged ? L.F("Installed with Scoop, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Portable ? L.F("The portable copy, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Installer ? L.F("Installed with the LLMTray installer, for {0}.", updater.Architecture)
@@ -479,10 +522,16 @@ public sealed partial class MainWindow : Window
             Ui.Row(L.T("Version"), copy, Ui.Value(updater.Current!.DisplayVersion)),
             Ui.Row(L.T("Check for updates automatically"), L.T("When LLMTray starts and every 12 hours. Nothing installs without your click."), auto),
             Ui.Row(L.T("Update channel"), L.T("Beta: pre-release builds with features still being tested."), channel),
-            Ui.Row(updater.Available is { } a ? L.F("LLMTray {0} is available", a.Tag.DisplayVersion) : L.T("Check for a new version"),
-                updater.Status, updater.Available is not null
-                    ? Ui.Horizontal(Ui.Button(L.T("Install and restart"), () => _ = updater.InstallAsync(), accent: true), check)
-                    : check));
+            CheckRow());
+
+        Grid CheckRow()
+        {
+            var row = Ui.Row(updater.Available is { } a ? L.F("LLMTray {0} is available", a.Tag.DisplayVersion) : L.T("Check for a new version"),
+                null, install is not null ? Ui.Horizontal(install, check) : check);
+            // The status line lives under the title and changes in place.
+            ((StackPanel)row.Children[0]).Children.Add(status);
+            return row;
+        }
     }
 
     /// <summary>
