@@ -35,60 +35,48 @@ static class Status
 }
 
 /// <summary>
-/// The main window, laid out like the Mac app's Settings (tabs of cards).
-/// Pages are rebuilt from the current state when it changes.
+/// Settings (adr/0014), laid out like the Mac app's Settings window (tabs
+/// of cards). A page is made again only when what it shows changed.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
     HostState state = HostState.Stopped;
-    string page = "models";
+    string page = "general";
     bool? signInStartup;
     string? signInError;
-    string? dismissedUpdate;
-    string? lastUpdateKey;
 
     public MainWindow()
     {
         InitializeComponent();
         // Texts set in MainWindow.xaml, in the user's language.
         foreach (var item in Tabs.MenuItems.OfType<NavigationViewItem>()) item.Content = L.T((string)item.Content);
-        ChatButtonText.Text = L.T("Chat");
-        InstallUpdateButton.Content = L.T("Install and restart");
-        RestartButton.Content = L.T("Restart Server");
-        DownloadCancel.Content = L.T("Cancel");
-        ToolTipService.SetToolTip(StopButton, L.T("Unload the model"));
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(StopButton, L.T("Unload the model"));
-        ToolTipService.SetToolTip(LogButton, L.T("Server log"));
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(LogButton, L.T("Server log"));
+        Title = L.T("LLMTray Settings");
+        NoticeHost.Content = new Notices(updates: false).Panel;
         FitToScreen();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
+            // Settings closes to nothing: the chat (or the tray) is where the app is.
             args.Cancel = true;
-            if (App.Current.HasTrayIcon) sender.Hide();
-            else _ = App.Current.QuitAsync();
+            sender.Hide();
         };
 
         App.Current.ModelsChanged += () => { if (page == "models") RenderPageSoon(); };
         App.Current.HostChanged += s =>
         {
             state = s;
-            RenderHeader();
             // Drawn again only when what these pages show of it changed, not for every report.
             if (page is "models" or "server" && HostKey(s) != renderedHostKey) RenderPageSoon();
         };
-        App.Current.DownloadsChanged += RenderDownloads;
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.ProfilesChanged += () =>
         {
-            RenderRestartBar();
             if (page is "profiles" or "models") RenderPageSoon();
         };
         App.Current.Updater.Changed += () =>
         {
-            RenderUpdateBar();
             if (page != "updates") return;
             // Progress and status change in place; the page is made again only when its rows change.
             if (liveUpdates is not null && UpdatesKey() == renderedUpdatesKey) liveUpdates();
@@ -96,20 +84,13 @@ public sealed partial class MainWindow : Window
         };
 
         state = App.Current.Host.State;
-        RenderHeader();
-        RenderUpdateBar();
-        RenderDownloads(App.Current.Downloads.State);
         RenderPage();
         _ = LoadSignInStateAsync();
         if (Content is FrameworkElement content)
         {
             content.Loaded += (_, _) => content.XamlRoot.Changed += (root, _) => SetMinimumSize(root.RasterizationScale);
             // The status colours are picked per theme: draw again on a switch.
-            content.ActualThemeChanged += (_, _) =>
-            {
-                RenderHeader();
-                RenderPage();
-            };
+            content.ActualThemeChanged += (_, _) => RenderPage();
         }
         // A render that waited for the user to leave a field.
         PageContent.LosingFocus += (_, _) => DispatcherQueue.TryEnqueue(() =>
@@ -119,7 +100,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>The tab names, for translation (MainWindow.xaml holds them in English).</summary>
-    internal static readonly string[] TabNames = [L.T("Models"), L.T("Profiles"), L.T("Tools"), L.T("Server"), L.T("General"), L.T("Updates"), L.T("About")];
+    internal static readonly string[] TabNames = [L.T("General"), L.T("Models"), L.T("Profiles"), L.T("Tools"), L.T("Server"), L.T("Updates")];
 
     /// <summary>Opens a tab ("models", "server", "general", "updates").</summary>
     public void ShowPage(string tag)
@@ -137,135 +118,6 @@ public sealed partial class MainWindow : Window
             PageScroller.ChangeView(null, 0, null, disableAnimation: true);
         }
     }
-
-    // MARK: Header and notices
-
-    void RenderHeader()
-    {
-        var (text, color) = Status.Of(state);
-        StatusText.Text = text;
-        StatusDot.Fill = color;
-        Loading.IsActive = state.Status == HostStatus.Loading;
-        DetailText.Text = Status.Device(state) ?? L.F("API at {0}", AppInfo.ApiBaseUrl);
-        var errors = new[] { state.Message, App.Current.ProxyError }.Where(m => m is not null).ToList();
-        ErrorText.Text = string.Join("\n", errors);
-        ErrorText.Foreground = Ui.Red;
-        ErrorText.Visibility = errors.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        StopButton.IsEnabled = state.Status is HostStatus.Running or HostStatus.Loading;
-        RenderRestartBar();
-    }
-
-    /// <summary>The loaded model's profile changed a launch setting: a restart applies it (never automatic).</summary>
-    void RenderRestartBar()
-    {
-        var app = App.Current;
-        if (app.RestartNeeded && state.Model is { } model)
-        {
-            RestartBar.Title = L.T("Restart Server");
-            RestartBar.Message = L.F("{0} runs with the launch settings it started with. Restart it to use its profile's new ones; requests in progress are cut off.", model.Name);
-            RestartButton.IsEnabled = !state.IsBusy;
-            RestartBar.IsOpen = true;
-        }
-        else
-        {
-            RestartBar.IsOpen = false;
-        }
-    }
-
-    void Restart_Click(object sender, RoutedEventArgs e) => _ = App.Current.RestartAsync();
-
-    void RenderUpdateBar()
-    {
-        var updater = App.Current.Updater;
-        // Closed by the user: stays closed until something new happens.
-        var key = $"{updater.Available?.Tag.DisplayVersion}|{(updater.Busy ? "busy" : updater.Status)}";
-        if (key != lastUpdateKey)
-        {
-            lastUpdateKey = key;
-            dismissedUpdate = null;
-        }
-        if (dismissedUpdate == key)
-        {
-            UpdateBar.IsOpen = false;
-            return;
-        }
-        if (updater.Available is { } update)
-        {
-            UpdateBar.Severity = InfoBarSeverity.Success;
-            UpdateBar.Title = L.F("LLMTray {0} is available", update.Tag.DisplayVersion);
-            UpdateBar.Message = updater.Status ?? L.F("{0}. LLMTray closes, updates and opens again.", Ui.Size(update.Package.Size));
-            InstallUpdateButton.Visibility = updater.ScoopManaged ? Visibility.Collapsed : Visibility.Visible;
-            InstallUpdateButton.IsEnabled = !updater.Busy;
-            if (updater.ScoopManaged && updater.Status is null) UpdateBar.Message = L.T("Installed with Scoop: quit LLMTray, then run \"scoop update llmtray\".");
-            UpdateBar.IsOpen = true;
-        }
-        else if (updater.Status is { } status && page != "updates")
-        {
-            UpdateBar.Severity = InfoBarSeverity.Informational;
-            UpdateBar.Title = L.T("Updates");
-            UpdateBar.Message = status;
-            InstallUpdateButton.Visibility = Visibility.Collapsed;
-            UpdateBar.IsOpen = true;
-        }
-        else
-        {
-            UpdateBar.IsOpen = false;
-        }
-    }
-
-    void UpdateBar_Closed(InfoBar sender, InfoBarClosedEventArgs args) => dismissedUpdate = lastUpdateKey;
-
-    void InstallUpdate_Click(object sender, RoutedEventArgs e) => _ = App.Current.Updater.InstallAsync();
-
-    void RenderDownloads(DownloadState d)
-    {
-        if (d.Current is { } job)
-        {
-            var line = d.Total is long t && t > 0
-                ? L.F("Downloading {0}: {1} of {2}", job.Title, Ui.Size(d.Received), Ui.Size(t))
-                : L.F("Downloading {0}: {1}", job.Title, Ui.Size(d.Received));
-            if (d.Queued > 0) line += " · " + L.F("Queued: {0}", d.Queued);
-            DownloadText.Text = line;
-            DownloadProgress.IsIndeterminate = d.Total is null;
-            DownloadProgress.Value = d.Total is long all && all > 0 ? 1000.0 * d.Received / all : 0;
-            DownloadProgress.Visibility = Visibility.Visible;
-            DownloadCancel.Content = L.T("Cancel");
-            DownloadCancel.Visibility = Visibility.Visible;
-            DownloadPanel.Visibility = Visibility.Visible;
-        }
-        else if (d.LastError is { } error)
-        {
-            DownloadText.Text = error;
-            DownloadProgress.Visibility = Visibility.Collapsed;
-            DownloadCancel.Content = L.T("Close");
-            DownloadCancel.Visibility = Visibility.Visible;
-            DownloadPanel.Visibility = Visibility.Visible;
-        }
-        else if (d.LastDone is { } done)
-        {
-            DownloadText.Text = L.F("{0} is downloaded. Choose Load, or name it in a request.", done);
-            DownloadProgress.Visibility = Visibility.Collapsed;
-            DownloadCancel.Content = L.T("Close");
-            DownloadCancel.Visibility = Visibility.Visible;
-            DownloadPanel.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            DownloadPanel.Visibility = Visibility.Collapsed;
-        }
-    }
-
-    void DownloadCancel_Click(object sender, RoutedEventArgs e)
-    {
-        if (App.Current.Downloads.State.IsActive) App.Current.Downloads.CancelCurrent();
-        else App.Current.Downloads.Dismiss();
-    }
-
-    void Stop_Click(object sender, RoutedEventArgs e) => _ = App.Current.StopAsync();
-
-    void OpenLog_Click(object sender, RoutedEventArgs e) => App.Current.ShowLog();
-
-    void Chat_Click(object sender, RoutedEventArgs e) => App.Current.ShowChat();
 
     // MARK: Pages
 
@@ -330,8 +182,8 @@ public sealed partial class MainWindow : Window
             "tools" => ToolsPage(),
             "general" => GeneralPage(),
             "updates" => UpdatesPage(),
-            "about" => AboutPage(),
-            _ => ModelsPage(),
+            "models" => ModelsPage(),
+            _ => GeneralPage(),
         };
         foreach (var part in parts) PageContent.Children.Add(part);
     }
@@ -471,6 +323,11 @@ public sealed partial class MainWindow : Window
         yield return Ui.Section(L.T("Data"));
         yield return Ui.Card(
             Ui.Row(L.T("Data folder"), app.DataFolder, Ui.Button(L.T("Open"), () => Ui.OpenFolder(app.DataFolder))));
+
+        yield return Ui.Section(L.T("About"));
+        yield return Ui.Card(
+            Ui.Row(L.T("About LLMTray"), app.Updater.Current is { } current ? L.F("Version {0}", current.DisplayVersion) : L.T("Development build"),
+                Ui.Button(L.T("About LLMTray…"), app.ShowAbout)));
     }
 
     IEnumerable<UIElement> UpdatesPage()
@@ -534,146 +391,6 @@ public sealed partial class MainWindow : Window
     /// and every license that applies, bundled (Licenses.json, made at build
     /// time) and on this PC (the downloaded models, read now).
     /// </summary>
-    IEnumerable<UIElement> AboutPage()
-    {
-        var app = App.Current;
-        var header = new Grid { ColumnSpacing = 14, Margin = new Thickness(4, 12, 0, 4) };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.Children.Add(new Image
-        {
-            Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square150x150Logo.png"))),
-            Width = 64,
-            Height = 64,
-        });
-        var title = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
-        title.Children.Add(new TextBlock { Text = L.T("LLMTray for Windows"), FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        title.Children.Add(Ui.Caption(app.Updater.Current is { } current ? L.F("Version {0}", current.DisplayVersion) : L.T("Development build")));
-        var links = Ui.Horizontal(
-            Ui.Caption(L.T("Apache License 2.0")),
-            Link(L.T("Source on GitHub"), "https://github.com/ipsupport-llc/llmtray-windows"),
-            Link("ipsupport.us", "https://ipsupport.us"),
-            Link(L.T("Releases"), "https://github.com/ipsupport-llc/llmtray-windows/releases"));
-        title.Children.Add(links);
-        Grid.SetColumn(title, 1);
-        header.Children.Add(title);
-        yield return header;
-
-        // The Mac app's model disclaimer.
-        var disclaimer = new InfoBar
-        {
-            IsOpen = true,
-            IsClosable = true,
-            Severity = InfoBarSeverity.Warning,
-            Title = L.T("A model is a tool, not an authority"),
-            Message = L.T("It can be wrong and make things up: check anything that matters. It is not a doctor, lawyer, psychologist or friend. You use its answers at your own risk."),
-        };
-        yield return disclaimer;
-
-        yield return Ui.Section(L.T("Licenses"));
-        yield return LicensesView();
-    }
-
-    static HyperlinkButton Link(string text, string url) => new() { Content = text, NavigateUri = new Uri(url), Padding = new Thickness(4, 0, 4, 0) };
-
-    /// <summary>Components on the left by group, the chosen one's license on the right.</summary>
-    UIElement LicensesView()
-    {
-        var list = new ListView { SelectionMode = ListViewSelectionMode.Single };
-        var name = new TextBlock { FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
-        var license = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        var text = new TextBox
-        {
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            FontFamily = Ui.Mono,
-            FontSize = 13,
-            Text = L.T("Select a component to see its license."),
-        };
-        ScrollViewer.SetVerticalScrollBarVisibility(text, ScrollBarVisibility.Auto);
-
-        var groups = new List<Core.Licenses.LicenseGroup>();
-        var bundled = Core.Licenses.LicenseCatalog.Load(Path.Combine(AppContext.BaseDirectory, "runtime", "Licenses.json"));
-        groups.AddRange(bundled?.Groups ?? [new Core.Licenses.LicenseGroup("missing", L.T("Bundled software"),
-            [new Core.Licenses.LicenseEntry("Licenses.json", null, L.T("not in this build"),
-                null, L.T("This build has no generated license list: scripts/generate-licenses.ps1 writes it (with THIRD_PARTY_NOTICES.txt) beside the app."))])]);
-
-        void Fill(IEnumerable<Core.Licenses.LicenseGroup> all, bool scanning)
-        {
-            list.Items.Clear();
-            foreach (var group in all)
-            {
-                list.Items.Add(new ListViewItem
-                {
-                    Content = new TextBlock { Text = group.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Ui.Secondary, FontSize = 12 },
-                    IsEnabled = false,
-                    Margin = new Thickness(0, 6, 0, 0),
-                });
-                foreach (var entry in group.Entries)
-                {
-                    var row = new StackPanel { Padding = new Thickness(0, 3, 0, 3) };
-                    row.Children.Add(new TextBlock { Text = entry.Title, TextTrimming = TextTrimming.CharacterEllipsis });
-                    row.Children.Add(Ui.Caption(entry.License));
-                    var item = new ListViewItem { Content = row, Tag = entry };
-                    ToolTipService.SetToolTip(item, $"{entry.Title} — {entry.License}");
-                    list.Items.Add(item);
-                }
-            }
-            if (scanning) list.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("Reading the models on this PC…")), IsEnabled = false });
-        }
-        list.SelectionChanged += (_, _) =>
-        {
-            if (list.SelectedItem is not ListViewItem { Tag: Core.Licenses.LicenseEntry entry }) return;
-            name.Text = entry.Title;
-            license.Children.Clear();
-            license.Children.Add(Ui.Caption(entry.License));
-            if (entry.Url is { } url && Uri.TryCreate(url, UriKind.Absolute, out var uri)) license.Children.Add(new HyperlinkButton { Content = uri.Host, NavigateUri = uri, Padding = new Thickness(0) });
-            text.Text = entry.Text;
-        };
-        Fill(groups, scanning: true);
-
-        // The models on this PC, read off the UI thread (each GGUF header).
-        var models = App.Current.Library.Current.Models;
-        _ = Task.Run(() => models.Select(Core.Licenses.ModelLicenses.Of).OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList())
-            .ContinueWith(t =>
-            {
-                var all = groups.ToList();
-                if (t.IsCompletedSuccessfully && t.Result.Count > 0) all.Add(new Core.Licenses.LicenseGroup("models", L.T("Downloaded models"), t.Result));
-                DispatcherQueue.TryEnqueue(() => Fill(all, scanning: false));
-            }, TaskScheduler.Default);
-
-        var right = new Grid { RowSpacing = 6, Padding = new Thickness(12) };
-        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        right.Children.Add(name);
-        Grid.SetRow(license, 1);
-        right.Children.Add(license);
-        Grid.SetRow(text, 2);
-        right.Children.Add(text);
-
-        // As tall as the window allows, at least enough for a dozen entries.
-        var split = new Grid { Height = Math.Max(320, (Content as FrameworkElement)?.ActualHeight - 330 ?? 420) };
-        split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
-        split.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        split.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        split.Children.Add(list);
-        var line = new Microsoft.UI.Xaml.Shapes.Rectangle { Width = 1, Fill = Ui.Stroke };
-        Grid.SetColumn(line, 1);
-        split.Children.Add(line);
-        Grid.SetColumn(right, 2);
-        split.Children.Add(right);
-        return new Border
-        {
-            Child = split,
-            CornerRadius = new CornerRadius(8),
-            Background = Ui.CardBackground,
-            BorderBrush = Ui.Stroke,
-            BorderThickness = new Thickness(1),
-        };
-    }
-
     // MARK: Actions
 
     /// <summary>

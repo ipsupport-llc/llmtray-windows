@@ -14,7 +14,7 @@ namespace LLMTray.App;
 public partial class App : Application
 {
     MainWindow? window;
-    PopoverWindow? popover;
+    AboutWindow? about;
     LogWindow? log;
     TrayIcon? tray;
     JobObjectLauncher? launcher;
@@ -183,22 +183,27 @@ public partial class App : Application
         control.Start();
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
-        tray.Activated += () => (popover ??= new PopoverWindow()).Toggle();
+        // A left click shows the chat, or hides it when it's already in front (Mac: the popover).
+        tray.Activated += ToggleChat;
         tray.Menu = TrayMenu;
         if (!tray.IsAdded) RetryTray();
 
-        // Started at sign-in: only the tray icon until the user opens the window.
+        // Started at sign-in: only the tray icon until the user opens the chat.
         // A fresh install opens the setup wizard instead (adr/0010).
         if (!SignInStartup.StartedInBackground())
         {
             if (LLMTray.Core.Setup.SetupWizard.ShouldOpen(Settings) && !Environment.GetCommandLineArgs().Contains("--no-setup")) ShowSetup();
-            else ShowWindow();
+            else ShowChat();
         }
         ListenForSecondLaunch();
-        // For screenshots in CI and for support: open the panel or the log at start.
+        // For screenshots in CI and for support: open the log or Settings at start, or photograph every window.
         var commandLine = Environment.GetCommandLineArgs();
         if (commandLine.Contains("--show-log")) ShowLog();
-        if (commandLine.Contains("--show-popover")) dispatcher.TryEnqueue(DispatcherQueuePriority.Low, () => (popover ??= new PopoverWindow()).Toggle());
+        if (commandLine.Contains("--show-settings")) ShowSettings();
+        if (Array.IndexOf(commandLine, "--screenshots") is var at and >= 0 && at + 1 < commandLine.Length)
+        {
+            _ = Screenshots.TakeAsync(commandLine[at + 1]);
+        }
         Updater.Start();
 
         if (Settings.LoadLastModelOnStart && Settings.LastModel is { } last && Library.Current.Resolve(last) is { } model)
@@ -207,10 +212,11 @@ public partial class App : Application
         }
     }
 
-    public void ShowWindow() => ShowWindow(null);
+    /// <summary>The app's window (adr/0014): the chat.</summary>
+    public void ShowWindow() => ShowChat();
 
-    /// <summary>Opens the window, on a tab if given, and the download window if asked.</summary>
-    public void ShowWindow(string? page, bool getModels = false)
+    /// <summary>Settings, on a tab if given, with the download window over it if asked.</summary>
+    public void ShowSettings(string? page = null, bool getModels = false)
     {
         if (Quitting) return;
         window ??= new MainWindow();
@@ -218,6 +224,20 @@ public partial class App : Application
         window.Activate();
         if (page is not null) window.ShowPage(page);
         if (getModels) _ = window.GetModelsAsync();
+    }
+
+    internal MainWindow? SettingsWindow => window;
+
+    public void ShowAbout()
+    {
+        if (Quitting) return;
+        if (about is null)
+        {
+            about = new AboutWindow();
+            about.Closed += (_, _) => about = null;
+        }
+        about.AppWindow.Show();
+        about.Activate();
     }
 
     ChatWindow? chatWindow;
@@ -241,9 +261,8 @@ public partial class App : Application
     internal void SetupClosed(SetupWindow closed, bool showWindow)
     {
         if (setupWindow == closed) setupWindow = null;
-        // After a first run: the window with the models and settings, open
-        // before the wizard goes.
-        if (showWindow) ShowWindow();
+        // After a first run: the chat, open before the wizard goes.
+        if (showWindow) ShowChat();
     }
 
     /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it; nulls forget it.</summary>
@@ -258,6 +277,19 @@ public partial class App : Application
         chatWindow.AppWindow.Show();
         chatWindow.Activate();
         if (newChat) chatWindow.NewChat();
+    }
+
+    internal ChatWindow? Chat => chatWindow;
+
+    /// <summary>The tray icon's left click: the chat shown, or hidden when it's already in front.</summary>
+    void ToggleChat()
+    {
+        if (chatWindow is { } open && open.AppWindow.IsVisible && open.IsForeground)
+        {
+            open.AppWindow.Hide();
+            return;
+        }
+        ShowChat();
     }
 
     readonly Dictionary<string, (DateTime Written, LLMTray.Core.Chat.ThinkingStyle Style)> thinkingStyles = new(StringComparer.OrdinalIgnoreCase);
@@ -452,7 +484,7 @@ public partial class App : Application
         {
             // Closing the job ends every child, a model still loading included.
             launcher?.Dispose();
-            popover?.Close();
+            about?.Close();
             log?.Close();
             chatWindow?.Close();
             window?.Close();
