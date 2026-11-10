@@ -40,11 +40,42 @@ public sealed partial class MainWindow
             var key = server.Key;
             var toggle = Ui.Toggle(server.Enabled, on => _ = SetMcpOnAsync(server, on), L.F("{0} on", server.Name));
             toggle.IsEnabled = !mcpBusy.Contains(key);
-            var status = mcpBusy.Contains(key) ? L.T("Starting…") : McpStatus(state);
+            var signingIn = app.McpSignIn.IsSigningIn(key);
+            var status = signingIn ? L.T("Finish signing in in your browser…")
+                : mcpBusy.Contains(key) ? L.T("Starting…")
+                : state.NeedsSignIn ? L.T("Needs sign-in")
+                : McpStatus(state);
             var rows = new List<UIElement?>
             {
                 Ui.Row(server.IsCommand ? L.T("Command") : L.T("URL"), status, Ui.Horizontal(Ui.Value(server.Summary, mono: true), toggle)),
             };
+            if (!server.IsCommand)
+            {
+                // Signing in (adr/0015): the browser shows who and what; Settings shows where.
+                if (signingIn)
+                {
+                    rows.Add(Ui.Row(L.T("Sign-in"), L.T("A page opened in your browser. Sign in there; LLMTray waits up to 5 minutes."),
+                        Ui.Button(L.T("Cancel"), () => { if (mcpSignIns.TryGetValue(key, out var cancel)) cancel.Cancel(); })));
+                }
+                else if (state.NeedsSignIn)
+                {
+                    rows.Add(Ui.Row(L.T("Sign-in"),
+                        server.OAuth is { } was ? L.F("Signed out of {0}. Sign in again to use its tools.", was.IssuerHost) : L.T("This server asks you to sign in. Your browser opens to do it."),
+                        Ui.Button(L.T("Sign In"), () => _ = SignInMcpAsync(server, justAdded: false), accent: true)));
+                }
+                else if (server.OAuth is { } oauth)
+                {
+                    var where = oauth.Scope is { Length: > 0 } scope ? L.F("At {0} · {1}", oauth.IssuerHost, scope) : L.F("At {0}", oauth.IssuerHost);
+                    var buttons = new List<UIElement>();
+                    if (oauth.StepUpScope is { Length: > 0 })
+                    {
+                        where += "\n" + L.T("A call needed more access than was granted. Sign in again to allow it.");
+                        buttons.Add(Ui.Button(L.T("Sign In Again"), () => _ = SignInMcpAsync(server, justAdded: false), accent: true));
+                    }
+                    buttons.Add(Ui.Button(L.T("Sign Out"), () => _ = SignOutMcpAsync(server)));
+                    rows.Add(Ui.Row(L.T("Signed in"), where, Ui.Horizontal(buttons.ToArray())));
+                }
+            }
             if (state.Tools is { } tools)
             {
                 foreach (var tool in tools)
@@ -110,7 +141,65 @@ public sealed partial class MainWindow
         var other => other,
     };
 
-    async Task SetMcpOnAsync(McpServerConfig server, bool on)
+    /// <summary>Sign-ins open in the browser, to cancel from the row.</summary>
+    readonly Dictionary<string, CancellationTokenSource> mcpSignIns = [];
+
+    /// <summary>
+    /// Signs in (the browser), then starts the server with its token and
+    /// switches it on. A server just added that can't be signed in to goes again, with why.
+    /// </summary>
+    async Task SignInMcpAsync(McpServerConfig server, bool justAdded)
+    {
+        var app = App.Current;
+        var key = server.Key;
+        if (mcpSignIns.ContainsKey(key)) return;
+        mcpError = null;
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+        mcpSignIns[key] = cancel;
+        RenderPage();
+        try
+        {
+            await app.McpSignIn.SignInAsync(key, app.Mcp.Challenge(key), cancel.Token);
+            await app.Mcp.SignedInAsync(key);
+            mcpBusy.Add(key);
+            RenderPage();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            if (app.Mcp.Current(key) is { } now) await app.Mcp.EnableAsync(now, timeout.Token);
+        }
+        catch (Exception e)
+        {
+            var why = e is OperationCanceledException ? L.T("the sign-in was cancelled") : e.Message;
+            if (justAdded)
+            {
+                await app.Mcp.StopAsync(key);
+                app.McpSignIn.Forget(key);
+                app.Mcp.Store.Remove(key);
+                mcpError = L.F("{0} wasn't added: {1}", server.Name, why);
+            }
+            else
+            {
+                mcpError = L.F("{0}: {1}", server.Name, why);
+            }
+        }
+        finally
+        {
+            mcpSignIns.Remove(key);
+            mcpBusy.Remove(key);
+        }
+        RenderPage();
+    }
+
+    async Task SignOutMcpAsync(McpServerConfig server)
+    {
+        mcpBusy.Add(server.Key);
+        RenderPage();
+        await App.Current.McpSignIn.SignOutAsync(server.Key);
+        await App.Current.Mcp.StopAsync(server.Key);
+        mcpBusy.Remove(server.Key);
+        RenderPage();
+    }
+
+    async Task SetMcpOnAsync(McpServerConfig server, bool on, bool justAdded = false)
     {
         var app = App.Current;
         mcpError = null;
@@ -129,6 +218,17 @@ public sealed partial class MainWindow
             // switched on again keeps its reviews, and what changed waits for its own Accept.
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             if (app.Mcp.Current(server.Key) is { } now) await app.Mcp.EnableAsync(now, timeout.Token);
+        }
+        catch (McpAuthException)
+        {
+            // It asks to sign in: a server just added signs in now (it stays only if that works).
+            mcpBusy.Remove(server.Key);
+            if (justAdded)
+            {
+                await SignInMcpAsync(server, justAdded: true);
+                return;
+            }
+            mcpError = L.F("{0} asks you to sign in.", server.Name);
         }
         catch (Exception e)
         {
@@ -229,7 +329,9 @@ public sealed partial class MainWindow
             DefaultButton = ContentDialogButton.Close,
         };
         if (await ShowMcpDialogAsync(dialog) != ContentDialogResult.Primary) return;
+        if (App.Current.McpSignIn.Tokens(server.Key) is not null) await App.Current.McpSignIn.SignOutAsync(server.Key);
         await App.Current.Mcp.StopAsync(server.Key);
+        App.Current.McpSignIn.Forget(server.Key);
         App.Current.Mcp.Store.Remove(server.Key);
         RenderPage();
     }
@@ -308,7 +410,7 @@ public sealed partial class MainWindow
             config = new McpServerConfig { Name = Named(name.Text, url.Host), Url = url.AbsoluteUri, Headers = headers };
         }
         var added = App.Current.Mcp.Store.Add(config);
-        await SetMcpOnAsync(added, true);
+        await SetMcpOnAsync(added, true, justAdded: true);
     }
 
     static string Named(string typed, string fallback)
@@ -361,6 +463,6 @@ public sealed partial class MainWindow
             RenderPage();
             return;
         }
-        foreach (var server in servers) await SetMcpOnAsync(App.Current.Mcp.Store.Add(server), true);
+        foreach (var server in servers) await SetMcpOnAsync(App.Current.Mcp.Store.Add(server), true, justAdded: true);
     }
 }

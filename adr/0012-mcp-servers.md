@@ -82,7 +82,7 @@ SSE stream stays open. Nothing is retried. 20 s to start, 60 s to list.
 
 ## Not yet
 
-The registry catalog, `.mcpb` bundles, OAuth (adr/0028 on the Mac), tool
+The registry catalog, `.mcpb` bundles, tool
 groups loaded on demand, per-action approval, secrets in Credential
 Manager (environment values and headers are in `mcp-servers.json` in the
-user's profile), image results.
+user's profile), image results. OAuth sign-in came with adr/0015.
