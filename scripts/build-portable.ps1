@@ -8,21 +8,31 @@
 #   pwsh scripts/build-portable.ps1 -Rid win-x64 -Platform x64 -Release 0.1.0-beta.5 -Zip out/LLMTray-0.1.0-beta.5-x64-portable.zip [-Setup out]
 # -Step build stops once the folder is laid out (its programs can then be
 # signed, adr/0017); -Step pack makes the ZIP and the installer from it.
+# -Folder: where the LLMTray folder is laid out (default: a temporary one).
 param(
     [Parameter(Mandatory)][ValidateSet('win-x64', 'win-arm64')][string]$Rid,
     [Parameter(Mandatory)][ValidateSet('x64', 'ARM64')][string]$Platform,
     [Parameter(Mandatory)][string]$Release,
-    [Parameter(Mandatory)][string]$Zip,
+    [string]$Zip,
     # A folder: also build LLMTray-<release>-<platform>-setup.exe there.
     [string]$Setup,
-    [ValidateSet('all', 'build', 'pack')][string]$Step = 'all'
+    [ValidateSet('all', 'build', 'pack')][string]$Step = 'all',
+    [string]$Folder
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$stage = Join-Path ([IO.Path]::GetTempPath()) "llmtray-portable-$Rid"
-$folder = Join-Path $stage 'LLMTray'
+if ($Folder) {
+    $folder = [IO.Path]::GetFullPath($Folder)
+    $stage = Join-Path ([IO.Path]::GetTempPath()) "llmtray-portable-$Rid-work"
+} else {
+    $stage = Join-Path ([IO.Path]::GetTempPath()) "llmtray-portable-$Rid"
+    $folder = Join-Path $stage 'LLMTray'
+}
+# What the layout is: pack takes only the one built for this release and platform.
+$stamp = "$Release $Platform"
 if ($Step -ne 'pack') {
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+if (Test-Path $folder) { Remove-Item $folder -Recurse -Force }
 
 dotnet publish (Join-Path $root 'src/LLMTray.App') -c Release -r $Rid -p:Platform=$Platform `
     -p:WindowsPackageType=None -p:GenerateAppxPackageOnBuild=false `
@@ -54,10 +64,14 @@ $list = @(Get-ChildItem $appDir -Recurse -File | ForEach-Object { $_.FullName.Su
 foreach ($required in 'LLMTray.exe', 'app\LLMTray.exe', 'app\cli\llmtray.exe', 'app\runtime\llama\cpu\llama-server.exe', 'app\Assets\AppIcon.ico', 'app\NOTICE.md', 'app\Strings\de.json') {
     if (-not (Test-Path (Join-Path $folder $required))) { throw "the build has no $required" }
 }
+Set-Content (Join-Path $stage 'layout.txt') $stamp -NoNewline
+if ($Folder) { Set-Content "$folder.layout.txt" $stamp -NoNewline }
 Write-Host "laid out in $folder"
 }
-if ($Step -eq 'build') { exit 0 }
-if (-not (Test-Path (Join-Path $folder 'app\files.txt'))) { throw "nothing laid out in $folder: run -Step build first" }
+if ($Step -eq 'build') { return }
+$made = if ($Folder) { "$folder.layout.txt" } else { Join-Path $stage 'layout.txt' }
+if (-not (Test-Path $made) -or (Get-Content $made -Raw) -ne $stamp) { throw "${folder} isn't the layout of $stamp: run -Step build first" }
+if (-not $Zip) { throw 'pack needs -Zip' }
 New-Item -ItemType Directory -Force (Split-Path $Zip -Parent) | Out-Null
 if (Test-Path $Zip) { Remove-Item $Zip }
 Compress-Archive -Path $folder -DestinationPath $Zip -CompressionLevel Optimal

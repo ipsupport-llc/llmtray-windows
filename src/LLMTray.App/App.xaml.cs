@@ -623,15 +623,21 @@ public partial class App : Application
         return folder;
     }
 
+    /// <summary>Why the earlier package's data couldn't be copied, when it couldn't: the chat says not to remove it yet.</summary>
+    public string? CarryOverFailed { get; private set; }
+
     /// <summary>
     /// A package signed by another publisher is another app to Windows, with
-    /// its own data folder (adr/0017). On this package's first start, the
-    /// newest such LLMTray's data (settings, chats, MCP servers, grants) is
-    /// copied in; nothing of it is changed. Returns that package's folder name
+    /// its own data folder (adr/0017). On this package's first start (no
+    /// settings yet), the data of the older LLMTray package used most
+    /// recently (settings, chats, MCP servers, grants) is copied in: into a
+    /// staging folder first, moved into place only once all of it copied.
+    /// Nothing of the old one is changed. Returns that package's folder name
     /// while it's still installed, so the chat can say to remove it.
     /// </summary>
     static string? CarryOver(string folder)
     {
+        string? from = null;
         try
         {
             var id = Windows.ApplicationModel.Package.Current.Id;
@@ -639,32 +645,66 @@ public partial class App : Application
             var marker = Path.Combine(folder, "carried-over.txt");
             if (File.Exists(marker))
             {
-                var from = File.ReadAllText(marker).Trim();
-                return from.Length > 0 && Directory.Exists(Path.Combine(packages, from)) ? from : null;
+                // "!name": copying from it failed once; the chat keeps saying not to remove it.
+                var was = File.ReadAllText(marker).Trim();
+                if (was.StartsWith('!'))
+                {
+                    was = was[1..];
+                    Current.CarryOverFailed = "an earlier start couldn't copy them";
+                }
+                return was.Length > 0 && Directory.Exists(Path.Combine(packages, was)) ? was : null;
             }
             if (File.Exists(Path.Combine(folder, "settings.json"))) return null;
+            static DateTime Newest(string dir) =>
+                Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Take(20_000).Select(File.GetLastWriteTimeUtc).DefaultIfEmpty().Max();
             var old = Directory.EnumerateDirectories(packages, id.Name + "_*")
                 .Where(d => !string.Equals(Path.GetFileName(d), id.FamilyName, StringComparison.OrdinalIgnoreCase))
                 .Select(d => Path.Combine(d, "LocalState"))
                 .Where(d => File.Exists(Path.Combine(d, "settings.json")))
-                .OrderByDescending(d => File.GetLastWriteTimeUtc(Path.Combine(d, "settings.json")))
+                .OrderByDescending(Newest)
                 .FirstOrDefault();
             if (old is null) return null;
+            from = Path.GetFileName(Path.GetDirectoryName(old))!;
             Directory.CreateDirectory(folder);
+            var staging = Path.Combine(folder, ".carrying-over");
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
             foreach (var file in Directory.EnumerateFiles(old, "*", SearchOption.AllDirectories))
             {
-                var target = Path.Combine(folder, Path.GetRelativePath(old, file));
+                var relative = Path.GetRelativePath(old, file);
+                // Not its own bookkeeping: what it carried over once, its restart script, its logs.
+                var top = relative.Split(Path.DirectorySeparatorChar)[0];
+                if (top is "carried-over.txt" or "restart.cmd" or "logs" or ".carrying-over") continue;
+                var target = Path.Combine(staging, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                if (!File.Exists(target)) File.Copy(file, target);
+                File.Copy(file, target);
             }
-            var name = Path.GetFileName(Path.GetDirectoryName(old))!;
-            File.WriteAllText(marker, name);
-            return name;
+            // All of it copied: into place (this folder is new, nothing to overwrite), then the marker.
+            foreach (var entry in Directory.EnumerateFileSystemEntries(staging))
+            {
+                var target = Path.Combine(folder, Path.GetFileName(entry));
+                if (File.Exists(target) || Directory.Exists(target)) continue;
+                if (Directory.Exists(entry)) Directory.Move(entry, target);
+                else File.Move(entry, target);
+            }
+            Directory.Delete(staging, recursive: true);
+            File.WriteAllText(marker, from);
+            return from;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
-            // Nothing carried over: the app starts fresh, as for a new user.
-            return null;
+            // Not carried over: the app starts fresh, and while the old package is there the chat says to keep it.
+            if (from is not null)
+            {
+                Current.CarryOverFailed = e.Message;
+                try
+                {
+                    File.WriteAllText(Path.Combine(folder, "carried-over.txt"), "!" + from);
+                }
+                catch (Exception again) when (again is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+            return from;
         }
     }
 }

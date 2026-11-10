@@ -217,7 +217,10 @@ jobs:
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
       - name: Build the portable ZIP
         shell: pwsh
-        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip -Setup out
+        # In two steps, as the release does (it signs in between, adr/0017).
+        run: |
+          scripts/build-portable.ps1 -Step build -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray
+          scripts/build-portable.ps1 -Step pack -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip -Setup out
       - name: Unpack and start it
         shell: pwsh
         run: |
