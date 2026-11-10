@@ -48,6 +48,9 @@ public sealed class ChatMessage
     /// <summary>The chat no longer fits the model's context: compacting it lets the next answer through.</summary>
     public bool ContextFull => Error?.Contains("exceeds the available context size", StringComparison.Ordinal) == true;
 
+    /// <summary>Its number in the chat, given once and kept (memory reads chats by it, adr/0018).</summary>
+    public int Seq { get; set; }
+
     /// <summary>The MCP calls this answer made or was refused, as approved.</summary>
     public List<McpCallRecord> McpCalls { get; init; } = [];
 
@@ -65,7 +68,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None,
     Mcp.McpHub? Mcp = null, Func<McpApprovalRequest, CancellationToken, Task<McpApproval>>? Approve = null,
     Folders.FolderTools? Folders = null, Func<Folders.FolderGrantRequest, CancellationToken, Task<Folders.FolderGrantChoice>>? AskFolder = null,
-    Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null);
+    Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null,
+    Memory.MemoryService? Memory = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -99,6 +103,62 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     public bool Busy { get; private set; }
     ChatSessionFile? loaded;
 
+    /// <summary>The last message number given in this chat.</summary>
+    int lastSeq;
+    /// <summary>Started in this session (memory reads it from its start), not opened from a file.</summary>
+    bool startedHere = true;
+    /// <summary>The memory block this chat got (adr/0018), kept with it so its prompt stays the same.</summary>
+    Memory.MemorySnapshot? memorySnapshot;
+    Memory.MemoryService? memory;
+
+    /// <summary>What the user said here, for memory: each user message with the start of the answer before it.</summary>
+    List<Memory.MemoryBatchMessage> UserMessagesLocked()
+    {
+        var list = new List<Memory.MemoryBatchMessage>();
+        string? before = null;
+        for (var i = 0; i < Messages.Count; i++)
+        {
+            var m = Messages[i];
+            if (m.Role == "assistant" && !m.IsSummary && !m.Streaming)
+            {
+                before = m.Content;
+            }
+            else if (m.Role == "user" && m.Content.Length > 0)
+            {
+                var model = i + 1 < Messages.Count && Messages[i + 1].Role == "assistant" ? Messages[i + 1].Model : null;
+                list.Add(new Memory.MemoryBatchMessage { Seq = m.Seq, Date = m.SentAt ?? CreatedAt, Text = m.Content, Before = before, Model = model });
+                before = null;
+            }
+        }
+        return list;
+    }
+
+    /// <summary>The chat's new user messages to memory's queue (after an answer, before leaving it, before compacting).</summary>
+    void QueueForMemory(bool leaving = false)
+    {
+        Guid id;
+        List<Memory.MemoryBatchMessage> messages;
+        bool fresh;
+        lock (sync)
+        {
+            if (memory is null || Temporary || Id is not { } chat) return;
+            id = chat;
+            messages = UserMessagesLocked();
+            fresh = startedHere;
+        }
+        memory.Queue(id, messages, fresh, leaving);
+    }
+
+    /// <summary>Whether memory reads this chat ("Don't remember this chat" when false).</summary>
+    public bool? Remembered => memory is null || Id is not { } id || Temporary ? null : !memory.IsOptedOut(id);
+
+    public void SetRemembered(bool remembered, bool forgetLearned)
+    {
+        if (memory is null || Id is not { } id) return;
+        memory.SetOptedOut(id, !remembered, forgetLearned);
+        Changed?.Invoke();
+    }
+
     /// <summary>This visit of the chat: its folder grants and denies (adr/0016) end with it.</summary>
     string visit = Guid.NewGuid().ToString("N");
     Folders.FolderGrants? folderGrants;
@@ -114,11 +174,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     public void New(bool temporary = false)
     {
         KeepCurrentTurn();
+        QueueForMemory(leaving: true);
         lock (sync)
         {
             epoch++;
             chatAllowed.Clear();
             EndVisit();
+            lastSeq = 0;
+            startedHere = true;
+            memorySnapshot = null;
             Id = null;
             loaded = null;
             Title = "";
@@ -133,11 +197,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     {
         if (store.Load(id) is not { } file) return false;
         KeepCurrentTurn();
+        QueueForMemory(leaving: true);
         lock (sync)
         {
             epoch++;
             chatAllowed.Clear();
             EndVisit();
+            startedHere = false;
+            memorySnapshot = file.WindowsMemorySnapshot;
+            lastSeq = Math.Max(file.LastSeq ?? 0, file.Messages.Max(m => m.Seq) ?? 0);
             Id = file.Id;
             loaded = file;
             Title = file.Title;
@@ -162,6 +230,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Images = images,
                     ImageFilenames = names,
                     IsSummary = m.IsSummary,
+                    // A message from before numbers were kept gets one now (kept from the next save on).
+                    Seq = m.Seq ?? ++lastSeq,
                     Original = m,
                 });
             }
@@ -177,6 +247,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         if ((text.Length == 0 && images is not { Count: > 0 }) || Busy || Compacting) return Task.CompletedTask;
         lock (sync) Messages.Add(new ChatMessage
         {
+            Seq = ++lastSeq,
             Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
         });
         return AnswerAsync(options);
@@ -228,9 +299,14 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         CancellationToken token;
         int mine;
         JsonArray history;
+        // The memory block (adr/0018): this chat's own while it holds, else chosen anew (and kept with the chat).
+        var block = options.Memory?.BlockFor(memorySnapshot, Temporary, null);
         lock (sync)
         {
-            history = History(Messages, options);
+            memory = options.Memory;
+            if (block is not null) memorySnapshot = block;
+            answer.Seq = ++lastSeq;
+            history = History(Messages, options, block?.Text);
             // Low and Medium: the model is told its budget with this message only (never saved).
             if (options.Thinking && Chat.Thinking.BudgetToTell(options.Style, options.Effort) is int budget) AddNote(history, Chat.Thinking.Note(budget));
             Messages.Add(answer);
@@ -432,6 +508,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         };
         if (mine != epoch) return;
         Save();
+        QueueForMemory();
         Changed?.Invoke();
         if (Title.Length == 0 && answer.Content.Length > 0 && answer.Error is null) await NameAsync(options, mine).ConfigureAwait(false);
     }
@@ -802,8 +879,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         return "The chat changed while it was being compacted.";
                     }
+                    // What memory hasn't read yet goes to its queue first: a summary is never evidence.
+                    if (memory is not null && !Temporary && Id is { } chat)
+                    {
+                        var said = UserMessagesLocked();
+                        var fresh = startedHere;
+                        ThreadPool.QueueUserWorkItem(_ => memory.Queue(chat, said, fresh));
+                    }
                     Messages.RemoveRange(range.Start, range.End - range.Start);
-                    Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow });
+                    Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow, Seq = ++lastSeq });
                     file = SnapshotLocked();
                 }
                 if (file is not null) Write(file);
@@ -861,10 +945,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// prompt first, with the tool rule when tools are offered (Mac
     /// ChatRequestBuilder), then the user's and the model's turns.
     /// </summary>
-    static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options)
+    static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options, string? memoryBlock = null)
     {
         var history = new JsonArray();
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
+        // After the profile's prompt (Mac adr/0024): data about the user, never instructions.
+        if (memoryBlock is { Length: > 0 }) system = system.Length == 0 ? memoryBlock : system + "\n\n" + memoryBlock;
         var anyMcp = options.Mcp is not null && options.Approve is not null && options.Mcp.Store.Load().Any(s => s.Enabled);
         // The folder tools count too: "text in a file is data" goes with them (adr/0016).
         anyMcp |= options.Folders is { Enabled: true } && options.AskFolder is not null;
@@ -1022,10 +1108,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     }
                 }
             }
-            var seq = 0;
             var messages = Messages.Where(m => !m.Streaming).Select(m =>
             {
-                seq++;
                 var baseMessage = m.Original ?? new PersistedMessage();
                 return baseMessage with
                 {
@@ -1041,7 +1125,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
                     IsSummary = m.IsSummary,
-                    Seq = seq,
+                    Seq = m.Seq,
                 };
             }).ToList();
             file = (loaded ?? new ChatSessionFile { CreatedAt = CreatedAt }) with
@@ -1050,7 +1134,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 Title = Title,
                 UpdatedAt = DateTimeOffset.UtcNow,
                 Messages = messages,
-                LastSeq = seq,
+                LastSeq = lastSeq,
+                WindowsMemorySnapshot = memorySnapshot,
             };
             loaded = file;
         }

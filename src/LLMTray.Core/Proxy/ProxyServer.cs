@@ -70,6 +70,9 @@ public sealed class ProxyServer : IAsyncDisposable
     /// </summary>
     public Func<ModelEntry, Profiles.ResolvedProfile>? ProfileOf { get; set; }
 
+    /// <summary>Background work (memory's reading) that every request here preempts.</summary>
+    public Runtime.BackgroundWork? Background { get; set; }
+
     /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
     public const long MaxBodyBytes = 256L * 1024 * 1024;
 
@@ -119,6 +122,8 @@ public sealed class ProxyServer : IAsyncDisposable
             return;
         }
 
+        // A request: background work gives the model up now, and waits until it's done.
+        using var foreground = Background?.Foreground();
         var body = await ReadBodyAsync(request, context.RequestAborted).ConfigureAwait(false);
         ModelEntry? wanted = null;
         if (body.Count > 0)

@@ -174,6 +174,15 @@ public sealed class ModelHost : IAsyncDisposable
         }
     }
 
+    /// <summary>The running server for <paramref name="wanted"/> if it's loaded and not switching; null otherwise. Never loads.</summary>
+    public Lease? TryAcquireLoaded(ModelEntry wanted)
+    {
+        lock (sync)
+        {
+            return !switching && running is { } r && Matches(r, wanted) ? Take(r) : null;
+        }
+    }
+
     /// <summary>Loads a model (from the window or the tray menu).</summary>
     public async Task LoadAsync(ModelEntry model, CancellationToken cancellationToken = default)
     {
