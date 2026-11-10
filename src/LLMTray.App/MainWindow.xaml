@@ -61,6 +61,11 @@
                     <Button x:Name="InstallUpdateButton" Content="Install and restart" Click="InstallUpdate_Click" />
                 </InfoBar.ActionButton>
             </InfoBar>
+            <InfoBar x:Name="RestartBar" IsClosable="False" IsOpen="False" Severity="Informational">
+                <InfoBar.ActionButton>
+                    <Button x:Name="RestartButton" Content="Restart Server" Click="Restart_Click" />
+                </InfoBar.ActionButton>
+            </InfoBar>
             <Border x:Name="DownloadPanel" Padding="14,10" CornerRadius="8" Visibility="Collapsed"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
@@ -83,6 +88,9 @@
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="Models" Tag="models" IsSelected="True">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Profiles" Tag="profiles">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE9E9;" /></NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="Server" Tag="server">
                     <NavigationViewItem.Icon><FontIcon Glyph="&#xE968;" /></NavigationViewItem.Icon>

@@ -46,6 +46,9 @@ public partial class App : Application
     public AppSettings Settings { get; private set; } = new();
     public ModelLibrary Library { get; private set; } = null!;
     public ModelHost Host { get; private set; } = null!;
+
+    /// <summary>Per-model settings (adr/0008): profiles\ in the data folder.</summary>
+    public LLMTray.Core.Profiles.ProfileManager Profiles { get; private set; } = null!;
     public string DataFolder { get; private set; } = "";
 
     /// <summary>Why the API isn't served (port taken), or null.</summary>
@@ -73,6 +76,7 @@ public partial class App : Application
     public event Action? ModelsChanged;
     public event Action<DownloadState>? DownloadsChanged;
     public event Action<HostState>? HostChanged;
+    public event Action? ProfilesChanged;
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -100,15 +104,19 @@ public partial class App : Application
         Updater = new AppUpdater(dispatcher, Web, DataFolder);
         Chats = new LLMTray.Core.Chat.ChatStore(Path.Combine(DataFolder, "sessions"));
 
+        Profiles = new LLMTray.Core.Profiles.ProfileManager(
+            new LLMTray.Core.Profiles.ProfileStore(Path.Combine(DataFolder, "profiles")), () => Settings.ContextSize);
+        Profiles.Changed += () => dispatcher.TryEnqueue(() => ProfilesChanged?.Invoke());
+
         launcher = new JobObjectLauncher();
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
-        Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), () => new ServerOptions(Settings.ContextSize),
+        Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), m => Profiles.ResolvedFor(m.FullPath).ServerOptions,
             Path.Combine(DataFolder, "logs"));
         // The state is read again when the UI thread gets to it: events from
         // different threads can arrive out of order.
         Host.StateChanged += _ => dispatcher.TryEnqueue(() => OnHostChanged(Host.State));
 
-        proxy = new ProxyServer(Host, Library);
+        proxy = new ProxyServer(Host, Library) { ProfileOf = m => Profiles.ResolvedFor(m.FullPath) };
         try
         {
             await proxy.StartAsync();
@@ -184,6 +192,27 @@ public partial class App : Application
     }
 
     public Task StopAsync() => Host.StopAsync();
+
+    /// <summary>
+    /// The loaded model's profile asks for other launch settings than it
+    /// runs with: the window offers a restart (never automatic: it would cut
+    /// requests off).
+    /// </summary>
+    public bool RestartNeeded =>
+        Host.State is { Status: HostStatus.Running, Model: { } model } && Host.RunningOptions is { } running
+        && running != Profiles.ResolvedFor(model.FullPath).ServerOptions;
+
+    public async Task RestartAsync()
+    {
+        try
+        {
+            await Host.RestartAsync();
+        }
+        catch (ModelLoadException)
+        {
+            // The host's state carries the message; the window shows it.
+        }
+    }
 
     public void SetDownloadSource(DownloadSource source)
     {

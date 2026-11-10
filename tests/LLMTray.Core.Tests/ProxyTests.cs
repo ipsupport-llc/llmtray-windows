@@ -36,7 +36,7 @@ public sealed class ProxyTests : IAsyncDisposable
         }
         var library = new ModelLibrary(() => Path.Combine(root, "models"));
         catalog = library.Rescan();
-        host = new ModelHost(launcher, () => [new LlamaBackend("cpu", "llama-server")], () => new ServerOptions(), Path.Combine(root, "logs"));
+        host = new ModelHost(launcher, () => [new LlamaBackend("cpu", "llama-server")], _ => new ServerOptions(), Path.Combine(root, "logs"));
         var port = FreePort();
         proxy = new ProxyServer(host, library, port);
         client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
@@ -179,7 +179,7 @@ public sealed class ProxyTests : IAsyncDisposable
     {
         await using var fallback = new FakeLauncher { FailBackend = "vk" };
         await using var h = new ModelHost(fallback,
-            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], () => new ServerOptions(), Path.Combine(root, "logs2"));
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs2"));
         await h.LoadAsync(catalog.Models[0]);
         Assert.Equal("cpu", h.State.Backend);
         Assert.Equal(HostStatus.Running, h.State.Status);
@@ -190,7 +190,7 @@ public sealed class ProxyTests : IAsyncDisposable
     {
         await using var counting = new FakeLauncher();
         await using var h = new ModelHost(counting,
-            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], () => new ServerOptions(), Path.Combine(root, "logs3"),
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs3"),
             _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([]));
         await h.LoadAsync(catalog.Models[0]);
         Assert.Equal("cpu", h.State.Backend);
@@ -202,7 +202,7 @@ public sealed class ProxyTests : IAsyncDisposable
     {
         await using var gpu = new FakeLauncher();
         await using var h = new ModelHost(gpu,
-            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], () => new ServerOptions(), Path.Combine(root, "logs4"),
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs4"),
             _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([new GpuDevice("Vulkan0", "Radeon RX 7800 XT", 16368, 15000)]));
         await h.LoadAsync(catalog.Models[0]);
         Assert.Equal("vulkan", h.State.Backend);
