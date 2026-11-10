@@ -458,8 +458,31 @@ sealed partial class ChatWindow : Window
                 renderedCount = 0;
             }
             var from = Math.Max(0, renderedCount - 1);
-            while (messages.Children.Count > from) messages.Children.RemoveAt(messages.Children.Count - 1);
-            for (var i = from; i < chat.Messages.Count; i++) messages.Children.Add(MessageView(chat.Messages[i], i == chat.Messages.Count - 1));
+            var lastMessage = chat.Messages[^1];
+            if (renderedCount == chat.Messages.Count && live is { } answer && answer.Message == lastMessage && lastMessage.Streaming && answer.Update())
+            {
+                // The answer being written grows in place: nothing on screen is made again.
+            }
+            else
+            {
+                while (messages.Children.Count > from) messages.Children.RemoveAt(messages.Children.Count - 1);
+                live = null;
+                for (var i = from; i < chat.Messages.Count; i++)
+                {
+                    var message = chat.Messages[i];
+                    var isLast = i == chat.Messages.Count - 1;
+                    if (isLast && message.Streaming && message.Role == "assistant" && !message.IsSummary)
+                    {
+                        live = new LiveAnswer(this, message);
+                        live.Update();
+                        messages.Children.Add(live.Root);
+                    }
+                    else
+                    {
+                        messages.Children.Add(MessageView(message, isLast));
+                    }
+                }
+            }
             renderedCount = chat.Messages.Count;
             renderedEpoch = chat.Epoch;
         }
@@ -526,10 +549,7 @@ sealed partial class ChatWindow : Window
             });
             return stack;
         }
-        var who = Ui.Horizontal(
-            new Image { Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
-            new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
-        stack.Children.Add(who);
+        stack.Children.Add(Who(message));
 
         if (message.Reasoning.Length > 0)
         {
@@ -645,6 +665,115 @@ sealed partial class ChatWindow : Window
             stack.Children.Add(actions);
         }
         return stack;
+    }
+
+    /// <summary>The app's mark, decoded once for every answer (a new image per answer would blink in).</summary>
+    static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? mark;
+
+    static UIElement Who(ChatMessage message) => Ui.Horizontal(
+        new Image { Source = mark ??= new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "Square44x44Logo.png"))), Width = 16, Height = 16 },
+        new TextBlock { Text = message.Model ?? L.T("Assistant"), FontSize = 12, Foreground = Ui.Secondary });
+
+    LiveAnswer? live;
+
+    /// <summary>
+    /// The answer being written, changed in place as it grows (Mac: the
+    /// bubble updates, nothing blinks): its name line, thoughts, text,
+    /// waiting ring and tool line are made once and kept; only the last
+    /// paragraph or two of the text are made again. Anything else showing
+    /// up mid-answer (an error, an MCP record, a picture) draws it whole.
+    /// </summary>
+    sealed class LiveAnswer(ChatWindow window, ChatMessage message)
+    {
+        public ChatMessage Message { get; } = message;
+        public StackPanel Root { get; } = new() { Spacing = 6 };
+        readonly UIElement who = Who(message);
+        Expander? thought;
+        TextBlock? thoughtText;
+        Border? card;
+        readonly StackPanel body = new() { Spacing = 8 };
+        readonly ProgressRing waiting = new() { IsActive = true, Width = 16, Height = 16, HorizontalAlignment = HorizontalAlignment.Left };
+        TextBlock? doingText;
+        UIElement? doing;
+        int blocks;
+        int mcpCalls = message.McpCalls.Count;
+
+        /// <summary>False when the answer now needs drawing whole.</summary>
+        public bool Update()
+        {
+            var m = Message;
+            if (m.Error is not null || m.McpCalls.Count != mcpCalls || m.Images.Count > 0 || !m.Streaming) return false;
+            var parts = new List<UIElement> { who };
+            if (m.Reasoning.Length > 0)
+            {
+                if (thought is null)
+                {
+                    thoughtText = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Foreground = Ui.Secondary, FontSize = 13 };
+                    thought = new Expander
+                    {
+                        Content = thoughtText,
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                        IsExpanded = window.openThoughts.Contains(m),
+                    };
+                    thought.Expanding += (_, _) => window.openThoughts.Add(m);
+                    thought.Collapsed += (_, _) => window.openThoughts.Remove(m);
+                }
+                var header = m.Content.Length == 0 ? L.T("Thinking…") : L.T("Thought process");
+                if (!Equals(thought.Header, header)) thought.Header = header;
+                thoughtText!.Text = m.Reasoning.Trim();
+                parts.Add(thought);
+            }
+            if (m.Content.Length > 0 || m.Reasoning.Length == 0)
+            {
+                card ??= new Border
+                {
+                    Child = body,
+                    Background = Ui.CardBackground,
+                    BorderBrush = Ui.Stroke,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(14, 10, 14, 10),
+                };
+                if (m.Content.Length == 0)
+                {
+                    if (body.Children.Count != 1 || body.Children[0] != waiting)
+                    {
+                        body.Children.Clear();
+                        body.Children.Add(waiting);
+                        blocks = 0;
+                    }
+                }
+                else
+                {
+                    if (body.Children.Count > 0 && body.Children[0] == waiting) body.Children.Clear();
+                    // Paragraphs before the last two don't change as the text grows.
+                    var parsed = Markdown.Parse(m.Content);
+                    var keep = Math.Min(Math.Max(0, blocks - 2), parsed.Count);
+                    while (body.Children.Count > keep) body.Children.RemoveAt(body.Children.Count - 1);
+                    for (var i = keep; i < parsed.Count; i++) body.Children.Add(BlockView(parsed[i]));
+                    blocks = parsed.Count;
+                }
+                parts.Add(card);
+            }
+            if (m.Activity is { } activity)
+            {
+                if (doing is null)
+                {
+                    doingText = Ui.Caption("");
+                    doing = Ui.Horizontal(new ProgressRing { IsActive = true, Width = 14, Height = 14 }, doingText);
+                }
+                doingText!.Text = Activity(activity);
+                parts.Add(doing);
+            }
+            // Only a part coming or going changes the column.
+            if (!parts.SequenceEqual(Root.Children))
+            {
+                Root.Children.Clear();
+                foreach (var part in parts) Root.Children.Add(part);
+            }
+            return true;
+        }
     }
 
     /// <summary>What the answer shows while a tool runs.</summary>
