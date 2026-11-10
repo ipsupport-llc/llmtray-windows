@@ -604,12 +604,16 @@ public partial class App : Application
     }
 
     /// <summary>The package's local folder; a plain AppData folder when run unpackaged (development).</summary>
+    /// <summary>The earlier package (another publisher) whose data this one took over, while it's still installed (adr/0017).</summary>
+    public string? OldPackage { get; private set; }
+
     static string FindDataFolder()
     {
         string folder;
         try
         {
             folder = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
+            Current.OldPackage = CarryOver(folder);
         }
         catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
@@ -617,5 +621,50 @@ public partial class App : Application
         }
         Directory.CreateDirectory(folder);
         return folder;
+    }
+
+    /// <summary>
+    /// A package signed by another publisher is another app to Windows, with
+    /// its own data folder (adr/0017). On this package's first start, the
+    /// newest such LLMTray's data (settings, chats, MCP servers, grants) is
+    /// copied in; nothing of it is changed. Returns that package's folder name
+    /// while it's still installed, so the chat can say to remove it.
+    /// </summary>
+    static string? CarryOver(string folder)
+    {
+        try
+        {
+            var id = Windows.ApplicationModel.Package.Current.Id;
+            var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
+            var marker = Path.Combine(folder, "carried-over.txt");
+            if (File.Exists(marker))
+            {
+                var from = File.ReadAllText(marker).Trim();
+                return from.Length > 0 && Directory.Exists(Path.Combine(packages, from)) ? from : null;
+            }
+            if (File.Exists(Path.Combine(folder, "settings.json"))) return null;
+            var old = Directory.EnumerateDirectories(packages, id.Name + "_*")
+                .Where(d => !string.Equals(Path.GetFileName(d), id.FamilyName, StringComparison.OrdinalIgnoreCase))
+                .Select(d => Path.Combine(d, "LocalState"))
+                .Where(d => File.Exists(Path.Combine(d, "settings.json")))
+                .OrderByDescending(d => File.GetLastWriteTimeUtc(Path.Combine(d, "settings.json")))
+                .FirstOrDefault();
+            if (old is null) return null;
+            Directory.CreateDirectory(folder);
+            foreach (var file in Directory.EnumerateFiles(old, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(folder, Path.GetRelativePath(old, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (!File.Exists(target)) File.Copy(file, target);
+            }
+            var name = Path.GetFileName(Path.GetDirectoryName(old))!;
+            File.WriteAllText(marker, name);
+            return name;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // Nothing carried over: the app starts fresh, as for a new user.
+            return null;
+        }
     }
 }

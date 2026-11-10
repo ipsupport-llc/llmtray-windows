@@ -86,6 +86,21 @@ sealed class Notices
             undo.IsEnabled = result.Failed > 0;
         };
         folders.ActionButton = undo;
+        if (updates && app.OldPackage is not null)
+        {
+            // The earlier package (another publisher) is still installed: its data is copied, it can go.
+            var settings = new Button { Content = L.T("Open Settings › Apps") };
+            settings.Click += (_, _) => Ui.Open("ms-settings:appsfeatures");
+            Panel.Children.Add(new InfoBar
+            {
+                IsOpen = true,
+                IsClosable = true,
+                Severity = InfoBarSeverity.Informational,
+                Title = L.T("The older LLMTray is still installed"),
+                Message = L.T("This version is signed by a new publisher, so Windows keeps the old one beside it. Your settings and chats were copied over: remove the old LLMTray in Settings › Apps."),
+                ActionButton = settings,
+            });
+        }
         if (updates)
         {
             Panel.Children.Add(update);

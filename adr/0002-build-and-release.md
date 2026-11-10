@@ -50,7 +50,9 @@ Status: accepted (2026-11-09)
    before every build, CI or local. Moving to a newer llama.cpp is a
    change to that file, through a PR.
 
-4. **Self-signed until there is a public certificate.** Open question 2 in
+4. **Self-signed until there is a public certificate.** (Superseded by
+   adr/0017: releases are signed with Azure Artifact Signing since
+   0.1.0-beta.12. Kept for the record.) Open question 2 in
    ADR 0001 (Azure Artifact Signing or an OV certificate) needs Microsoft
    accounts for the company, which don't exist yet. Until then:
    - The packages are signed with a self-signed certificate,

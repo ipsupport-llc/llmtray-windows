@@ -47,9 +47,8 @@ three formats, for `x64` and `ARM64`:
 
 - **`-setup.exe`**: installs for your user only, without administrator
   rights, with a Start menu shortcut and an uninstaller (adr/0007).
-- **`.msix`**: the Windows package. Betas are signed with a self-signed
-  certificate, so the first install needs administrator rights (the release
-  notes say how).
+- **`.msix`**: the Windows package, signed with Azure Artifact Signing
+  (adr/0017): it installs without administrator rights.
 - **`-portable.zip`**: no installation. Unpack it and run
   `LLMTray\LLMTray.exe`; the `app` folder beside it holds the rest.
 

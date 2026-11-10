@@ -6,19 +6,23 @@
 # Run in a clean checkout after scripts/fetch-llama.ps1 (and the license and
 # translation steps CI runs).
 #   pwsh scripts/build-portable.ps1 -Rid win-x64 -Platform x64 -Release 0.1.0-beta.5 -Zip out/LLMTray-0.1.0-beta.5-x64-portable.zip [-Setup out]
+# -Step build stops once the folder is laid out (its programs can then be
+# signed, adr/0017); -Step pack makes the ZIP and the installer from it.
 param(
     [Parameter(Mandatory)][ValidateSet('win-x64', 'win-arm64')][string]$Rid,
     [Parameter(Mandatory)][ValidateSet('x64', 'ARM64')][string]$Platform,
     [Parameter(Mandatory)][string]$Release,
     [Parameter(Mandatory)][string]$Zip,
     # A folder: also build LLMTray-<release>-<platform>-setup.exe there.
-    [string]$Setup
+    [string]$Setup,
+    [ValidateSet('all', 'build', 'pack')][string]$Step = 'all'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $stage = Join-Path ([IO.Path]::GetTempPath()) "llmtray-portable-$Rid"
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 $folder = Join-Path $stage 'LLMTray'
+if ($Step -ne 'pack') {
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 
 dotnet publish (Join-Path $root 'src/LLMTray.App') -c Release -r $Rid -p:Platform=$Platform `
     -p:WindowsPackageType=None -p:GenerateAppxPackageOnBuild=false `
@@ -50,6 +54,10 @@ $list = @(Get-ChildItem $appDir -Recurse -File | ForEach-Object { $_.FullName.Su
 foreach ($required in 'LLMTray.exe', 'app\LLMTray.exe', 'app\cli\llmtray.exe', 'app\runtime\llama\cpu\llama-server.exe', 'app\Assets\AppIcon.ico', 'app\NOTICE.md', 'app\Strings\de.json') {
     if (-not (Test-Path (Join-Path $folder $required))) { throw "the build has no $required" }
 }
+Write-Host "laid out in $folder"
+}
+if ($Step -eq 'build') { exit 0 }
+if (-not (Test-Path (Join-Path $folder 'app\files.txt'))) { throw "nothing laid out in $folder: run -Step build first" }
 New-Item -ItemType Directory -Force (Split-Path $Zip -Parent) | Out-Null
 if (Test-Path $Zip) { Remove-Item $Zip }
 Compress-Archive -Path $folder -DestinationPath $Zip -CompressionLevel Optimal
