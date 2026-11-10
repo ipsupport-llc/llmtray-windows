@@ -124,12 +124,17 @@ public sealed class ProfileTests : IDisposable
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null}""");
         File.WriteAllText(Path.Combine(root, "my profile.json"), """{"name": "Mine"}""");
-        File.WriteAllText(Path.Combine(root, "assignments.json"), """{"C:\a.gguf": "x", "c:\a.gguf": "y"}""");
+        File.WriteAllText(Path.Combine(root, "assignments.json"), """{"C:\\a.gguf": "hot", "c:\\a.gguf": "default", "C:\\b.gguf": "HOT"}""");
+        File.WriteAllText(Path.Combine(root, "Hot.json"), """{"name": "Hot"}""");
         var m = Manager();
         Assert.Single(m.Profiles, p => p.IsDefault);
         Assert.Equal(0.6, m.ResolvedFor(null).Temperature);
         Assert.Contains(m.LoadErrors, e => e.Contains("my profile.json"));
+        // The last of two case variants wins; ids match in any case.
         Assert.Equal(Profile.DefaultId, m.ProfileIdFor(@"C:\A.gguf"));
+        Assert.Equal("Hot", m.ProfileIdFor(@"c:\b.gguf"));
+        Assert.Equal([@"C:\b.gguf"], m.ModelsAssignedTo("Hot"));
+        Assert.Empty(Directory.GetFiles(root, "assignments.corrupt-*"));
     }
 
     [Fact]

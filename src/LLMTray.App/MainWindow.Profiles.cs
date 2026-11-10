@@ -64,7 +64,7 @@ public sealed partial class MainWindow
                 [
                     Ui.IconButton("", L.T("New profile (inherits everything from Default)"), () => ShowProfile(profiles.Create(L.T("New profile")).Id)),
                     Ui.IconButton("", L.T("Duplicate this profile"),
-                        () => ShowProfile(profiles.Create($"{selected.Name} {L.T("copy")}", selected).Id)),
+                        () => ShowProfile(profiles.Create($"{selected.Name} {L.T("copy")}", profiles.Get(id) ?? selected).Id)),
                     rename,
                     delete,
                 ],
@@ -191,8 +191,8 @@ public sealed partial class MainWindow
         box.ValueChanged += (_, e) =>
         {
             var v = double.IsNaN(e.NewValue) ? (automatic ? 0 : e.OldValue) : e.NewValue;
-            // The box rounding or clamping what it was given is no edit.
-            if (double.IsNaN(v) || Math.Abs(v - value) < step / 1000) return;
+            // The box rounding what it was given is no edit; any real change is.
+            if (double.IsNaN(v) || Math.Abs(v - value) < 1e-9) return;
             value = v;
             changed(v);
         };

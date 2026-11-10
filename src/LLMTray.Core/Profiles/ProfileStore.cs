@@ -95,7 +95,7 @@ public sealed class ProfileStore(string directory)
         if (id.Equals(Profile.DefaultId, StringComparison.OrdinalIgnoreCase) || !IsValidId(id)) return;
         File.Delete(FileOf(id));
         var assignments = LoadAssignments();
-        foreach (var model in assignments.Where(a => a.Value == id).Select(a => a.Key).ToList()) assignments.Remove(model);
+        foreach (var model in assignments.Where(a => string.Equals(a.Value, id, StringComparison.OrdinalIgnoreCase)).Select(a => a.Key).ToList()) assignments.Remove(model);
         SaveAssignments(assignments);
     }
 
@@ -112,10 +112,14 @@ public sealed class ProfileStore(string directory)
         }
         try
         {
-            var read = JsonSerializer.Deserialize(text, ProfileJson.Default.SortedDictionaryStringString);
-            // Paths differing only in case are one file on Windows: the last wins.
+            // Read in file order: paths differing only in case are one file on Windows, and the last wins.
             var assignments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (model, profile) in read ?? []) assignments[model] = profile;
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException("not an object");
+            foreach (var entry in doc.RootElement.EnumerateObject())
+            {
+                if (entry.Value.ValueKind == JsonValueKind.String) assignments[entry.Name] = entry.Value.GetString()!;
+            }
             return assignments;
         }
         catch (JsonException)

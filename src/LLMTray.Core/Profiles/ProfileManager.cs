@@ -120,7 +120,7 @@ public sealed class ProfileManager
         {
             return profileId == Profile.DefaultId
                 ? []
-                : assignments.Where(a => a.Value == profileId).Select(a => a.Key).ToList();
+                : assignments.Where(a => string.Equals(a.Value, profileId, StringComparison.OrdinalIgnoreCase)).Select(a => a.Key).ToList();
         }
     }
 
