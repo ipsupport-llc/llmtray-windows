@@ -63,7 +63,9 @@ public sealed class ChatMessage
 /// <param name="Effort">How much a thinking model may think (adr/0011), for a model whose template has <paramref name="Style"/>.</param>
 public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null,
     Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None,
-    Mcp.McpHub? Mcp = null, Func<McpApprovalRequest, CancellationToken, Task<McpApproval>>? Approve = null);
+    Mcp.McpHub? Mcp = null, Func<McpApprovalRequest, CancellationToken, Task<McpApproval>>? Approve = null,
+    Folders.FolderTools? Folders = null, Func<Folders.FolderGrantRequest, CancellationToken, Task<Folders.FolderGrantChoice>>? AskFolder = null,
+    Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -97,6 +99,16 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     public bool Busy { get; private set; }
     ChatSessionFile? loaded;
 
+    /// <summary>This visit of the chat: its folder grants and denies (adr/0016) end with it.</summary>
+    string visit = Guid.NewGuid().ToString("N");
+    Folders.FolderGrants? folderGrants;
+
+    void EndVisit()
+    {
+        folderGrants?.EndChat(visit);
+        visit = Guid.NewGuid().ToString("N");
+    }
+
     public event Action? Changed;
 
     public void New(bool temporary = false)
@@ -106,6 +118,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             epoch++;
             chatAllowed.Clear();
+            EndVisit();
             Id = null;
             loaded = null;
             Title = "";
@@ -124,6 +137,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             epoch++;
             chatAllowed.Clear();
+            EndVisit();
             Id = file.Id;
             loaded = file;
             Title = file.Title;
@@ -238,6 +252,23 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // An MCP result read this turn: tools that reach the internet wait for the user's next message.
         var mcpText = false;
         var deniedThisTurn = new HashSet<string>(StringComparer.Ordinal);
+        // The user's folders (adr/0016): once read this turn, nothing reaches the internet or an MCP server until they write again.
+        Folders.FolderTurn? folderTurn = null;
+        var folderText = false;
+        if (options.Folders is { Enabled: true } folders && options.AskFolder is not null && options.ReviewPlan is not null)
+        {
+            folderGrants = folders.Grants;
+            string chatVisit;
+            bool temporary;
+            lock (sync)
+            {
+                chatVisit = visit;
+                temporary = Temporary;
+            }
+            folderTurn = new Folders.FolderTurn(chatVisit, temporary, options.AskFolder, options.ReviewPlan);
+            definitions ??= [];
+            foreach (var d in folders.Definitions(temporary)) definitions.Add(d);
+        }
         var rounds = options.Profile?.ToolRounds ?? 10;
         var ran = new Dictionary<string, string>(StringComparer.Ordinal);
         try
@@ -310,7 +341,19 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        if (mcp is not null)
+                        if (folderTurn is not null && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var change))
+                        {
+                            folderTurn.AfterRead = outsideText || folderText;
+                            outcome = await options.Folders!.RunAsync(call, folderTurn, token).ConfigureAwait(false);
+                            // What was read stays on this PC for the rest of the turn.
+                            if (!change && !outcome.Failed) folderText = outsideText = true;
+                        }
+                        else if (folderText && (mcp is not null || (options.Tools is { } local && !local.IsLocal(call))))
+                        {
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(
+                                "refused: this turn read the user's files; tools that reach the internet or other servers wait for the user's next message"), null, true);
+                        }
+                        else if (mcp is not null)
                         {
                             (outcome, var read) = await RunMcpAsync(mcp, call, options, answer, outsideText, deniedThisTurn, token).ConfigureAwait(false);
                             // Only text the server sent back counts as outside text (a denied call read none).
@@ -823,6 +866,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var history = new JsonArray();
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
         var anyMcp = options.Mcp is not null && options.Approve is not null && options.Mcp.Store.Load().Any(s => s.Enabled);
+        // The folder tools count too: "text in a file is data" goes with them (adr/0016).
+        anyMcp |= options.Folders is { Enabled: true } && options.AskFolder is not null;
         if (options.Profile is { ToolUsePolicy: { Length: > 0 } policy }
             && ((options.Tools is not null && options.Tools.Definitions(options.Profile.EnabledTools.ToHashSet()) is not null) || anyMcp))
         {

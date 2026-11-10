@@ -231,7 +231,131 @@ sealed partial class ChatWindow : Window
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
         return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
             Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry),
-            Mcp: app.Mcp, Approve: AskAsync);
+            Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync);
+    }
+
+    /// <summary>
+    /// Runs a question on the UI thread and waits for its answer; a Stop
+    /// closes the dialog. Nobody to ask (closing, another dialog): <paramref name="fallback"/>.
+    /// </summary>
+    Task<T> OnScreenAsync<T>(Func<ContentDialog> make, Func<ContentDialogResult, T> answer, T fallback, CancellationToken stopped)
+    {
+        var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                if (stopped.IsCancellationRequested)
+                {
+                    done.TrySetResult(fallback);
+                    return;
+                }
+                Activate();
+                var dialog = make();
+                dialog.XamlRoot = Content.XamlRoot;
+                using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(dialog.Hide));
+                var result = await dialog.ShowAsync();
+                done.TrySetResult(stopped.IsCancellationRequested ? fallback : answer(result));
+            }
+            catch (Exception)
+            {
+                done.TrySetResult(fallback);
+            }
+        }))
+        {
+            done.TrySetResult(fallback);
+        }
+        return done.Task;
+    }
+
+    /// <summary>
+    /// The chat asks for a folder (adr/0016): which, to look or to propose
+    /// changes, and for how long. No default button: Enter mustn't allow.
+    /// </summary>
+    Task<LLMTray.Core.Folders.FolderGrantChoice> AskFolderAsync(LLMTray.Core.Folders.FolderGrantRequest request, CancellationToken stopped)
+    {
+        var choices = new[]
+        {
+            (LLMTray.Core.Folders.FolderGrantChoice.Once, L.T("Only this time")),
+            (LLMTray.Core.Folders.FolderGrantChoice.Hour, L.T("For an hour")),
+            (LLMTray.Core.Folders.FolderGrantChoice.Chat, L.T("For this chat")),
+            (LLMTray.Core.Folders.FolderGrantChoice.Always, L.T("Always")),
+        };
+        RadioButtons? lifetime = null;
+        return OnScreenAsync(() =>
+        {
+            var change = request.Level == LLMTray.Core.Folders.FolderLevel.Change;
+            var body = new StackPanel { Spacing = 10, MaxWidth = 520 };
+            body.Children.Add(new TextBlock
+            {
+                Text = change
+                    ? L.T("The chat wants to propose changes in this folder (new folders, moves, renames, the Recycle Bin). Each plan still waits for your approval.")
+                    : L.T("The chat wants to look in this folder: names, sizes, dates, and short beginnings of text files."),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            body.Children.Add(new TextBlock { Text = App.Current.Folders.Places.Show(request.Folder), FontFamily = Ui.Mono, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
+            lifetime = new RadioButtons { Header = L.T("Allow") };
+            foreach (var (_, label) in choices) lifetime.Items.Add(label);
+            // The narrowest by default: more is the user's choice.
+            lifetime.SelectedIndex = 0;
+            body.Children.Add(lifetime);
+            body.Children.Add(Ui.Caption(L.T("Folders and their access are listed in Settings › Tools, where you can revoke them.")));
+            return new ContentDialog
+            {
+                Title = change ? L.T("Allow changes in this folder?") : L.T("Allow the chat to look in this folder?"),
+                Content = new ScrollViewer { Content = body },
+                PrimaryButtonText = L.T("Allow"),
+                CloseButtonText = L.T("Don't Allow"),
+                DefaultButton = ContentDialogButton.None,
+            };
+        }, result => result == ContentDialogResult.Primary && lifetime is { SelectedIndex: >= 0 and < 4 } r ? choices[r.SelectedIndex].Item1 : LLMTray.Core.Folders.FolderGrantChoice.Deny,
+        LLMTray.Core.Folders.FolderGrantChoice.Deny, stopped);
+    }
+
+    /// <summary>
+    /// The plan, item by item with ticks (adr/0016): Approve makes the ticked
+    /// ones. A Recycle Bin item proposed right after reading, or named like a
+    /// copy, starts unticked. No default button.
+    /// </summary>
+    Task<IReadOnlySet<int>?> ReviewPlanAsync(LLMTray.Core.Folders.ChangePlan plan, CancellationToken stopped)
+    {
+        var places = App.Current.Folders.Places;
+        var boxes = new List<(CheckBox Box, int Id)>();
+        return OnScreenAsync<IReadOnlySet<int>?>(() =>
+        {
+            var body = new StackPanel { Spacing = 8, MaxWidth = 620 };
+            body.Children.Add(new TextBlock
+            {
+                Text = L.F("{0} changes. Nothing happens until you approve; the Recycle Bin keeps what's removed, and the change can be undone.", plan.Items.Count),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            foreach (var warning in plan.Warnings) body.Children.Add(Ui.Caption(warning, Ui.Orange));
+            var list = new StackPanel { Spacing = 2 };
+            foreach (var item in plan.Items)
+            {
+                var size = item.Size is long s && s > 0 ? $" ({(item.SizeAtLeast ? "≥ " : "")}{LLMTray.Core.Folders.FolderReader.Size(s)})" : "";
+                var text = item.Op switch
+                {
+                    LLMTray.Core.Folders.ChangeOp.MakeDir => L.F("New folder {0}", places.Show(item.Path)),
+                    LLMTray.Core.Folders.ChangeOp.Move => L.F("Move {0} → {1}", places.Show(item.Path), places.Show(item.To ?? "")) + size,
+                    _ => L.F("To the Recycle Bin: {0}", places.Show(item.Path)) + size,
+                };
+                var risky = item.Op == LLMTray.Core.Folders.ChangeOp.Trash
+                    && (item.AfterRead || LLMTray.Core.Folders.FolderTools.LooksLikeACopy(item.Path) is not null);
+                var box = new CheckBox { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap }, IsChecked = !risky };
+                boxes.Add((box, item.Id));
+                list.Children.Add(box);
+            }
+            body.Children.Add(new ScrollViewer { Content = list, MaxHeight = 360 });
+            return new ContentDialog
+            {
+                Title = L.T("Approve these changes?"),
+                Content = body,
+                PrimaryButtonText = L.T("Approve"),
+                CloseButtonText = L.T("Cancel"),
+                DefaultButton = ContentDialogButton.None,
+            };
+        }, result => result == ContentDialogResult.Primary ? boxes.Where(b => b.Box.IsChecked == true).Select(b => b.Id).ToHashSet() : null, null, stopped);
     }
 
     /// <summary>

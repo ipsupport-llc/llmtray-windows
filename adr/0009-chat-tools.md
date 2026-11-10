@@ -59,7 +59,7 @@ rather than going through the proxy, where those checks can't be made.
 
 ## Not yet
 
-Image and music generation, documents, project files, folders, memory and
+Image and music generation, documents, project files, memory and
 MCP tools (the Mac's other tools) come with those features (adr/0001,
 phases 2 and 3). The Mac's tool-call statistics and the
 `--dump-tool-definitions` / `--run-tool` command line wait for the
