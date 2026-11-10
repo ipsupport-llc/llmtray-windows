@@ -223,6 +223,37 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PicturesGoAsDataUrlsAndAreSavedBesideTheChat()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
+        await chat.SendAsync("what's this?", new ChatOptions(null), [png]);
+        var sent = bodies.First(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray()[^1]!["content"]!.AsArray();
+        Assert.Equal("what's this?", sent[0]!["text"]!.GetValue<string>());
+        Assert.Equal("data:image/png;base64," + Convert.ToBase64String(png), sent[1]!["image_url"]!["url"]!.GetValue<string>());
+        // The title request carries no picture.
+        Assert.DoesNotContain("image_url", bodies.First(b => !b["stream"]!.GetValue<bool>()).ToJsonString());
+
+        var saved = store.Load(chat.Id!.Value)!;
+        var name = Assert.Single(saved.Messages[0].ImageFilenames);
+        Assert.Equal(png, File.ReadAllBytes(Path.Combine(store.ImagesFolder(chat.Id!.Value), name)));
+        var again = new ChatClient(http, api, store);
+        again.Load(chat.Id!.Value);
+        Assert.Equal(png, Assert.Single(again.Messages[0].Images));
+        Assert.Null(store.ReadImage(chat.Id!.Value, "..\\x.png"));
+        // A picture that can't be read now keeps its name: a later save doesn't drop it.
+        File.Delete(Path.Combine(store.ImagesFolder(chat.Id!.Value), name));
+        var third = new ChatClient(http, api, store);
+        third.Load(chat.Id!.Value);
+        Assert.Empty(third.Messages[0].Images);
+        third.Rename("Renamed");
+        Assert.Equal([name], store.Load(chat.Id!.Value)!.Messages[0].ImageFilenames);
+        store.Delete(chat.Id!.Value);
+        Assert.False(Directory.Exists(store.ImagesFolder(chat.Id!.Value)));
+    }
+
+    [Fact]
     public async Task ATemporaryChatWritesNothing()
     {
         var store = new ChatStore(root);

@@ -23,6 +23,19 @@ public sealed class ChatMessage
     /// <summary>The tool running right now (its name as the model called it); not saved.</summary>
     public string? Activity { get; set; }
 
+    /// <summary>Pictures in the message that could be read (PNG): what the user attached, or what the Mac app made.</summary>
+    public List<byte[]> Images { get; init; } = [];
+
+    /// <summary>
+    /// The pictures' files in the chat's images folder, as saved: every one
+    /// the file names, even one that couldn't be read just now, so a save
+    /// never drops it.
+    /// </summary>
+    public List<string> ImageFilenames { get; init; } = [];
+
+    /// <summary>Attached pictures not written beside the chat yet (a temporary chat's never are).</summary>
+    public List<byte[]> UnsavedImages { get; init; } = [];
+
     /// <summary>Where the tools' facts came from, shown under the answer and saved (the Mac's sources).</summary>
     public List<string> Sources { get; init; } = [];
 
@@ -97,6 +110,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Messages.Clear();
             foreach (var m in file.Messages.Where(m => m.Role is "user" or "assistant"))
             {
+                // Every name is kept; the pictures that read are shown and sent.
+                var names = m.ImageFilenames.Where(n => n is not null).ToList();
+                var images = names.Select(n => store.ReadImage(file.Id, n)).OfType<byte[]>().ToList();
                 Messages.Add(new ChatMessage
                 {
                     Role = m.Role,
@@ -106,6 +122,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     SentAt = m.SentAt,
                     Model = m.Model,
                     Sources = [.. m.Sources],
+                    Images = images,
+                    ImageFilenames = names,
                     Original = m,
                 });
             }
@@ -114,12 +132,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         return true;
     }
 
-    /// <summary>Sends the user's message and streams the answer.</summary>
-    public Task SendAsync(string text, ChatOptions options)
+    /// <summary>Sends the user's message (and its pictures, PNG) and streams the answer.</summary>
+    public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null)
     {
         text = text.Trim();
-        if (text.Length == 0 || Busy) return Task.CompletedTask;
-        lock (sync) Messages.Add(new ChatMessage { Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow });
+        if ((text.Length == 0 && images is not { Count: > 0 }) || Busy) return Task.CompletedTask;
+        lock (sync) Messages.Add(new ChatMessage
+        {
+            Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
+        });
         return AnswerAsync(options);
     }
 
@@ -434,7 +455,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         try
         {
             List<ChatMessage> firstTurn;
-            lock (sync) firstTurn = Messages.Take(2).ToList();
+            // The words only: the pictures needn't be read again for a title.
+            lock (sync) firstTurn = Messages.Take(2).Select(m => new ChatMessage { Role = m.Role, Content = m.Content.Length > 0 ? m.Content : "(a picture)" }).ToList();
             var ask = new List<ChatMessage>(firstTurn)
             {
                 new() { Role = "user", Content = "Give this conversation a title of at most six words, in its language. Reply with the title only, no quotes." },
@@ -504,8 +526,25 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             system = system.Length == 0 ? policy.Trim() : system + "\n\n" + policy.Trim();
         }
         if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
-        foreach (var m in messages.Where(m => m.Content.Length > 0 && m.Role is "user" or "assistant"))
+        foreach (var m in messages.Where(m => (m.Content.Length > 0 || m.Images.Count > 0) && m.Role is "user" or "assistant"))
         {
+            if (m.Role == "user" && m.Images.Count > 0)
+            {
+                // Text first, then each picture as a data URL (always PNG: attachments are converted).
+                var parts = new JsonArray();
+                if (m.Content.Length > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = m.Content });
+                foreach (var png in m.Images)
+                {
+                    parts.Add(new JsonObject
+                    {
+                        ["type"] = "image_url",
+                        ["image_url"] = new JsonObject { ["url"] = "data:image/png;base64," + Convert.ToBase64String(png) },
+                    });
+                }
+                history.Add(new JsonObject { ["role"] = "user", ["content"] = parts });
+                continue;
+            }
+            if (m.Content.Length == 0) continue;
             history.Add(new JsonObject { ["role"] = m.Role, ["content"] = m.Content });
         }
         return history;
@@ -573,6 +612,23 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             if (Temporary || Messages.Count == 0) return;
             Id ??= Guid.NewGuid();
+            // Pictures not on disk yet: written beside the chat first. One
+            // that fails (a full disk) stays unsaved and the next save tries again.
+            foreach (var m in Messages.Where(m => m.UnsavedImages.Count > 0))
+            {
+                while (m.UnsavedImages.Count > 0)
+                {
+                    try
+                    {
+                        m.ImageFilenames.Add(store.SaveImage(Id.Value, m.UnsavedImages[0]));
+                        m.UnsavedImages.RemoveAt(0);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        break;
+                    }
+                }
+            }
             var seq = 0;
             var messages = Messages.Where(m => !m.Streaming).Select(m =>
             {
@@ -587,6 +643,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     SentAt = m.SentAt,
                     Model = m.Model,
                     Sources = [.. m.Sources],
+                    // The names as they were plus the ones written now: the Mac's
+                    // per-picture lists (durations, prompts) stay lined up with them.
+                    ImageFilenames = [.. m.ImageFilenames],
                     Seq = seq,
                 };
             }).ToList();
