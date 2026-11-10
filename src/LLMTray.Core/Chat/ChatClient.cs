@@ -20,6 +20,15 @@ public sealed class ChatMessage
     /// <summary>Why the answer stopped short, shown under it; not saved.</summary>
     public string? Error { get; set; }
 
+    /// <summary>The tool running right now (its name as the model called it); not saved.</summary>
+    public string? Activity { get; set; }
+
+    /// <summary>Where the tools' facts came from, shown under the answer and saved (the Mac's sources).</summary>
+    public List<string> Sources { get; init; } = [];
+
+    /// <summary>Tool calls this answer made.</summary>
+    public int ToolCalls { get; set; }
+
     /// <summary>What the Mac app wrote and this app doesn't show yet: saved back as it was.</summary>
     public PersistedMessage? Original { get; init; }
 }
@@ -28,7 +37,9 @@ public sealed class ChatMessage
 /// <param name="Model">The model's name, or null for whichever is loaded.</param>
 /// <param name="Thinking">False turns a thinking model's reasoning off (enable_thinking).</param>
 /// <param name="Profile">The model's profile: its system prompt and sampling go with every request (adr/0008).</param>
-public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null);
+/// <param name="Tools">The chat's tools; the profile says which are on (adr/0009).</param>
+public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null,
+    Tools.ToolBox? Tools = null);
 
 /// <summary>
 /// One chat: its messages, sending a turn to the local API and streaming
@@ -94,6 +105,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Stats = m.AnswerStats,
                     SentAt = m.SentAt,
                     Model = m.Model,
+                    Sources = [.. m.Sources],
                     Original = m,
                 });
             }
@@ -151,10 +163,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var answer = new ChatMessage { Role = "assistant", Streaming = true, SentAt = DateTimeOffset.UtcNow, Model = options.Model };
         CancellationToken token;
         int mine;
-        JsonObject body;
+        JsonArray history;
         lock (sync)
         {
-            body = Body(Messages, options, stream: true);
+            history = History(Messages, options);
             Messages.Add(answer);
             turn = new CancellationTokenSource();
             token = turn.Token;
@@ -164,40 +176,85 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         Changed?.Invoke();
 
         var sent = DateTimeOffset.UtcNow;
-        DateTimeOffset? first = null, last = null;
-        AnswerStats.Request request = new();
+        var requests = new List<AnswerStats.Request>();
+        // The tools this turn may use (Mac adr/0007): the profile's switches.
+        var enabled = (options.Profile?.EnabledTools ?? []).ToHashSet();
+        var definitions = options.Tools?.Definitions(enabled);
+        var rounds = options.Profile?.ToolRounds ?? 10;
+        var ran = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
-            using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(apiBase, "v1/chat/completions"))
+            for (var round = 0; ; round++)
             {
-                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
-            };
-            using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-            {
-                answer.Error = await ErrorOf(response, token).ConfigureAwait(false);
-            }
-            else
-            {
-                await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
-                using var reader = new StreamReader(stream, Encoding.UTF8);
-                var decoder = new SseDecoder();
-                var buffer = new char[4096];
-                int read;
-                var lastRaise = DateTime.MinValue;
-                while ((read = await reader.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false)) > 0)
+                // The last round: the same tools declared (the prompt's prefix
+                // stays cached) but none may be called.
+                var last = round >= rounds;
+                var body = Body(history, options, stream: true, definitions, toolChoiceNone: last);
+                var (calls, request, content) = await StreamAsync(body, answer, mine, token).ConfigureAwait(false);
+                requests.Add(request);
+                if (calls.Count == 0 || answer.Error is not null) break;
+                if (definitions is null || last)
                 {
-                    foreach (var e in decoder.Feed(new string(buffer, 0, read)))
-                    {
-                        Apply(e, answer, ref request, ref first, ref last);
-                    }
-                    if (DateTime.UtcNow - lastRaise > TimeSpan.FromMilliseconds(50))
-                    {
-                        lastRaise = DateTime.UtcNow;
-                        if (mine == epoch) Changed?.Invoke();
-                    }
+                    // Calls when none may run: the turn ends; this request's own text is the answer, if any.
+                    if (content.Trim().Length == 0) answer.Error = "The model kept calling tools and didn't answer.";
+                    break;
                 }
-                foreach (var e in decoder.Finish()) Apply(e, answer, ref request, ref first, ref last);
+                var assistant = new JsonObject { ["role"] = "assistant", ["content"] = content };
+                var callArray = new JsonArray();
+                foreach (var call in calls.Take(MaxCallsPerRound))
+                {
+                    if (call.Id.Length == 0) call.Id = "call_" + Guid.NewGuid().ToString("N")[..12];
+                    // Replayed as valid JSON: the next request's template reads it as an object.
+                    // What runs (and is checked) is what the model sent.
+                    call.Replay = Canonical(call.Arguments);
+                    callArray.Add(new JsonObject
+                    {
+                        ["id"] = call.Id,
+                        ["type"] = "function",
+                        ["function"] = new JsonObject { ["name"] = call.Name, ["arguments"] = call.Replay },
+                    });
+                }
+                assistant["tool_calls"] = callArray;
+                history.Add(assistant);
+                foreach (var call in calls.Take(MaxCallsPerRound))
+                {
+                    // The same call twice in one message never runs twice.
+                    var key = call.Name + "\0" + call.Arguments.Trim();
+                    if (token.IsCancellationRequested)
+                    {
+                        // Stopped: the rest aren't run, but each still gets a result.
+                        history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = "Cancelled by the user." });
+                        continue;
+                    }
+                    if (ran.TryGetValue(key, out var earlier))
+                    {
+                        history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = earlier });
+                        continue;
+                    }
+                    answer.Activity = call.Name;
+                    if (mine == epoch) Changed?.Invoke();
+                    Tools.ToolOutcome outcome;
+                    try
+                    {
+                        outcome = await options.Tools!.RunAsync(call, enabled, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        // Every call gets a result, even on Stop: the history stays valid.
+                        outcome = new Tools.ToolOutcome("Cancelled by the user.", null, true);
+                    }
+                    lock (sync)
+                    {
+                        if (outcome.Source is { Length: > 0 } source && !answer.Sources.Contains(source)) answer.Sources.Add(source);
+                        answer.ToolCalls++;
+                    }
+                    ran[key] = outcome.Result;
+                    history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = outcome.Result });
+                }
+                answer.Activity = null;
+                token.ThrowIfCancellationRequested();
+                // The next round's text follows on a new paragraph.
+                if (answer.Content.Length > 0 && !answer.Content.EndsWith("\n\n", StringComparison.Ordinal)) answer.Content += "\n\n";
             }
         }
         catch (OperationCanceledException)
@@ -220,6 +277,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             // Whatever happened, the turn ends: never a chat stuck busy.
             answer.Streaming = false;
+            answer.Activity = null;
+            answer.Content = answer.Content.TrimEnd();
             lock (sync)
             {
                 Busy = false;
@@ -228,6 +287,106 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             }
         }
 
+        answer.Stats = new AnswerStats
+        {
+            Date = sent,
+            Model = options.Model,
+            Requests = requests,
+            TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
+        };
+        if (mine != epoch) return;
+        Save();
+        Changed?.Invoke();
+        if (Title.Length == 0 && answer.Content.Length > 0 && answer.Error is null) await NameAsync(options, mine).ConfigureAwait(false);
+    }
+
+    /// <summary>A call's arguments as plain JSON (lenient text read once); "{}" for none or for what can't be read.</summary>
+    static string Canonical(string arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments)) return "{}";
+        try
+        {
+            return Tools.LenientJson.Parse(arguments) is JsonObject o ? o.ToJsonString() : "{}";
+        }
+        catch (Tools.LenientJson.Failure)
+        {
+            // Kept as sent inside a string, so the model can see what it wrote.
+            return new JsonObject { ["unparsed"] = arguments }.ToJsonString();
+        }
+    }
+
+    /// <summary>Calls one response may make; more are dropped.</summary>
+    const int MaxCallsPerRound = 8;
+
+    /// <summary>One request of a turn, streamed into the answer: the tool calls it made and its own text.</summary>
+    async Task<(List<Tools.ToolCall> Calls, AnswerStats.Request Request, string Content)> StreamAsync(
+        JsonObject body, ChatMessage answer, int mine, CancellationToken token)
+    {
+        var sent = DateTimeOffset.UtcNow;
+        DateTimeOffset? first = null, last = null;
+        AnswerStats.Request request = new();
+        var calls = new SortedDictionary<int, Tools.ToolCall>();
+        var batch = new List<int>();
+        var before = answer.Content.Length;
+        using (var message = new HttpRequestMessage(HttpMethod.Post, new Uri(apiBase, "v1/chat/completions"))
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
+        })
+        {
+            using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                answer.Error = await ErrorOf(response, token).ConfigureAwait(false);
+                return ([], request, "");
+            }
+            await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var decoder = new SseDecoder();
+            var buffer = new char[4096];
+            int read;
+            var lastRaise = DateTime.MinValue;
+            void Take(SseEvent e)
+            {
+                if (e is SseEvent.ToolCall piece)
+                {
+                    first ??= DateTimeOffset.UtcNow;
+                    last = DateTimeOffset.UtcNow;
+                    // A piece without an index: a new call when it brings an id or a name; otherwise
+                    // more of the call at its place in the latest calls introduced together.
+                    int index;
+                    if (piece.Index >= 0)
+                    {
+                        index = piece.Index;
+                    }
+                    else if (piece.Id is { Length: > 0 } || piece.Name is { Length: > 0 } || calls.Count == 0)
+                    {
+                        if (piece.Position == 0) batch.Clear();
+                        index = calls.Count == 0 ? 0 : calls.Keys.Max() + 1;
+                        batch.Add(index);
+                    }
+                    else
+                    {
+                        index = piece.Position < batch.Count ? batch[piece.Position] : calls.Keys.Max();
+                    }
+                    if (!calls.TryGetValue(index, out var call)) calls[index] = call = new Tools.ToolCall();
+                    if (piece.Id is { Length: > 0 } id) call.Id = id;
+                    if (piece.Name is { Length: > 0 } name) call.Name += name;
+                    call.Arguments += piece.Arguments;
+                    return;
+                }
+                Apply(e, answer, ref request, ref first, ref last);
+            }
+            while ((read = await reader.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false)) > 0)
+            {
+                foreach (var e in decoder.Feed(new string(buffer, 0, read))) Take(e);
+                if (DateTime.UtcNow - lastRaise > TimeSpan.FromMilliseconds(50))
+                {
+                    lastRaise = DateTime.UtcNow;
+                    if (mine == epoch) Changed?.Invoke();
+                }
+            }
+            foreach (var e in decoder.Finish()) Take(e);
+        }
         if (first is DateTimeOffset f)
         {
             request = request with
@@ -236,17 +395,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 GenerationSeconds = last is DateTimeOffset l ? Math.Max(0, (l - f).TotalSeconds) : null,
             };
         }
-        answer.Stats = new AnswerStats
-        {
-            Date = sent,
-            Model = options.Model,
-            Requests = [request],
-            TotalSeconds = (DateTimeOffset.UtcNow - sent).TotalSeconds,
-        };
-        if (mine != epoch) return;
-        Save();
-        Changed?.Invoke();
-        if (Title.Length == 0 && answer.Content.Length > 0 && answer.Error is null) await NameAsync(options, mine).ConfigureAwait(false);
+        return (calls.Values.Where(c => c.Name.Length > 0).ToList(), request, answer.Content[Math.Min(before, answer.Content.Length)..]);
     }
 
     static void Apply(SseEvent e, ChatMessage answer, ref AnswerStats.Request request, ref DateTimeOffset? first, ref DateTimeOffset? last)
@@ -340,18 +489,34 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         return line.Length > 48 ? line[..48].TrimEnd() + "…" : line;
     }
 
-    static JsonObject Body(IEnumerable<ChatMessage> messages, ChatOptions options, bool stream)
+    /// <summary>
+    /// The conversation as the request's messages: the profile's system
+    /// prompt first, with the tool rule when tools are offered (Mac
+    /// ChatRequestBuilder), then the user's and the model's turns.
+    /// </summary>
+    static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options)
     {
         var history = new JsonArray();
-        if (options.Profile is { SystemPrompt: { } prompt } && !string.IsNullOrWhiteSpace(prompt))
+        var system = options.Profile?.SystemPrompt?.Trim() ?? "";
+        if (options.Tools is not null && options.Profile is { EnabledTools.Count: > 0, ToolUsePolicy: { Length: > 0 } policy }
+            && options.Tools.Definitions(options.Profile.EnabledTools.ToHashSet()) is not null)
         {
-            history.Add(new JsonObject { ["role"] = "system", ["content"] = prompt });
+            system = system.Length == 0 ? policy.Trim() : system + "\n\n" + policy.Trim();
         }
+        if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
         foreach (var m in messages.Where(m => m.Content.Length > 0 && m.Role is "user" or "assistant"))
         {
             history.Add(new JsonObject { ["role"] = m.Role, ["content"] = m.Content });
         }
-        var body = new JsonObject { ["messages"] = history, ["stream"] = stream };
+        return history;
+    }
+
+    static JsonObject Body(IEnumerable<ChatMessage> messages, ChatOptions options, bool stream) =>
+        Body(History(messages, options), options, stream, null, false);
+
+    static JsonObject Body(JsonArray history, ChatOptions options, bool stream, JsonArray? tools, bool toolChoiceNone)
+    {
+        var body = new JsonObject { ["messages"] = history.DeepClone(), ["stream"] = stream };
         if (stream) body["stream_options"] = new JsonObject { ["include_usage"] = true };
         if (options.Model is not null) body["model"] = options.Model;
         if (options.Profile is { } p)
@@ -362,6 +527,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             body["max_tokens"] = p.MaxTokens;
         }
         if (options.Temperature is double t) body["temperature"] = t;
+        if (tools is not null)
+        {
+            body["tools"] = tools.DeepClone();
+            if (toolChoiceNone) body["tool_choice"] = "none";
+        }
         // Templates that think (Gemma 4, Qwen 3, LFM Thinking) read enable_thinking; others ignore it.
         if (!options.Thinking) body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };
         return body;
@@ -416,6 +586,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     AnswerStats = m.Stats,
                     SentAt = m.SentAt,
                     Model = m.Model,
+                    Sources = [.. m.Sources],
                     Seq = seq,
                 };
             }).ToList();

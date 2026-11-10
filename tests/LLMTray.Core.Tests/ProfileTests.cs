@@ -122,7 +122,7 @@ public sealed class ProfileTests : IDisposable
     public void NullGroupsCaseAndOddFileNamesAreHandled()
     {
         Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null}""");
+        File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null, "tools": null}""");
         File.WriteAllText(Path.Combine(root, "my profile.json"), """{"name": "Mine"}""");
         File.WriteAllText(Path.Combine(root, "assignments.json"), """{"C:\\a.gguf": "hot", "c:\\a.gguf": "default", "C:\\b.gguf": "HOT"}""");
         File.WriteAllText(Path.Combine(root, "Hot.json"), """{"name": "Hot"}""");
@@ -176,7 +176,7 @@ public sealed class ProfileTests : IDisposable
         Assert.DoesNotContain("--cache-type-k", LlamaServerLaunch.Build("s", model, 1, "k", null, new ServerOptions()).Arguments);
     }
 
-    static ResolvedProfile Sample => new("default", "Default", 0.7, 0.9, 0, 2048, "", 0, "f16", 0, "");
+    static ResolvedProfile Sample => new("default", "Default", 0.7, 0.9, 0, 2048, "", [], "", 1, 0, "f16", 0, "");
 
     [Fact]
     public void NullSamplingFieldsAreFilledAndPrecisionKept()

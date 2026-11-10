@@ -114,6 +114,30 @@ public sealed class ChatClientTests : IAsyncDisposable
                 return;
             }
             context.Response.ContentType = "text/event-stream";
+            var lastRole = body["messages"]!.AsArray()[^1]!["role"]!.GetValue<string>();
+            if (body["tools"] is not null && lastRole == "user" && body["tool_choice"] is null)
+            {
+                // A tool call, streamed in pieces as llama-server does.
+                foreach (var chunk in new[]
+                {
+                    """{"choices":[{"delta":{"content":"Let me work it out."}}]}""",
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"Calculate","arguments":""}}]}}]}""",
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{'expr': '6*"}}]}}]}""",
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"7',}"}}]}}]}""",
+                })
+                {
+                    await context.Response.WriteAsync($"data: {chunk}\n\n");
+                }
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
+            if (lastRole == "tool")
+            {
+                var result = body["messages"]!.AsArray()[^1]!["content"]!.GetValue<string>();
+                await context.Response.WriteAsync($"data: {new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["delta"] = new JsonObject { ["content"] = "Tool said " + result } }) }.ToJsonString()}\n\n");
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
             foreach (var chunk in new[]
             {
                 """{"choices":[{"delta":{"reasoning_content":"Let me think."}}]}""",
@@ -169,6 +193,33 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.Equal(["one", "Hello there", "two"], last["messages"]!.AsArray().Select(m => m!["content"]!.GetValue<string>()));
         Assert.False(last["chat_template_kwargs"]!["enable_thinking"]!.GetValue<bool>());
         Assert.Null(last["model"]);
+    }
+
+    [Fact]
+    public async Task RunsToolCallsAndAnswersWithTheirResults()
+    {
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var tools = new LLMTray.Core.Tools.ToolBox(LLMTray.Core.Tools.ToolCatalog.MakeTools(), enabled =>
+            new LLMTray.Core.Tools.ToolContext(enabled, new LLMTray.Core.Tools.WebFetch(http, "test"), "UTC", null, false));
+        var profile = LLMTray.Core.Profiles.ProfileResolver.Resolve(null, LLMTray.Core.Profiles.ProfileStore.NewDefault());
+        await chat.SendAsync("what is 6*7?", new ChatOptions(null, Profile: profile, Tools: tools));
+        var answer = chat.Messages[^1];
+        Assert.Null(answer.Error);
+        Assert.Equal(1, answer.ToolCalls);
+        Assert.StartsWith("Let me work it out.\n\nTool said {", answer.Content);
+        Assert.Contains("\"result\":\"42\"", answer.Content);
+        var second = bodies.Where(b => b["stream"]!.GetValue<bool>()).ToList()[1];
+        var messages = second["messages"]!.AsArray();
+        // The rule joins the system prompt; the call and its result follow the question.
+        Assert.Contains("Call a tool only when", messages[0]!["content"]!.GetValue<string>());
+        Assert.Equal("assistant", messages[^2]!["role"]!.GetValue<string>());
+        Assert.Equal("Calculate", messages[^2]!["tool_calls"]![0]!["function"]!["name"]!.GetValue<string>());
+        Assert.Equal("c1", messages[^1]!["tool_call_id"]!.GetValue<string>());
+        // Replayed as plain JSON, not as the model wrote it.
+        Assert.Equal("""{"expr":"6*7"}""", messages[^2]!["tool_calls"]![0]!["function"]!["arguments"]!.GetValue<string>());
+        // Only the switched-on modes are declared.
+        var names = second["tools"]!.AsArray().Select(t => t!["function"]!["name"]!.GetValue<string>()).ToList();
+        Assert.Equal(["get_current_time", "calculate"], names);
     }
 
     [Fact]
