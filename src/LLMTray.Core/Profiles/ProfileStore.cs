@@ -16,7 +16,20 @@ public sealed class ProfileStore(string directory)
 
     string AssignmentsFile => Path.Combine(Directory, "assignments.json");
 
-    string FileOf(string id) => Path.Combine(Directory, id + ".json");
+    /// <summary>The profile's file: one already there in any case of its name (Windows' names ignore case; Linux's don't), else a new one.</summary>
+    string FileOf(string id)
+    {
+        var wanted = id + ".json";
+        if (System.IO.Directory.Exists(Directory))
+        {
+            var existing = System.IO.Directory.EnumerateFiles(Directory, "*.json")
+                .Where(f => Path.GetFileName(f).Equals(wanted, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => Path.GetFileName(f) == wanted ? 0 : 1)
+                .FirstOrDefault();
+            if (existing is not null) return existing;
+        }
+        return Path.Combine(Directory, wanted);
+    }
 
     /// <summary>A profile id that names a file in the folder and nothing else.</summary>
     public static bool IsValidId(string id) =>
@@ -46,6 +59,8 @@ public sealed class ProfileStore(string directory)
                 // The file name is the id: a copied file keeps working.
                 // "Default.json" is Default (Windows' file names ignore case).
                 profile.Id = id.Equals(Profile.DefaultId, StringComparison.OrdinalIgnoreCase) ? Profile.DefaultId : id;
+                // Two files for one id (only where names keep case): the one FileOf picks.
+                if (!Path.GetFullPath(file).Equals(Path.GetFullPath(FileOf(profile.Id)), StringComparison.Ordinal)) continue;
                 profiles.Add(profile);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
