@@ -185,6 +185,20 @@ public sealed class WindowsFolderPlatform : IFolderPlatform
         }
     }
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool CreateDirectoryW(string path, IntPtr security);
+
+    /// <summary>CreateDirectoryW: fails when anything is there already.</summary>
+    public void MakeFolder(string path)
+    {
+        if (!CreateDirectoryW(Long(path), IntPtr.Zero))
+        {
+            var error = Marshal.GetLastWin32Error();
+            throw error == 183 ? new FileExistsException("something with that name is already there") : new IOException($"the folder couldn't be made (error {error})");
+        }
+    }
+
     /// <summary>Marked for deletion by its own handle: Windows refuses that for a folder that isn't empty.</summary>
     public void RemoveEmptyFolder(string path, string identity)
     {

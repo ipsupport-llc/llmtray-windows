@@ -333,7 +333,7 @@ sealed partial class ChatWindow : Window
             var list = new StackPanel { Spacing = 2 };
             foreach (var item in plan.Items)
             {
-                var size = item.Size is long s && s > 0 ? $" ({LLMTray.Core.Folders.FolderReader.Size(s)})" : "";
+                var size = item.Size is long s && s > 0 ? $" ({(item.SizeAtLeast ? "≥ " : "")}{LLMTray.Core.Folders.FolderReader.Size(s)})" : "";
                 var text = item.Op switch
                 {
                     LLMTray.Core.Folders.ChangeOp.MakeDir => L.F("New folder {0}", places.Show(item.Path)),

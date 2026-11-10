@@ -234,11 +234,7 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
     /// <summary>Why a file's contents aren't read, or null when they may be.</summary>
     public string? Unreadable(FileInfo f)
     {
-        if (FolderPlaces.IsSecretName(f.Name, f.Directory?.Name)) return "its name says it holds a key or secret: its contents aren't read";
-        if (f.FullName.Split(Path.DirectorySeparatorChar).Any(n => string.Equals(n, ".git", StringComparison.OrdinalIgnoreCase)))
-        {
-            return "it's inside a .git folder (a repository's history and settings): its contents aren't read";
-        }
+        if (FolderPlaces.Guarded(f.FullName)) return "it's a key or secret, or inside a .git folder: its contents aren't read";
         if (InCloud(f)) return "it's in the cloud, not downloaded: reading it would download it";
         if (KindOf(f) == Kind.Link) return "it's a link: not followed";
         if (platform.LinkCount(f.FullName) > 1) return "it has more than one name (hard links): its contents aren't read";
@@ -251,6 +247,8 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
         var f = new FileInfo(file);
         var lines = new StringBuilder();
         lines.Append("File: ").Append(places.Show(file)).Append('\n');
+        // A link's size and dates would be its target's: nothing of it is told.
+        if (KindOf(f) == Kind.Link) return lines.Append("A link: not followed.\n").ToString();
         lines.Append(CultureInfo.InvariantCulture, $"Size: {Size(f.Length)} ({f.Length:N0} bytes) · modified {Date(f.LastWriteTimeUtc)} · created {Date(f.CreationTimeUtc)}\n");
         if (Unreadable(f) is { } why)
         {
@@ -386,6 +384,8 @@ public sealed class FolderReader(FolderPlaces places, IFolderPlatform platform)
                 string? h;
                 try
                 {
+                    // Its folders held while it's read: none on the way turns into a link meanwhile.
+                    using var held = platform.Hold(FolderChanges.Chain(f.FullName));
                     await using var s = platform.OpenRead(f.FullName);
                     h = await HashAsync(s, cancellationToken, 1L << 30, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
                 }

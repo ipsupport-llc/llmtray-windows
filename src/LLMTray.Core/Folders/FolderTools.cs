@@ -327,9 +327,9 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
                     // Made whole again after the name was added: checked as it really is.
                     if (places.Resolve(to, roots) is not { } whole) { problems.Add($"op {i + 1}: that destination isn't a path LLMTray can use"); continue; }
                     to = whole;
-                    if (FolderPlaces.IsSecretName(Path.GetFileName(from)) && !FolderPlaces.IsSecretName(Path.GetFileName(to)))
+                    if (FolderPlaces.Guarded(from) && !FolderPlaces.Guarded(to))
                     {
-                        problems.Add($"op {i + 1}: {Path.GetFileName(from)} looks like a key or secret and keeps a name that says so");
+                        problems.Add($"op {i + 1}: {Path.GetFileName(from)} is a key or secret (or repository data) and keeps a name and place that say so");
                         continue;
                     }
                     if (await Changeable(from).ConfigureAwait(false) is { } e1) return new ToolOutcome(Error(e1), null, true);
@@ -350,10 +350,11 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
                         continue;
                     }
                     if (isFolder && reader.HoldsProtected(from)) { problems.Add($"op {i + 1}: {places.Show(from)} holds protected items and isn't moved whole"); continue; }
-                    var size = isFolder ? reader.Measure(from, TimeSpan.FromMilliseconds(300)).Bytes : new FileInfo(from).Length;
+                    var measured = isFolder ? reader.Measure(from, TimeSpan.FromMilliseconds(300)) : (0, new FileInfo(from).Length, true);
+                    if (platform.Identity(from) is not { } fromId) { problems.Add($"op {i + 1}: {places.Show(from)} can't be identified"); continue; }
                     items.Add(new PlanItem
                     {
-                        Id = items.Count + 1, Op = ChangeOp.Move, Path = from, To = to, Identity = platform.Identity(from), IsFolder = isFolder, Size = size,
+                        Id = items.Count + 1, Op = ChangeOp.Move, Path = from, To = to, Identity = fromId, IsFolder = isFolder, Size = measured.Item2, SizeAtLeast = !measured.Item3,
                         AfterRead = turn.AfterRead,
                     });
                     break;
@@ -371,8 +372,13 @@ public sealed class FolderTools(FolderPlaces places, FolderGrants grants, Folder
                     if (FolderReader.KindOf(info) == FolderReader.Kind.Link) { problems.Add($"op {i + 1}: {places.Show(path)} is a link; remove it in Explorer"); continue; }
                     if (!platform.CanRecycle(path)) { problems.Add($"op {i + 1}: {places.Show(path)} is on a drive without a Recycle Bin LLMTray can use"); continue; }
                     if (isFolder && reader.HoldsProtected(path)) { problems.Add($"op {i + 1}: {places.Show(path)} holds protected items and isn't trashed whole"); continue; }
-                    var size = isFolder ? reader.Measure(path, TimeSpan.FromMilliseconds(300)).Bytes : ((FileInfo)info).Length;
-                    items.Add(new PlanItem { Id = items.Count + 1, Op = ChangeOp.Trash, Path = path, Identity = platform.Identity(path), IsFolder = isFolder, Size = size, AfterRead = turn.AfterRead });
+                    var measured = isFolder ? reader.Measure(path, TimeSpan.FromMilliseconds(300)) : (0, ((FileInfo)info).Length, true);
+                    if (platform.Identity(path) is not { } pathId) { problems.Add($"op {i + 1}: {places.Show(path)} can't be identified"); continue; }
+                    items.Add(new PlanItem
+                    {
+                        Id = items.Count + 1, Op = ChangeOp.Trash, Path = path, Identity = pathId, IsFolder = isFolder, Size = measured.Item2, SizeAtLeast = !measured.Item3,
+                        AfterRead = turn.AfterRead,
+                    });
                     break;
                 }
             }

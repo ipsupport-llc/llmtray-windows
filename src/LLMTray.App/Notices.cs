@@ -81,7 +81,9 @@ sealed class Notices
             folders.Severity = result.Failed > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Informational;
             folders.Title = result.Failed > 0 ? L.F("Undone {0}; {1} couldn't be", result.Done, result.Failed) : L.F("Undone: {0} changes", result.Done);
             folders.Message = result.Failed > 0 ? string.Join("\n", result.Lines.Where(l => l.StartsWith("Not undone", StringComparison.Ordinal)).Take(5)) : "";
-            folders.ActionButton = null;
+            // What couldn't be undone yet can be tried again.
+            folders.ActionButton = result.Failed > 0 ? undo : null;
+            undo.IsEnabled = result.Failed > 0;
         };
         folders.ActionButton = undo;
         if (updates)

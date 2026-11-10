@@ -21,6 +21,8 @@ public sealed record PlanItem
     public string? Identity { get; init; }
     public bool IsFolder { get; init; }
     public long? Size { get; init; }
+    /// <summary>The size is at least <see cref="Size"/>: the folder was too big to measure whole.</summary>
+    public bool SizeAtLeast { get; init; }
     /// <summary>Proposed in a turn that had read files, folders or the web: the review says to check it; a Trash starts unticked.</summary>
     public bool AfterRead { get; init; }
 }
@@ -210,10 +212,9 @@ public sealed class FolderChanges(string journalFolder, FolderPlaces places, IFo
             case ChangeOp.MakeDir:
             {
                 using var held = platform.Hold(Chain(item.Path));
-                if (Exists(item.Path)) throw new IOException("something with that name is already there");
                 // Journaled before: a crash leaves at most an empty folder the journal names.
                 Write(Entry(planId, item, "pending"));
-                Directory.CreateDirectory(item.Path);
+                platform.MakeFolder(item.Path);
                 var made = platform.Identity(item.Path) ?? throw new IOException("the new folder can't be read back");
                 done = TryWrite(Entry(planId, item, "done", identity: made)) ? $"Made folder {places.Show(item.Path)}" : $"Made folder {places.Show(item.Path)} (not journaled: Undo can't remove it)";
                 return done;
@@ -276,7 +277,7 @@ public sealed class FolderChanges(string journalFolder, FolderPlaces places, IFo
                 using var held = platform.Hold(Chain(item.Path));
                 if (item.IsFolder && new FolderReader(places, platform).HoldsProtected(item.Path)) throw new UnauthorizedAccessException("it holds protected items");
                 Write(Entry(planId, item, "pending", to: staged));
-                Directory.CreateDirectory(staging);
+                platform.MakeFolder(staging);
                 var stagingId = platform.Identity(staging) ?? throw new IOException("its staging folder can't be read back");
                 string recycled;
                 using (platform.Hold([staging]))
@@ -286,10 +287,17 @@ public sealed class FolderChanges(string journalFolder, FolderPlaces places, IFo
                     {
                         recycled = platform.Recycle(staged);
                     }
-                    catch
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                     {
-                        // Not recycled: back where it was.
-                        platform.Move(staged, item.Path, identity);
+                        // Not recycled: back where it was (or, if its place was taken meanwhile, where it waits).
+                        try
+                        {
+                            platform.Move(staged, item.Path, identity);
+                        }
+                        catch (Exception back) when (back is IOException or UnauthorizedAccessException)
+                        {
+                            throw new IOException($"{e.Message}; it waits in {places.Show(staged)} ({back.Message})");
+                        }
                         throw;
                     }
                 }
@@ -345,7 +353,7 @@ public sealed class FolderChanges(string journalFolder, FolderPlaces places, IFo
     public (string Plan, DateTimeOffset Date, int Changes)? Last()
     {
         if (!Directory.Exists(journalFolder)) return null;
-        foreach (var file in Directory.EnumerateFiles(journalFolder, "plan-*.jsonl").OrderDescending(StringComparer.Ordinal).Take(20))
+        foreach (var file in Directory.EnumerateFiles(journalFolder, "plan-*.jsonl").OrderDescending(StringComparer.Ordinal))
         {
             var plan = System.IO.Path.GetFileNameWithoutExtension(file)["plan-".Length..];
             var open = Open(Read(plan));

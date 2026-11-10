@@ -35,6 +35,9 @@ public interface IFolderPlatform
     /// </summary>
     void Move(string from, string to, string identity);
 
+    /// <summary>Makes a new folder, failing if anything is there already (never claiming someone else's).</summary>
+    void MakeFolder(string path);
+
     /// <summary>Removes a folder only if it is still <paramref name="identity"/> and empty, decided by the removal itself.</summary>
     void RemoveEmptyFolder(string path, string identity);
 
@@ -58,7 +61,8 @@ public sealed class PlainFolderPlatform(string trash) : IFolderPlatform
     public string? Identity(string path)
     {
         if (File.Exists(path)) return $"f:{new FileInfo(path).Length}:{File.GetLastWriteTimeUtc(path).Ticks}";
-        return Directory.Exists(path) ? "d:" + Directory.GetCreationTimeUtc(path).Ticks : null;
+        // Folders have nothing stable to tell them by here (no file ids): tests only.
+        return Directory.Exists(path) ? "d" : null;
     }
 
     public int LinkCount(string path) => 1;
@@ -96,6 +100,12 @@ public sealed class PlainFolderPlatform(string trash) : IFolderPlatform
         if (Exists(to) && !string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) throw new FileExistsException("something with that name is already there");
         if (Directory.Exists(from)) Directory.Move(from, to);
         else File.Move(from, to);
+    }
+
+    public void MakeFolder(string path)
+    {
+        if (Exists(path)) throw new FileExistsException("something with that name is already there");
+        Directory.CreateDirectory(path);
     }
 
     public void RemoveEmptyFolder(string path, string identity)

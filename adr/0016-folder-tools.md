@@ -80,7 +80,9 @@ hold unless written otherwise here.
   deleted for good (too big for the bin), as Explorer does. Only fixed
   local drives qualify: removable and network drives may have no bin,
   so nothing is deleted there. A key or secret file can be moved but
-  keeps a name that says so (no renaming `.env` to `notes.txt` to read it).
+  keeps a name and place that say so: no renaming `.env` to `notes.txt`,
+  or moving `.git\config` out, to read it. A numbered name ("`.npmrc (2)`")
+  is the same secret. A short 8.3 name (`PROGRA~1`) isn't taken as a path.
 - **Journal and Undo.** Every item is written to `folder-journal\` and
   flushed before it runs, and again with its result. **Undo** takes the
   last plan back, last change first, item by item. An item that can't
@@ -102,6 +104,17 @@ Files inside a `.git` folder aren't read.
 ids, the Recycle Bin) is in Core, not the app, against the "Windows APIs
 in the app" rule of CLAUDE.md. That way the Windows CI runners test it.
 It is marked Windows-only, and only the app creates it.
+
+**What the checks guard against.** The model and what it reads: paths it
+writes, names and file text that try to steer it. Those can't reach a
+denied place, a folder not granted, or a change the user didn't approve.
+Another program running as the same user already has the same rights to
+the user's files. The handles and held folders narrow what such a
+program could do by racing a change (swapping a folder for a junction
+mid-operation), but they don't claim to close every race against it. A
+held folder can still be turned into a junction through a handle that
+can write to it, and the bin's staging folder can still have its child
+swapped before the shell takes it.
 
 ## Not yet (the Mac has them)
 

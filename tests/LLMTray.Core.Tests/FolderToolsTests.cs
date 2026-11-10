@@ -255,6 +255,10 @@ public sealed class FolderToolsTests : IDisposable
         Assert.True(FolderPlaces.IsSecretName(".env-production"));
         Assert.True(FolderPlaces.IsSecretName("prod.env"));
         Assert.True(FolderPlaces.IsSecretName("api_keys.txt"));
+        Assert.True(FolderPlaces.IsSecretName(".npmrc (2)"));
+        Assert.Null(places.Resolve("~/Downloads/PROGRA~1", []));
+        Assert.True(FolderPlaces.Guarded(Path.Combine(downloads, "repo", ".git", "config")));
+        Assert.True(FolderPlaces.Guarded(Path.Combine(downloads, "repo", ".git", "logs", "HEAD")));
     }
 
     [Fact]

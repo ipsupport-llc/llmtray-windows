@@ -93,17 +93,28 @@ public sealed class FolderPlaces
     public static bool IsSecretName(string name, string? parentName = null)
     {
         var n = name.ToLowerInvariant();
-        if (n is ".npmrc" or ".pypirc" or ".netrc" or ".git-credentials" or ".htpasswd" or ".pgpass") return true;
+        // Prefixes: "name (2)" or "name.bak" is the same secret.
+        foreach (var start in new[] { ".npmrc", ".pypirc", ".netrc", ".git-credentials", ".htpasswd", ".pgpass", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519" })
+        {
+            if (n.StartsWith(start, StringComparison.Ordinal)) return true;
+        }
         if (n.StartsWith(".env", StringComparison.Ordinal) || n.EndsWith(".env", StringComparison.Ordinal)) return true;
         foreach (var word in new[] { "credential", "password", "passwd", "secret", "token", "apikey", "api_key", "api-key", "private_key", "privatekey" })
         {
             if (n.Contains(word, StringComparison.Ordinal)) return true;
         }
-        if (n.StartsWith("id_rsa", StringComparison.Ordinal) || n.StartsWith("id_dsa", StringComparison.Ordinal)
-            || n.StartsWith("id_ecdsa", StringComparison.Ordinal) || n.StartsWith("id_ed25519", StringComparison.Ordinal)) return true;
         var ext = Path.GetExtension(n);
         if (ext is ".pem" or ".key" or ".p12" or ".pfx" or ".kdbx" or ".ppk" or ".jks" or ".keystore" or ".ovpn" or ".asc" or ".gpg") return true;
         return n == "config" && string.Equals(parentName, ".git", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Contents never read: a secret's name, or anything in a <c>.git</c> folder (or the folder itself).</summary>
+    public static bool Guarded(string full)
+    {
+        var name = Path.GetFileName(full);
+        var parent = Path.GetFileName(Path.GetDirectoryName(full) ?? "");
+        if (IsSecretName(name, parent)) return true;
+        return full.Split(Path.DirectorySeparatorChar).Any(n => string.Equals(n, ".git", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -144,7 +155,8 @@ public sealed class FolderPlaces
         {
             return null;
         }
-        return Plain(full) ? Real(full) : null;
+        // Checked as written too: Windows turns "NUL" into "\\.\NUL" on the way.
+        return Plain(p.Length > 0 && Path.IsPathFullyQualified(p) ? p : full) && Plain(full) && !full.StartsWith(@"\\", StringComparison.Ordinal) ? Real(full) : null;
     }
 
     static readonly string[] Devices = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
@@ -162,7 +174,11 @@ public sealed class FolderPlaces
         if (root.Length == 0) return false;
         foreach (var name in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
         {
+            if (name is "." or "..") continue;
             if (name.Contains(':') || name.EndsWith('.') || name.EndsWith(' ')) return false;
+            // A short 8.3 alias (PROGRA~1): it names a long name the checks wouldn't see.
+            var tilde = name.IndexOf('~');
+            if (tilde > 0 && tilde + 1 < name.Length && char.IsAsciiDigit(name[tilde + 1])) return false;
             var stem = name.Split('.')[0].TrimEnd(' ');
             if (Devices.Any(d => string.Equals(d, stem, StringComparison.OrdinalIgnoreCase))) return false;
         }
