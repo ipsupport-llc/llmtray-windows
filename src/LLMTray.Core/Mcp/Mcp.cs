@@ -92,12 +92,16 @@ public sealed record McpTool(string Name, string? Title, string Description, str
         _ => null,
     };
 
-    /// <summary>What a review approved: a changed name, description or schema is a new tool to review.</summary>
+    /// <summary>
+    /// What a review approved: a changed name, title, description, schema or
+    /// hint (a tool turned "read-only" runs more freely) is a new tool to review.
+    /// </summary>
     public string DefinitionHash
     {
         get
         {
-            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(Name + "\0" + Description + "\0" + InputSchemaJson));
+            static string Flag(bool? f) => f switch { true => "1", false => "0", null => "-" };
+            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\0", Name, Title ?? "", Description, InputSchemaJson, Flag(ReadOnlyHint), Flag(DestructiveHint))));
             return Convert.ToHexStringLower(bytes)[..24];
         }
     }
@@ -177,6 +181,8 @@ public static class McpImport
         foreach (var (name, value) in servers)
         {
             if (value is not JsonObject s) continue;
+            // A server its config switches off isn't added (it would start at once).
+            if (s["disabled"] is JsonValue off && off.TryGetValue<bool>(out var disabled) && disabled) continue;
             var env = (s["env"] as JsonObject)?.Where(kv => kv.Value is JsonValue).ToDictionary(kv => kv.Key, kv => kv.Value!.ToString()) ?? [];
             var headers = (s["headers"] as JsonObject)?.Where(kv => kv.Value is JsonValue).ToDictionary(kv => kv.Key, kv => kv.Value!.ToString()) ?? [];
             if (s["url"]?.GetValue<string>() is { Length: > 0 } url)

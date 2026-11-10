@@ -213,13 +213,18 @@ sealed partial class ChatWindow : Window
     /// in full; Allow, Allow for This Chat (not after outside text) or Deny.
     /// No default button: Enter mustn't approve.
     /// </summary>
-    Task<McpApproval> AskAsync(McpApprovalRequest request)
+    Task<McpApproval> AskAsync(McpApprovalRequest request, CancellationToken stopped)
     {
-        var done = new TaskCompletionSource<McpApproval>();
-        DispatcherQueue.TryEnqueue(async () =>
+        var done = new TaskCompletionSource<McpApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(async () =>
         {
             try
             {
+                if (stopped.IsCancellationRequested)
+                {
+                    done.TrySetResult(McpApproval.Deny);
+                    return;
+                }
                 Activate();
                 var body = new StackPanel { Spacing = 8, MaxWidth = 520 };
                 body.Children.Add(new TextBlock { Text = L.F("{0} wants to use {1}.", request.Server, request.Tool), TextWrapping = TextWrapping.Wrap });
@@ -248,6 +253,8 @@ sealed partial class ChatWindow : Window
                     CloseButtonText = L.T("Deny"),
                     DefaultButton = ContentDialogButton.None,
                 };
+                // Stop closes the question with the turn: no dialog is left behind to block the next one.
+                using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(dialog.Hide));
                 var result = await dialog.ShowAsync();
                 done.TrySetResult(result switch
                 {
@@ -261,7 +268,11 @@ sealed partial class ChatWindow : Window
                 // Can't ask (another dialog open): not allowed.
                 done.TrySetResult(McpApproval.Deny);
             }
-        });
+        }))
+        {
+            // The window is closing: nobody to ask, so not allowed.
+            done.TrySetResult(McpApproval.Deny);
+        }
         return done.Task;
     }
 

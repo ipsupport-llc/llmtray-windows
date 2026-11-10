@@ -287,7 +287,7 @@ public sealed class ChatClientTests : IAsyncDisposable
         await hub.ReviewAndEnableAsync(store.Add(new LLMTray.Core.Mcp.McpServerConfig { Name = "Fake", Command = "fake" }), default);
         var asked = new List<McpApprovalRequest>();
         var chat = new ChatClient(http, api, new ChatStore(root));
-        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: r => { asked.Add(r); return Task.FromResult(decision); }));
+        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (r, _) => { asked.Add(r); return Task.FromResult(decision); }));
         var answer = chat.Messages[^1];
         var request = Assert.Single(asked);
         Assert.Equal("Fake", request.Server);
@@ -298,8 +298,26 @@ public sealed class ChatClientTests : IAsyncDisposable
         // A temporary chat offers no MCP tools.
         var temporary = new ChatClient(http, api, new ChatStore(root));
         temporary.New(temporary: true);
-        await temporary.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: r => throw new InvalidOperationException("asked")));
+        await temporary.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (_, _) => throw new InvalidOperationException("asked")));
         Assert.Empty(temporary.Messages[^1].McpCalls);
+    }
+
+    [Fact]
+    public async Task StopWhileMcpServersStartEndsTheTurn()
+    {
+        var store = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(root, "mcp.json"));
+        var fake = new FakeMcpServer();
+        await using var hub = new LLMTray.Core.Mcp.McpHub(store, new HttpClient(), "test", root, transport: _ => fake);
+        await hub.ReviewAndEnableAsync(store.Add(new LLMTray.Core.Mcp.McpServerConfig { Name = "Fake", Command = "fake" }), default);
+        await hub.StopAsync("fake");
+        fake.HangStart = true;
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var sending = chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (_, _) => Task.FromResult(McpApproval.Allow)));
+        await Task.Delay(200);
+        Assert.True(chat.Busy);
+        chat.Stop();
+        await sending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(chat.Busy);
     }
 
     [Fact]

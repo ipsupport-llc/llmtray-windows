@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -20,10 +21,22 @@ public interface IMcpTransport : IAsyncDisposable
     Task SendAsync(JsonObject message, CancellationToken cancellationToken);
 }
 
-/// <summary>The server didn't answer in time: the call may or may not have happened.</summary>
+/// <summary>
+/// The call was sent but no answer came back (a timeout, a stop, the server
+/// or the connection gone): it may or may not have happened.
+/// </summary>
 public sealed class McpTimeoutException(string message) : Exception(message);
 
-public sealed class McpException(string message) : Exception(message);
+/// <summary>
+/// Something went wrong: <see cref="FromServer"/> when the server itself
+/// answered with an error, <see cref="NotSent"/> when the message surely
+/// never left.
+/// </summary>
+public sealed class McpException(string message, bool fromServer = false, bool notSent = false) : Exception(message)
+{
+    public bool FromServer { get; } = fromServer;
+    public bool NotSent { get; } = notSent;
+}
 
 /// <summary>
 /// Our own small MCP client (Mac MCPClient): initialize, tools (paged), call,
@@ -33,7 +46,7 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
 {
     readonly ConcurrentDictionary<int, TaskCompletionSource<JsonObject>> pending = new();
     int nextId;
-    string? closedBecause;
+    volatile string? closedBecause;
 
     /// <summary>The server changed its tools (notifications/tools/list_changed).</summary>
     public event Action? ToolsChanged;
@@ -55,7 +68,7 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
         transport.Closed += why =>
         {
             closedBecause = why;
-            foreach (var (_, waiter) in pending) waiter.TrySetException(new McpException($"the server stopped: {why}"));
+            FailPending(why);
             Closed?.Invoke(why);
         };
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -78,7 +91,29 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
         }
     }
 
+    void FailPending(string why)
+    {
+        foreach (var (_, waiter) in pending) waiter.TrySetException(new McpException($"the server stopped: {why}"));
+    }
+
+    /// <summary>Listing tools may take this long at most (every page together).</summary>
+    public static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
+
     public async Task<IReadOnlyList<McpTool>> ListToolsAsync(CancellationToken cancellationToken)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(ListTimeout);
+        try
+        {
+            return await ListPagesAsync(limit.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new McpException("the server didn't list its tools in 60 seconds");
+        }
+    }
+
+    async Task<IReadOnlyList<McpTool>> ListPagesAsync(CancellationToken cancellationToken)
     {
         var tools = new List<McpTool>();
         string? cursor = null;
@@ -94,48 +129,79 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
     }
 
     /// <summary>
-    /// Calls a tool. After <see cref="CallTimeout"/> (or a cancel) the server
-    /// is told to cancel, and <see cref="McpTimeoutException"/> says the
-    /// outcome is unknown.
+    /// Calls a tool. Once the call has gone out, anything but the server's
+    /// own answer (a timeout, a stop, the connection or the server gone) is
+    /// <see cref="McpTimeoutException"/>: the outcome is unknown. After a
+    /// timeout or a stop the server is told to cancel.
     /// </summary>
     public async Task<(string Text, bool IsError)> CallAsync(string tool, JsonObject arguments, CancellationToken cancellationToken)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         limit.CancelAfter(CallTimeout);
         var id = Interlocked.Increment(ref nextId);
+        var sent = new StrongBox<bool>();
         try
         {
-            var result = await RequestAsync("tools/call", new JsonObject { ["name"] = tool, ["arguments"] = arguments }, limit.Token, id).ConfigureAwait(false);
+            var result = await RequestAsync("tools/call", new JsonObject { ["name"] = tool, ["arguments"] = arguments }, limit.Token, id, sent).ConfigureAwait(false);
             return McpProtocol.ResultText(result);
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                await transport.SendAsync(McpProtocol.Notification("notifications/cancelled",
-                    new JsonObject { ["requestId"] = id, ["reason"] = cancellationToken.IsCancellationRequested ? "stopped by the user" : "timed out" }),
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception e) when (e is IOException or McpException or HttpRequestException or ObjectDisposedException or InvalidOperationException)
-            {
-            }
+            if (!sent.Value && cancellationToken.IsCancellationRequested) throw;
+            await TellCancelledAsync(id, cancellationToken.IsCancellationRequested ? "stopped by the user" : "timed out").ConfigureAwait(false);
             throw new McpTimeoutException(cancellationToken.IsCancellationRequested ? "stopped before the server answered" : "the server didn't answer in 60 seconds");
+        }
+        catch (Exception e) when (sent.Value && e is McpException { FromServer: false, NotSent: false } or IOException or HttpRequestException or ObjectDisposedException)
+        {
+            throw new McpTimeoutException($"no answer came back ({e.Message})");
         }
     }
 
-    async Task<JsonObject> RequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken, int? useId = null)
+    /// <summary>Best effort, a few seconds at most: the server may not be listening any more.</summary>
+    async Task TellCancelledAsync(int id, string reason)
     {
-        if (closedBecause is { } why) throw new McpException($"the server stopped: {why}");
+        if (closedBecause is not null) return;
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        try
+        {
+            await transport.SendAsync(McpProtocol.Notification("notifications/cancelled", new JsonObject { ["requestId"] = id, ["reason"] = reason }), limit.Token)
+                .WaitAsync(limit.Token).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is IOException or McpException or HttpRequestException or ObjectDisposedException or InvalidOperationException or OperationCanceledException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// One request. The answer counts as soon as it arrives, whatever the
+    /// transport is still doing with the rest of its stream.
+    /// </summary>
+    async Task<JsonObject> RequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken, int? useId = null, StrongBox<bool>? sent = null)
+    {
         var id = useId ?? Interlocked.Increment(ref nextId);
         var waiter = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = waiter;
         try
         {
-            await transport.SendAsync(McpProtocol.Request(id, method, @params), cancellationToken).ConfigureAwait(false);
+            // Checked after the waiter is in place: a close from now on fails it.
+            if (closedBecause is { } why) throw new McpException($"the server stopped: {why}", notSent: true);
+            if (sent is not null) sent.Value = true;
+            var sending = transport.SendAsync(McpProtocol.Request(id, method, @params), cancellationToken);
+            var first = await Task.WhenAny(waiter.Task, sending).ConfigureAwait(false);
+            if (first == sending)
+            {
+                // Sent (or failed sending): a failure is the request's; otherwise the answer is still to come.
+                await sending.ConfigureAwait(false);
+            }
+            else
+            {
+                // The rest of the stream (notifications) goes on by itself; its failure isn't this request's.
+                _ = sending.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            }
             var reply = await waiter.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             if (reply["error"] is JsonObject error)
             {
-                throw new McpException(error["message"]?.ToString() ?? "error");
+                throw new McpException(error["message"]?.ToString() ?? "error", fromServer: true);
             }
             return reply["result"] as JsonObject ?? [];
         }
@@ -170,7 +236,13 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
         }
     }
 
-    public ValueTask DisposeAsync() => transport.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        closedBecause ??= "stopped";
+        await transport.DisposeAsync().ConfigureAwait(false);
+        // Whatever the transport did, nobody is left waiting.
+        FailPending("stopped");
+    }
 }
 
 /// <summary>
@@ -178,14 +250,26 @@ public sealed class McpClient(IMcpTransport transport, string clientVersion) : I
 /// stderr goes to its log. Started with a small environment of its own
 /// variables on top of the app's.
 /// </summary>
+/// <param name="commandLine">When set, the arguments exactly as written (a cmd.exe line) instead of <paramref name="arguments"/>.</param>
+/// <param name="own">
+/// Takes the started process and everything it starts (the Windows app: a
+/// job object of its own); disposing that ends them all. Throws when it can't.
+/// </param>
 public sealed class McpStdioTransport(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment,
-    string workingDirectory, Action<string> log, Action<Process>? adopt = null) : IMcpTransport
+    string workingDirectory, Action<string> log, Func<Process, IDisposable?>? own = null, string? commandLine = null) : IMcpTransport
 {
     /// <summary>A line longer than this ends the server.</summary>
     const int MaxLine = 8 << 20;
+
+    /// <summary>A log line is cut here, read as it comes.</summary>
+    const int MaxLogLine = 4000;
+
     Process? process;
+    IDisposable? owner;
+    Task? readingOut;
     readonly SemaphoreSlim writing = new(1, 1);
     int closed;
+    int disposed;
 
     public event Action<JsonObject>? Received;
     public event Action<string>? Closed;
@@ -204,16 +288,52 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
             StandardInputEncoding = new UTF8Encoding(false),
             WorkingDirectory = workingDirectory,
         };
-        foreach (var a in arguments) info.ArgumentList.Add(a);
+        if (commandLine is not null) info.Arguments = commandLine;
+        else foreach (var a in arguments) info.ArgumentList.Add(a);
         foreach (var (k, v) in environment) info.Environment[k] = v;
         process = new Process { StartInfo = info, EnableRaisingEvents = true };
-        process.Exited += (_, _) => Close($"exited with code {SafeExitCode()}");
+        process.Exited += (_, _) => _ = ExitedAsync();
         process.Start();
-        // Tied to the app's lifetime (the Windows app's job object).
-        adopt?.Invoke(process);
-        _ = ReadOutAsync(process.StandardOutput);
+        try
+        {
+            owner = own?.Invoke(process);
+        }
+        catch
+        {
+            // Not owned is not run: it could outlive the app.
+            Kill(process);
+            throw;
+        }
+        readingOut = ReadOutAsync(process.StandardOutput);
         _ = ReadErrAsync(process.StandardError);
         return Task.CompletedTask;
+    }
+
+    static void Kill(Process p)
+    {
+        try
+        {
+            p.Kill(entireProcessTree: true);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+        }
+    }
+
+    /// <summary>Exited: what it wrote before it went is read first (a last answer counts), a moment at most.</summary>
+    async Task ExitedAsync()
+    {
+        if (readingOut is { } reading)
+        {
+            try
+            {
+                await reading.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+        }
+        Close($"exited with code {SafeExitCode()}");
     }
 
     int SafeExitCode()
@@ -222,7 +342,7 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         {
             return process?.ExitCode ?? -1;
         }
-        catch (InvalidOperationException)
+        catch (Exception e) when (e is InvalidOperationException or NotSupportedException)
         {
             return -1;
         }
@@ -245,7 +365,7 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
                         if (sb.Length > MaxLine)
                         {
                             log("a message over 8 MB: the server is stopped");
-                            await DisposeAsync().ConfigureAwait(false);
+                            _ = DisposeAsync().AsTask();
                             return;
                         }
                         continue;
@@ -276,15 +396,52 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException)
         {
         }
-        Close("its output ended");
+        Close(HasExited() ? $"exited with code {SafeExitCode()}" : "its output ended");
     }
 
+    bool HasExited()
+    {
+        try
+        {
+            return process?.HasExited == true;
+        }
+        catch (Exception e) when (e is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Its log, line by line; a runaway line is cut as it's read, never held whole.</summary>
     async Task ReadErrAsync(StreamReader reader)
     {
         try
         {
-            string? line;
-            while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) is not null) log(line);
+            var line = new StringBuilder();
+            var cut = false;
+            var buffer = new char[4096];
+            int read;
+            while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+            {
+                for (var i = 0; i < read; i++)
+                {
+                    var c = buffer[i];
+                    if (c == '\n')
+                    {
+                        log(line.ToString().TrimEnd('\r') + (cut ? "…" : ""));
+                        line.Clear();
+                        cut = false;
+                    }
+                    else if (line.Length < MaxLogLine)
+                    {
+                        line.Append(c);
+                    }
+                    else
+                    {
+                        cut = true;
+                    }
+                }
+            }
+            if (line.Length > 0) log(line.ToString());
         }
         catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException)
         {
@@ -293,14 +450,14 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
 
     public async Task SendAsync(JsonObject message, CancellationToken cancellationToken)
     {
-        if (process is null || Volatile.Read(ref closed) == 1) throw new McpException("the server isn't running");
+        if (process is null || Volatile.Read(ref closed) == 1) throw new McpException("the server isn't running", notSent: true);
         await writing.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await process.StandardInput.WriteAsync((message.ToJsonString() + "\n").AsMemory(), cancellationToken).ConfigureAwait(false);
             await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (IOException e)
+        catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException)
         {
             throw new McpException($"the server isn't reading: {e.Message}");
         }
@@ -316,14 +473,15 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
         Closed?.Invoke(why);
     }
 
+    /// <summary>Once, whoever calls it: stdin closed, a moment to exit, then it and everything it started are ended.</summary>
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref disposed, 1) == 1) return;
         Close("stopped");
         if (process is not { } p) return;
         try
         {
             p.StandardInput.Close();
-            // A moment to exit by itself, then ended with whatever it started.
             using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             try
             {
@@ -331,12 +489,14 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
             }
             catch (OperationCanceledException)
             {
-                p.Kill(entireProcessTree: true);
+                Kill(p);
             }
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is InvalidOperationException or IOException or ObjectDisposedException or System.ComponentModel.Win32Exception)
         {
         }
+        // Helpers it left behind go with its job (when there is one).
+        owner?.Dispose();
         p.Dispose();
     }
 }
@@ -348,8 +508,13 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
 /// </summary>
 public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictionary<string, string> headers) : IMcpTransport
 {
+    /// <summary>A reply (one JSON body, or one SSE event) longer than this ends the connection.</summary>
+    const int MaxMessage = 8 << 20;
+
     string? session;
     int closed;
+    /// <summary>Cancelled at close: no read outlives the connection.</summary>
+    readonly CancellationTokenSource closing = new();
 
     public string? ProtocolVersion { get; set; }
 
@@ -360,7 +525,9 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
 
     public async Task SendAsync(JsonObject message, CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref closed) == 1) throw new McpException("the connection is closed");
+        if (Volatile.Read(ref closed) == 1) throw new McpException("the connection is closed", notSent: true);
+        using var both = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, closing.Token);
+        var ct = both.Token;
         using var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(message.ToJsonString(), Encoding.UTF8, "application/json"),
@@ -370,39 +537,80 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
         foreach (var (k, v) in headers) request.Headers.TryAddWithoutValidation(k, v);
         if (session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id", session);
         if (ProtocolVersion is not null) request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", ProtocolVersion);
-        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        if (response.Headers.TryGetValues("Mcp-Session-Id", out var ids)) session = ids.FirstOrDefault() ?? session;
-        if ((int)response.StatusCode == 404 && session is not null)
+        try
         {
-            // The session is gone: the next start initializes again; this message's outcome is unknown.
-            Close("the server ended the session");
-            throw new McpException("the server ended the session");
-        }
-        if (!response.IsSuccessStatusCode) throw new McpException($"the server answered HTTP {(int)response.StatusCode}");
-        if (response.StatusCode == System.Net.HttpStatusCode.Accepted || response.Content.Headers.ContentLength == 0) return;
-        var type = response.Content.Headers.ContentType?.MediaType ?? "";
-        if (type == "text/event-stream")
-        {
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            var data = new StringBuilder();
-            string? line;
-            while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            if (response.Headers.TryGetValues("Mcp-Session-Id", out var ids)) session = ids.FirstOrDefault() ?? session;
+            if ((int)response.StatusCode == 404 && session is not null)
             {
-                if (line.StartsWith("data:", StringComparison.Ordinal))
+                // The session is gone: the next start initializes again; this message's outcome is unknown.
+                Close("the server ended the session");
+                throw new McpException("the server ended the session");
+            }
+            // Refused (4xx) is surely not done; a server error (5xx) may have been half way.
+            if (!response.IsSuccessStatusCode) throw new McpException($"the server answered HTTP {(int)response.StatusCode}", notSent: (int)response.StatusCode is >= 400 and < 500);
+            if (response.StatusCode == System.Net.HttpStatusCode.Accepted || response.Content.Headers.ContentLength == 0) return;
+            if (response.Content.Headers.ContentLength > MaxMessage) throw new McpException("the server's answer is over 8 MB");
+            var type = response.Content.Headers.ContentType?.MediaType ?? "";
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            if (type == "text/event-stream")
+            {
+                await ReadEventsAsync(stream, ct).ConfigureAwait(false);
+                return;
+            }
+            Deliver(await ReadBoundedAsync(stream, ct).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (closing.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new McpException("the connection is closed");
+        }
+    }
+
+    /// <summary>SSE: each event's data delivered as it ends (the reply counts at once; the stream may go on).</summary>
+    async Task ReadEventsAsync(Stream stream, CancellationToken ct)
+    {
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var data = new StringBuilder();
+        var line = new StringBuilder();
+        var buffer = new char[8192];
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) > 0)
+        {
+            for (var i = 0; i < read; i++)
+            {
+                if (buffer[i] != '\n')
                 {
-                    data.Append(line.AsSpan(5).TrimStart(' ')).Append('\n');
+                    line.Append(buffer[i]);
+                    if (line.Length + data.Length > MaxMessage) throw new McpException("an event from the server is over 8 MB");
+                    continue;
                 }
-                else if (line.Length == 0 && data.Length > 0)
+                var text = line.ToString().TrimEnd('\r');
+                line.Clear();
+                if (text.StartsWith("data:", StringComparison.Ordinal))
+                {
+                    data.Append(text.AsSpan(5).TrimStart(' ')).Append('\n');
+                }
+                else if (text.Length == 0 && data.Length > 0)
                 {
                     Deliver(data.ToString());
                     data.Clear();
                 }
             }
-            if (data.Length > 0) Deliver(data.ToString());
-            return;
         }
-        Deliver(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+        if (data.Length > 0) Deliver(data.ToString());
+    }
+
+    static async Task<string> ReadBoundedAsync(Stream stream, CancellationToken ct)
+    {
+        using var body = new MemoryStream();
+        var buffer = new byte[16384];
+        int read;
+        while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        {
+            body.Write(buffer, 0, read);
+            if (body.Length > MaxMessage) throw new McpException("the server's answer is over 8 MB");
+        }
+        return Encoding.UTF8.GetString(body.GetBuffer(), 0, (int)body.Length);
     }
 
     void Deliver(string text)
@@ -446,5 +654,12 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
             }
         }
         Close("stopped");
+        try
+        {
+            closing.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 }

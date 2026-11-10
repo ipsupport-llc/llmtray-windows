@@ -24,9 +24,13 @@ their tools, called the way the built-in ones are (adr/0009).
   arguments in full: Allow, Allow for This Chat, Deny; no default button.
   A deny refuses the tool for the rest of the turn. **Run without
   asking** is a per-tool switch, off until turned on. Approval is bound to
-  the tool's definition (a hash of its name, description and schema): a
-  tool changed or added since the review is hidden from the model until
-  accepted in the Tools tab, and the hash is checked again before the call.
+  the server and the tool's definition (a hash of its name, title,
+  description, schema and read-only/destructive hints): a tool changed or
+  added since the review is hidden from the model until accepted, one by
+  one, in the Tools tab. Before the call the tool is checked again against
+  what the running server lists now (listed again after `list_changed` or
+  a restart), and the permissions are read as they are now. Switching a
+  server off and on keeps its reviews; it doesn't accept what changed.
 - **After outside text everything is asked**: once the turn has web or
   MCP text in it, a call is asked even with an allowance, except a tool
   its command server marks read-only (what it reads comes back, its
@@ -44,19 +48,34 @@ their tools, called the way the built-in ones are (adr/0009).
 Our own (`LLMTray.Core.Mcp`): JSON-RPC 2.0, protocol versions
 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05; `initialize`, paged
 `tools/list`, `tools/call`, `tools/list_changed`, `ping`, and
-`notifications/cancelled` on Stop or after 60 s, when the answer says the
-outcome is unknown. Nothing is retried. 20 s to start.
+`notifications/cancelled` on Stop or after 60 s (sent with its own 3 s
+limit). Once a call has gone out, anything but the server's own answer
+(a timeout, a stop, the server or the connection gone) is recorded as
+unknown, so the model is told not to repeat it; notSent is only for calls
+that surely never left. A reply counts when it arrives, even while its
+SSE stream stays open. Nothing is retried. 20 s to start, 60 s to list.
 
 - **stdio**: a bare command is found on PATH (with PATHEXT); a `.cmd` or
-  `.bat` (`npx` is `npx.cmd`) runs through `cmd.exe /d /c`. Started at the
-  first need with the server's own environment variables, in a folder of
-  its own under the data folder, put in the app's job object so it ends
-  with the app; stopped after 15 idle minutes, on quit, and before the
-  next call after a timed-out one. A line over 8 MB ends it. At most
-  three starts a minute, then it waits for a restart by hand.
+  `.bat` (`npx` is `npx.cmd`) runs through `cmd.exe /d /s /c` with a
+  command line we write: every argument quoted (so `&`, `|`, `<`, `>` and
+  `^` are text), and an argument with `"`, `%` or a line break, which cmd
+  would act on even inside quotes, refused. Started at the first need with
+  the server's own environment variables, in a folder of its own under the
+  data folder, and put at once in a kill-on-close job object of its own:
+  stopping the server ends it and every helper it started, and so does the
+  app's exit, however it exits. (`Process.Start` can't create it
+  suspended, so a child started in the instant before the assignment
+  escapes; one that can't be assigned isn't run.) What it wrote before it
+  exited is read before its pending calls fail. Stopped after 15 idle
+  minutes with no call on its way, on quit, and before the next call after
+  an unanswered one. A stdout line over 8 MB ends it; stderr lines are cut
+  as they're read. Three crashes (or failed starts) in a minute latch: it
+  waits for Restart by hand.
 - **HTTP**: a POST per message, the reply JSON or SSE; `Mcp-Session-Id`
   kept, `MCP-Protocol-Version` sent; a 404 for the session ends it (the
-  next need starts again).
+  next need starts again). A reply over 8 MB ends the connection; closing
+  cancels every read in flight. Headers (a token) go only to `https://`
+  or to this PC.
 
 ## Not yet
 

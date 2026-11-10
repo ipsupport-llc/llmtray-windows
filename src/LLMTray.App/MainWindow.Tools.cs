@@ -54,7 +54,7 @@ public sealed partial class MainWindow
                     if (!reviewed)
                     {
                         rows.Add(Ui.Row(tool.Title ?? tool.Name, L.T("New or changed since you reviewed it: hidden from the chat until you accept it."),
-                            Ui.Button(L.T("Accept"), () => _ = SetMcpOnAsync(server, true))));
+                            Ui.Button(L.T("Accept"), () => _ = AcceptMcpToolAsync(server, tool.Name))));
                         continue;
                     }
                     var free = server.RunWithoutAsking.Contains(tool.DefinitionHash);
@@ -124,9 +124,10 @@ public sealed partial class MainWindow
         RenderPage();
         try
         {
-            // Started, its tools listed and taken as reviewed, switched on.
+            // Started and switched on. A new server's tools are taken as reviewed; one
+            // switched on again keeps its reviews, and what changed waits for its own Accept.
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            await app.Mcp.ReviewAndEnableAsync(app.Mcp.Store.Load().First(s => s.Key == server.Key), timeout.Token);
+            if (app.Mcp.Current(server.Key) is { } now) await app.Mcp.EnableAsync(now, timeout.Token);
         }
         catch (Exception e)
         {
@@ -135,6 +136,46 @@ public sealed partial class MainWindow
         }
         mcpBusy.Remove(server.Key);
         RenderPage();
+    }
+
+    /// <summary>This one tool as the server lists it now; the others stay as they were.</summary>
+    async Task AcceptMcpToolAsync(McpServerConfig server, string tool)
+    {
+        mcpBusy.Add(server.Key);
+        RenderPage();
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            if (App.Current.Mcp.Current(server.Key) is { } now) await App.Current.Mcp.AcceptToolAsync(now, tool, timeout.Token);
+            mcpError = null;
+        }
+        catch (Exception e)
+        {
+            mcpError = L.F("{0} didn't start: {1}", server.Name, e.Message);
+        }
+        mcpBusy.Remove(server.Key);
+        RenderPage();
+    }
+
+    /// <summary>One dialog at a time on this page (a second ShowAsync would throw).</summary>
+    bool mcpDialogOpen;
+
+    async Task<ContentDialogResult> ShowMcpDialogAsync(ContentDialog dialog)
+    {
+        if (mcpDialogOpen) return ContentDialogResult.None;
+        mcpDialogOpen = true;
+        try
+        {
+            return await dialog.ShowAsync();
+        }
+        catch (Exception)
+        {
+            return ContentDialogResult.None;
+        }
+        finally
+        {
+            mcpDialogOpen = false;
+        }
     }
 
     async Task ShowMcpToolsAsync(McpServerConfig server)
@@ -186,7 +227,7 @@ public sealed partial class MainWindow
             CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Close,
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await ShowMcpDialogAsync(dialog) != ContentDialogResult.Primary) return;
         await App.Current.Mcp.StopAsync(server.Key);
         App.Current.Mcp.Store.Remove(server.Key);
         RenderPage();
@@ -232,9 +273,10 @@ public sealed partial class MainWindow
             Content = new ScrollViewer { Content = panel },
             PrimaryButtonText = L.T("Add"),
             CloseButtonText = L.T("Cancel"),
-            DefaultButton = ContentDialogButton.Primary,
+            // Enter in a field mustn't add (and start) a half-typed server.
+            DefaultButton = ContentDialogButton.None,
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await ShowMcpDialogAsync(dialog) != ContentDialogResult.Primary) return;
         var lines = extra.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         McpServerConfig config;
         if (command)
@@ -255,6 +297,13 @@ public sealed partial class MainWindow
             }
             var headers = lines.Select(l => l.Split(':', 2)).Where(p => p.Length == 2 && p[0].Trim().Length > 0)
                 .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
+            if (headers.Count > 0 && url.Scheme == "http" && !url.IsLoopback)
+            {
+                // A token in a header would cross the network in the clear.
+                mcpError = L.T("Headers go only to an https:// address (or this PC).");
+                RenderPage();
+                return;
+            }
             config = new McpServerConfig { Name = Named(name.Text, url.Host), Url = url.AbsoluteUri, Headers = headers };
         }
         var added = App.Current.Mcp.Store.Add(config);
@@ -296,9 +345,10 @@ public sealed partial class MainWindow
             },
             PrimaryButtonText = L.T("Add"),
             CloseButtonText = L.T("Cancel"),
-            DefaultButton = ContentDialogButton.Primary,
+            // Enter in a field mustn't add (and start) a half-typed server.
+            DefaultButton = ContentDialogButton.None,
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await ShowMcpDialogAsync(dialog) != ContentDialogResult.Primary) return;
         IReadOnlyList<McpServerConfig> servers;
         try
         {

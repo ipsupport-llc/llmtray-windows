@@ -146,7 +146,7 @@ public partial class App : Application
 
         launcher = new JobObjectLauncher();
         var mcpStore = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(DataFolder, "mcp-servers.json"));
-        Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, Web, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, launcher.Adopt);
+        Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, Web, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, JobObjectLauncher.Own);
         Mcp.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         mcpStore.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         var runtimeRoot = RuntimeRoot;
