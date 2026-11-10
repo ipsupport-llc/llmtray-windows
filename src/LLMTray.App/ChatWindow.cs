@@ -156,7 +156,7 @@ sealed class ChatWindow : Window
         var app = App.Current;
         // The model the answer comes from: the picked one, or whichever is loaded.
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
-        return new ChatOptions(picked, Thinking: thinking.IsChecked == true, Profile: app.Profiles.ResolvedFor(entry?.FullPath));
+        return new ChatOptions(picked, Thinking: thinking.IsChecked == true, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools);
     }
 
     void SendOrStop()
@@ -399,9 +399,29 @@ sealed class ChatWindow : Window
             });
         }
 
+        if (message.Activity is { } activity)
+        {
+            var doing = Ui.Horizontal(new ProgressRing { IsActive = true, Width = 14, Height = 14 }, Ui.Caption(Activity(activity)));
+            stack.Children.Add(doing);
+        }
+
         if (message.Error is { } error)
         {
             stack.Children.Add(Ui.Caption(error, Ui.Red));
+        }
+
+        if (!message.Streaming && message.Sources.Count > 0)
+        {
+            // Where the tools' facts came from, with the credit their services ask for.
+            var sources = new StackPanel { Spacing = 2 };
+            sources.Children.Add(Ui.Caption(L.T("Sources")));
+            foreach (var source in message.Sources)
+            {
+                var line = Ui.Caption(source);
+                line.IsTextSelectionEnabled = true;
+                sources.Children.Add(line);
+            }
+            stack.Children.Add(sources);
         }
 
         if (!message.Streaming && message.Content.Length > 0)
@@ -420,6 +440,18 @@ sealed class ChatWindow : Window
         }
         return stack;
     }
+
+    /// <summary>What the answer shows while a tool runs.</summary>
+    static string Activity(string tool) => tool.ToLowerInvariant() switch
+    {
+        "web_search" => L.T("Searching…"),
+        "get_weather" => L.T("Checking the weather…"),
+        "calculate" => L.T("Calculating…"),
+        "convert_currency" => L.T("Checking exchange rates…"),
+        "get_country_info" => L.T("Looking up the country…"),
+        "get_current_time" => L.T("Checking the time…"),
+        _ => L.F("Using {0}…", tool),
+    };
 
     static UIElement BlockView(MdBlock block)
     {

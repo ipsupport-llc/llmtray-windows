@@ -20,7 +20,7 @@ public sealed class Profile
     public string Id { get; set; } = Guid.NewGuid().ToString().ToUpperInvariant();
     public string Name { get; set; } = "Unnamed";
     public RequestSettings Request { get; set; } = new();
-    public JsonElement? Tools { get; set; }
+    public ToolSettings Tools { get; set; } = new();
     public LaunchSettings Launch { get; set; } = new();
 
     [JsonExtensionData]
@@ -38,6 +38,24 @@ public sealed class Profile
         public int? TopK { get; set; }
         public int? MaxTokens { get; set; }
         public string? SystemPrompt { get; set; }
+
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? Other { get; set; }
+    }
+
+    /// <summary>
+    /// The in-app chat's tools (Mac names). External clients bring their own;
+    /// nothing here applies to them. The Mac's image, music and other tool
+    /// settings stay in <see cref="Other"/>.
+    /// </summary>
+    public sealed class ToolSettings
+    {
+        /// <summary>The catalog entries offered to the model (Tools.ToolCatalog).</summary>
+        public List<string>? EnabledTools { get; set; }
+        /// <summary>Added to the system prompt whenever tools are offered; empty turns it off.</summary>
+        public string? ToolUsePolicy { get; set; }
+        /// <summary>Rounds of tool calls one message may take before the answer.</summary>
+        public int? ToolRounds { get; set; }
 
         [JsonExtensionData]
         public Dictionary<string, JsonElement>? Other { get; set; }
@@ -85,6 +103,12 @@ public sealed class Profile
             MaxTokens = 16384,
             SystemPrompt = DefaultSystemPrompt,
         },
+        Tools = new ToolSettings
+        {
+            EnabledTools = [.. LLMTray.Core.Tools.ToolCatalog.DefaultEnabled],
+            ToolUsePolicy = LLMTray.Core.Tools.ToolCatalog.DefaultToolUsePolicy,
+            ToolRounds = 10,
+        },
         Launch = new LaunchSettings
         {
             ContextSize = 0,
@@ -106,13 +130,16 @@ public sealed record ProfileField(string Name, Func<Profile, bool> IsSet, Action
     public static readonly ProfileField TopK = new("topK", p => p.Request.TopK is not null, p => p.Request.TopK = null);
     public static readonly ProfileField MaxTokens = new("maxTokens", p => p.Request.MaxTokens is not null, p => p.Request.MaxTokens = null);
     public static readonly ProfileField SystemPrompt = new("systemPrompt", p => p.Request.SystemPrompt is not null, p => p.Request.SystemPrompt = null);
+    public static readonly ProfileField EnabledTools = new("enabledTools", p => p.Tools.EnabledTools is not null, p => p.Tools.EnabledTools = null);
+    public static readonly ProfileField ToolUsePolicy = new("toolUsePolicy", p => p.Tools.ToolUsePolicy is not null, p => p.Tools.ToolUsePolicy = null);
+    public static readonly ProfileField ToolRounds = new("toolRounds", p => p.Tools.ToolRounds is not null, p => p.Tools.ToolRounds = null);
     public static readonly ProfileField ContextSize = new("contextSize", p => p.Launch.ContextSize is not null, p => p.Launch.ContextSize = null);
     public static readonly ProfileField KvCacheType = new("kvCacheType", p => p.Launch.KvCacheType is not null, p => p.Launch.KvCacheType = null);
     public static readonly ProfileField Parallel = new("parallel", p => p.Launch.Parallel is not null, p => p.Launch.Parallel = null);
     public static readonly ProfileField LlamaServerArgs = new("llamaServerArgs", p => p.Launch.LlamaServerArgs is not null, p => p.Launch.LlamaServerArgs = null);
 
     public static readonly IReadOnlyList<ProfileField> All =
-        [Temperature, TopP, TopK, MaxTokens, SystemPrompt, ContextSize, KvCacheType, Parallel, LlamaServerArgs];
+        [Temperature, TopP, TopK, MaxTokens, SystemPrompt, EnabledTools, ToolUsePolicy, ToolRounds, ContextSize, KvCacheType, Parallel, LlamaServerArgs];
 }
 
 /// <summary>Which layer a field's value comes from, for the editor.</summary>
@@ -127,6 +154,9 @@ public sealed record ResolvedProfile(
     int TopK,
     int MaxTokens,
     string SystemPrompt,
+    IReadOnlyList<string> EnabledTools,
+    string ToolUsePolicy,
+    int ToolRounds,
     int ContextSize,
     string KvCacheType,
     int Parallel,
@@ -167,6 +197,9 @@ public static class ProfileResolver
             Math.Clamp(Value(p => p.Request.TopK, overlay, @base), 0, 1000),
             Math.Clamp(Value(p => p.Request.MaxTokens, overlay, @base), 1, 1_048_576),
             Value(p => p.Request.SystemPrompt, overlay, @base),
+            ((overlay is null ? null : overlay.Tools.EnabledTools) ?? @base.Tools.EnabledTools ?? Profile.BuiltIn.Tools.EnabledTools!).Distinct().ToList(),
+            Value(p => p.Tools.ToolUsePolicy, overlay, @base),
+            Math.Clamp(Value(p => p.Tools.ToolRounds, overlay, @base), 1, 30),
             Math.Clamp(Value(p => p.Launch.ContextSize, overlay, @base), 0, 4_194_304),
             Profile.KvCacheTypes.Contains(kv) ? kv : "f16",
             Math.Clamp(Value(p => p.Launch.Parallel, overlay, @base), 0, 64),

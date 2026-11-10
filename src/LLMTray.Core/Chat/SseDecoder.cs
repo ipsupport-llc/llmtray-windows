@@ -8,6 +8,8 @@ public abstract record SseEvent
     public sealed record Content(string Text) : SseEvent;
     public sealed record Usage(int CompletionTokens, int? PromptTokens, int? CachedTokens, int? ReasoningTokens) : SseEvent;
     public sealed record Error(string Message) : SseEvent;
+    /// <summary>A piece of a tool call: the first piece of each has its id and name, the rest more of its arguments.</summary>
+    public sealed record ToolCall(int Index, string? Id, string? Name, string Arguments) : SseEvent;
 }
 
 /// <summary>
@@ -106,6 +108,20 @@ public sealed class SseDecoder
                 {
                     events.Add(new SseEvent.Reasoning(reasoning));
                     break;
+                }
+            }
+            if (delta.TryGetProperty("tool_calls", out var calls) && calls.ValueKind == JsonValueKind.Array)
+            {
+                var position = 0;
+                foreach (var call in calls.EnumerateArray())
+                {
+                    if (call.ValueKind != JsonValueKind.Object) continue;
+                    var index = Int(call, "index") ?? position;
+                    position++;
+                    string? Text(JsonElement o, string name) =>
+                        o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                    var function = call.TryGetProperty("function", out var f) ? f : default;
+                    events.Add(new SseEvent.ToolCall(index, Text(call, "id"), Text(function, "name"), Text(function, "arguments") ?? ""));
                 }
             }
             if (delta.TryGetProperty("content", out var content))

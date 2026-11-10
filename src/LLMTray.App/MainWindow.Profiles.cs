@@ -123,12 +123,25 @@ public sealed partial class MainWindow
             yield return Ui.Card(sampling);
         }
 
-        if (Field(ProfileField.SystemPrompt, L.T("System prompt"),
-                L.T("Sent first in every in-app chat request. Default comes with a short starting prompt -- extend it or replace it. Not applied to external API clients."),
-                () => Text(resolved.SystemPrompt, multiline: true, v => Set(p => p.Request.SystemPrompt = v))) is { } prompt)
+        var promptAndTools = new[]
         {
-            yield return Ui.Section(L.T("System prompt"));
-            yield return Ui.Card(prompt);
+            Field(ProfileField.SystemPrompt, L.T("System prompt"),
+                L.T("Sent first in every in-app chat request. Default comes with a short starting prompt -- extend it or replace it. Not applied to external API clients."),
+                () => Text(resolved.SystemPrompt, multiline: true, v => Set(p => p.Request.SystemPrompt = v))),
+            Field(ProfileField.EnabledTools, L.T("Chat tools"),
+                L.T("Tools the model may call in the in-app chat (needs a tool-calling model). Web tools send the model's query to that public service (DuckDuckGo, Google News, Wikipedia/Wikidata, Hacker News, date.nager.at, open.er-api.com, Open-Meteo); local ones never leave the PC."),
+                () => ToolSwitches(resolved.EnabledTools, list => Set(p => p.Tools.EnabledTools = list))),
+            Field(ProfileField.ToolRounds, L.T("Tool rounds per message"),
+                L.T("How many rounds of tool calls the model may make for one message before it has to answer. The same call twice in one message never runs twice."),
+                () => Number(resolved.ToolRounds, 1, 30, 1, "0", v => Set(p => p.Tools.ToolRounds = (int)v))),
+            Field(ProfileField.ToolUsePolicy, L.T("Tool-use rule"),
+                L.T("Added to the system prompt whenever tools are offered. The model's own tool template only says how to call a tool, never when not to. Empty disables it."),
+                () => Text(resolved.ToolUsePolicy, multiline: true, v => Set(p => p.Tools.ToolUsePolicy = v))),
+        }.Where(r => r is not null).ToArray();
+        if (promptAndTools.Length > 0)
+        {
+            yield return Ui.Section(L.T("Prompt & tools"));
+            yield return Ui.Card(promptAndTools);
         }
 
         var kv = new ComboBox { MinWidth = 160 };
@@ -198,6 +211,52 @@ public sealed partial class MainWindow
         };
         return box;
     }
+
+    /// <summary>The tool switches: a check box each, a globe for the ones that use the internet, the credit a service asks for.</summary>
+    static StackPanel ToolSwitches(IReadOnlyList<string> enabled, Action<List<string>> changed)
+    {
+        var on = enabled.ToList();
+        var panel = new StackPanel { Spacing = 0, MinWidth = 260 };
+        foreach (var tool in Core.Tools.ToolCatalog.Entries)
+        {
+            var label = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            label.Children.Add(new TextBlock { Text = ToolTitle(tool.Name, tool.Title) });
+            if (tool.UsesNetwork)
+            {
+                var globe = new FontIcon { Glyph = "\uE774", FontSize = 12, Foreground = Ui.Secondary };
+                ToolTipService.SetToolTip(globe, L.T("Uses the internet"));
+                label.Children.Add(globe);
+            }
+            var box = new CheckBox { Content = label, IsChecked = on.Contains(tool.Name), MinHeight = 28, Padding = new Thickness(6, 0, 0, 0) };
+            if (tool.Credit is { } credit) ToolTipService.SetToolTip(box, credit);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, ToolTitle(tool.Name, tool.Title));
+            box.Checked += (_, _) => { if (!on.Contains(tool.Name)) { on.Add(tool.Name); changed([.. on]); } };
+            box.Unchecked += (_, _) => { if (on.Remove(tool.Name)) changed([.. on]); };
+            panel.Children.Add(box);
+        }
+        return panel;
+    }
+
+    /// <summary>A tool's name in the user's language (the Mac app's words).</summary>
+    static string ToolTitle(string name, string english) => name switch
+    {
+        "get_current_date" => L.T("Date & time"),
+        "get_current_time_in_city" => L.T("Time in a city"),
+        "calculate" => L.T("Calculator"),
+        "web_search" => L.T("Web search"),
+        "news" => L.T("News"),
+        "hackernews" => L.T("Hacker News"),
+        "web_page" => L.T("Read web pages"),
+        "get_wikipedia_summary" => L.T("Wikipedia"),
+        "get_country_info" => L.T("Country facts"),
+        "get_public_holidays" => L.T("Public holidays"),
+        "convert_currency" => L.T("Currency rates"),
+        "get_weather" => L.T("Weather"),
+        "get_hourly_forecast" => L.T("Hourly forecast"),
+        "get_air_quality" => L.T("Air quality"),
+        "get_sunrise_sunset" => L.T("Sunrise & sunset"),
+        _ => english,
+    };
 
     /// <summary>A text field, saved when the user leaves it (not per keystroke).</summary>
     static TextBox Text(string value, bool multiline, Action<string> changed, bool mono = false)

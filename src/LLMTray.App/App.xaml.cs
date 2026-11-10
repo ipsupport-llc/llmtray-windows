@@ -49,6 +49,9 @@ public partial class App : Application
 
     /// <summary>Per-model settings (adr/0008): profiles\ in the data folder.</summary>
     public LLMTray.Core.Profiles.ProfileManager Profiles { get; private set; } = null!;
+
+    /// <summary>The chat's tools (adr/0009); each profile switches them on.</summary>
+    public LLMTray.Core.Tools.ToolBox Tools { get; private set; } = null!;
     public string DataFolder { get; private set; } = "";
 
     /// <summary>Why the API isn't served (port taken), or null.</summary>
@@ -107,6 +110,17 @@ public partial class App : Application
         Profiles = new LLMTray.Core.Profiles.ProfileManager(
             new LLMTray.Core.Profiles.ProfileStore(Path.Combine(DataFolder, "profiles")), () => Settings.ContextSize);
         Profiles.Changed += () => dispatcher.TryEnqueue(() => ProfilesChanged?.Invoke());
+        var webFetch = new LLMTray.Core.Tools.WebFetch(Web,
+            $"LLMTray-Windows/{typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev"} (https://github.com/ipsupport-llc/llmtray-windows)");
+        Tools = new LLMTray.Core.Tools.ToolBox(LLMTray.Core.Tools.ToolCatalog.MakeTools(), enabled =>
+        {
+            // "Here" for the time and weather: the PC's own zone and region, nothing looked up.
+            var region = System.Globalization.RegionInfo.CurrentRegion;
+            var zone = TimeZoneInfo.Local.HasIanaId ? TimeZoneInfo.Local.Id
+                : TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id, region.TwoLetterISORegionName, out var iana) ? iana
+                : "UTC";
+            return new LLMTray.Core.Tools.ToolContext(enabled, webFetch, zone, region.TwoLetterISORegionName, !region.IsMetric);
+        });
 
         launcher = new JobObjectLauncher();
         var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
