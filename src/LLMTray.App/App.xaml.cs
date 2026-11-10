@@ -84,6 +84,9 @@ public partial class App : Application
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         dispatcher = DispatcherQueue.GetForCurrentThread();
+        // A tray app: closing its last window (the setup wizard on a first
+        // run) mustn't end it; Quit does.
+        DispatcherShutdownMode = DispatcherShutdownMode.OnExplicitShutdown;
         DataFolder = FindDataFolder();
         settingsStore = new SettingsStore(Path.Combine(DataFolder, "settings.json"));
         Settings = settingsStore.Load();
@@ -214,8 +217,9 @@ public partial class App : Application
     internal void SetupClosed(SetupWindow closed, bool showWindow)
     {
         if (setupWindow == closed) setupWindow = null;
-        // After a first run: the window with the models and settings.
-        if (showWindow) dispatcher?.TryEnqueue(ShowWindow);
+        // After a first run: the window with the models and settings, open
+        // before the wizard goes.
+        if (showWindow) ShowWindow();
     }
 
     /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it; nulls forget it.</summary>
