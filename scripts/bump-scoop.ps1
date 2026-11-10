@@ -20,9 +20,9 @@ function Get-Order([string]$v) {
 }
 
 $path = $Manifest
-$manifest = Get-Content $path -Raw | ConvertFrom-Json
-if ((Get-Order $manifest.version) -gt (Get-Order $Version)) {
-    Write-Host "the bucket already has $($manifest.version), newer than ${Version}: left as it is"
+$data = Get-Content $path -Raw | ConvertFrom-Json
+if ((Get-Order $data.version) -gt (Get-Order $Version)) {
+    Write-Host "the bucket already has $($data.version), newer than ${Version}: left as it is"
     exit 0
 }
 # Every ZIP first: a missing one leaves the manifest untouched.
@@ -32,14 +32,14 @@ foreach ($name in 'x64', 'ARM64') {
     if (-not (Test-Path $zip)) { throw "$(Split-Path $zip -Leaf) is not in $Dist" }
     $hashes[$name] = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 }
-$manifest.version = $Version
+$data.version = $Version
 foreach ($pair in @(@('64bit', 'x64'), @('arm64', 'ARM64'))) {
     $file = "LLMTray-$Version-$($pair[1])-portable.zip"
-    $manifest.architecture.($pair[0]).url = "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v$Version/$file"
-    $manifest.architecture.($pair[0]).hash = $hashes[$pair[1]]
+    $data.architecture.($pair[0]).url = "https://github.com/ipsupport-llc/llmtray-windows/releases/download/v$Version/$file"
+    $data.architecture.($pair[0]).hash = $hashes[$pair[1]]
 }
 # Scoop's own style: four-space indents.
-$json = $manifest | ConvertTo-Json -Depth 10
+$json = $data | ConvertTo-Json -Depth 10
 $json = ($json -split "`n" | ForEach-Object { $_ -replace '^( +)', { ' ' * ($_.Groups[1].Value.Length * 2) } }) -join "`n"
 Set-Content $path ($json.TrimEnd() + "`n") -NoNewline
 Write-Host "$path -> $Version"
