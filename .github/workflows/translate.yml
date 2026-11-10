@@ -83,7 +83,10 @@ jobs:
             exit 1
           fi
           # shellcheck disable=SC2086
-          python3 scripts/l10n.py translate --mac mac/Resources/Localization $LANGS
+          # A batch that still fails after retries stays untranslated: what
+          # did translate is proposed anyway, and the next run fills the gap.
+          python3 scripts/l10n.py translate --mac mac/Resources/Localization $LANGS \
+            || echo "::warning::some batches failed; proposing the rest"
       - name: Check
         run: python3 scripts/l10n.py check --mac mac/Resources/Localization
       - name: Propose

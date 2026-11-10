@@ -23,6 +23,8 @@ import os
 import pathlib
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -342,8 +344,15 @@ def openai(messages, model, key):
         data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                return json.loads(r.read())["choices"][0]["message"]["content"]
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            # A dropped connection or a 429/5xx: wait and try again.
+            if attempt == 2 or (isinstance(e, urllib.error.HTTPError) and e.code not in (429, 500, 502, 503, 504)):
+                raise
+            time.sleep(10 * (attempt + 1))
 
 
 def cmd_translate(a):
