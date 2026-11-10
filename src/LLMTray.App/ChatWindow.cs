@@ -1041,7 +1041,9 @@ sealed partial class ChatWindow : Window
     }
 
     /// <summary>In front now, or was until the click on the tray icon (the taskbar) took the front from it.</summary>
-    public bool IsForeground => foreground || (deactivatedToTaskbar && DateTime.UtcNow - deactivatedAt < TimeSpan.FromSeconds(2));
+    public bool IsForeground => foreground
+        // It lost the front to the taskbar, and the taskbar still has it: this very click on the icon.
+        || (deactivatedToTaskbar && ForegroundIsTaskbar() && DateTime.UtcNow - deactivatedAt < TimeSpan.FromSeconds(10));
 
     bool deactivatedToTaskbar;
 

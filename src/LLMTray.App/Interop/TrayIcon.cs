@@ -26,7 +26,8 @@ sealed class TrayIcon : IDisposable
     readonly uint taskbarCreated;
     string tooltip;
     bool disposed;
-    long lastActivated = -10_000;
+    /// <summary>Version 4 accepted: a click comes as NIN_SELECT (and also WM_LBUTTONUP, ignored then).</summary>
+    bool version4;
 
     public TrayIcon(string iconPath, string tooltip)
     {
@@ -87,7 +88,7 @@ sealed class TrayIcon : IDisposable
         IsAdded = Native.Shell_NotifyIconW(Native.NIM_ADD, ref data);
         if (!IsAdded) return;
         data.uTimeoutOrVersion = Native.NOTIFYICON_VERSION_4;
-        Native.Shell_NotifyIconW(Native.NIM_SETVERSION, ref data);
+        version4 = Native.Shell_NotifyIconW(Native.NIM_SETVERSION, ref data);
     }
 
     Native.NOTIFYICONDATAW Data(uint flags) => new()
@@ -108,12 +109,13 @@ sealed class TrayIcon : IDisposable
             // NOTIFYICON_VERSION_4: the event in LOWORD(lParam), the anchor point in wParam.
             switch ((uint)(lParam.ToInt64() & 0xFFFF))
             {
-                case Native.WM_LBUTTONUP:
+                // Under version 4 a click sends both WM_LBUTTONUP and NIN_SELECT: only the
+                // latter (or NIN_KEYSELECT from the keyboard) is the activation.
                 case Native.NIN_SELECT:
                 case Native.NIN_KEYSELECT:
-                    // One click sends both WM_LBUTTONUP and NIN_SELECT: it's one activation.
-                    if (Environment.TickCount64 - lastActivated < 500) break;
-                    lastActivated = Environment.TickCount64;
+                    Activated?.Invoke();
+                    break;
+                case Native.WM_LBUTTONUP when !version4:
                     Activated?.Invoke();
                     break;
                 case Native.WM_CONTEXTMENU:
