@@ -137,9 +137,34 @@ public sealed class MemoryTests : IDisposable
         // Opted out meanwhile: nothing written.
         f.Enqueue(chat, [new MemoryBatchMessage { Seq = 2, Text = "more", Date = T0 }], T0);
         var next = f.Queue.Single();
-        f.SetOptedOut(chat, true);
+        f.SetOptedOut(chat, true, T0);
         Assert.Empty(f.Queue);
         Assert.Empty(f.Commit(next.Id, [new MemoryChange.Add(MemorySubject.General, "work", MemoryKind.Fact, "Never", null, MemoryConfidence.Stated, e, null)], f.Generation, On, T0));
+    }
+
+    [Fact]
+    public async Task NothingSaidWhileAChatWasOutIsRead()
+    {
+        var model = new FakeModel(_ => "NONE");
+        var now = T0;
+        await using var memory = new MemoryService(root, model, () => null, () => "English", () => "gemma", () => now);
+        memory.SetSettings(new MemorySettings { Enabled = true });
+        var chat = Guid.NewGuid();
+        MemoryBatchMessage M(int seq, DateTimeOffset at) => new() { Seq = seq, Date = at, Text = $"message number {seq} said here" };
+        memory.Queue(chat, [M(1, T0)], DateTimeOffset.MinValue);
+        Assert.Equal(new[] { 1 }, memory.Read(f => f.Queue.SelectMany(b => b.Messages).Select(m => m.Seq).ToArray()));
+        // Out, then said something, then remembered again: only what comes after is read.
+        memory.SetOptedOut(chat, true, forgetLearned: false);
+        now = T0.AddMinutes(5);
+        memory.SetOptedOut(chat, false, forgetLearned: false);
+        now = T0.AddMinutes(10);
+        memory.Queue(chat, [M(1, T0), M(3, T0.AddMinutes(2)), M(5, T0.AddMinutes(8))], DateTimeOffset.MinValue);
+        Assert.Equal(new[] { 5 }, memory.Read(f => f.Queue.SelectMany(b => b.Messages).Select(m => m.Seq).ToArray()));
+        // An old chat opened now: from its next message, the first one included.
+        var old = Guid.NewGuid();
+        memory.Queue(old, [M(1, T0.AddDays(-3)), M(3, now.AddSeconds(5))], now);
+        Assert.Contains(3, memory.Read(f => f.Queue.Where(b => b.Chat == old).SelectMany(b => b.Messages).Select(m => m.Seq).ToArray()));
+        Assert.DoesNotContain(1, memory.Read(f => f.Queue.Where(b => b.Chat == old).SelectMany(b => b.Messages).Select(m => m.Seq).ToArray()));
     }
 
     sealed class FakeEmbedder : IEmbedder
@@ -190,7 +215,7 @@ public sealed class MemoryTests : IDisposable
         [
             new MemoryBatchMessage { Seq = 1, Date = T0, Text = "From now on please keep your answers short", Model = "gemma" },
             new MemoryBatchMessage { Seq = 3, Date = T0, Text = "What is RDMA?", Model = "gemma" },
-        ], newChat: true, leaving: true);
+        ], DateTimeOffset.MinValue, leaving: true);
         for (var i = 0; i < 100 && memory.Read(f => f.Queue.Count) > 0; i++) await Task.Delay(50);
         var notes = memory.Read(f => f.Notes.ToList());
         var note = Assert.Single(notes);

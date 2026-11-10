@@ -137,6 +137,11 @@ public sealed class MemoryService : IAsyncDisposable
             var wasOn = settings.Enabled;
             settings = value;
             Save("settings.json", value, MemoryJson.Default.MemorySettings);
+            if (!wasOn && value.Enabled)
+            {
+                file.EnabledAt = Now;
+                Save("notes.json", file, MemoryJson.Default.MemoryFile);
+            }
             // Off: nothing is read until it's on again, then each chat is met anew (nothing said meanwhile is read).
             if (wasOn && !value.Enabled)
             {
@@ -162,8 +167,9 @@ public sealed class MemoryService : IAsyncDisposable
         {
             if (!settings.Enabled) return null;
             var budget = MemorySelection.Budget(settings, contextTokens);
+            // Faded notes expire first: a chat's block doesn't keep one past its time.
+            if (file.Sweep(Now, settings)) TrySave();
             if (current is not null && MemorySelection.IsCurrent(current, file, settings, budget, Now)) return current;
-            if (file.Sweep(Now, settings)) Save("notes.json", file, MemoryJson.Default.MemoryFile);
             return MemorySelection.Choose(file, settings, budget, Now);
         }
     }
@@ -172,8 +178,13 @@ public sealed class MemoryService : IAsyncDisposable
     /// A chat's user messages up to now: queued for reading (a chat met for the
     /// first time is read from its next message unless <paramref name="newChat"/>).
     /// </summary>
+    /// <param name="readFrom">
+    /// When memory may start reading this chat: its start for a chat begun now,
+    /// the moment it was opened for an older one. Nothing said before it, before
+    /// memory was turned on, or before the chat was remembered again is read.
+    /// </param>
     /// <param name="leaving">The user left the chat: it's read now, not after its quiet minutes.</param>
-    public void Queue(Guid chat, IReadOnlyList<MemoryBatchMessage> messages, bool newChat, bool leaving = false)
+    public void Queue(Guid chat, IReadOnlyList<MemoryBatchMessage> messages, DateTimeOffset readFrom, bool leaving = false)
     {
         lock (sync)
         {
@@ -185,9 +196,8 @@ public sealed class MemoryService : IAsyncDisposable
         {
             if (!f.Watermarks.ContainsKey(chat))
             {
-                // Met now: a new chat from its start, an older one from what it says next.
-                var last = messages.Count == 0 ? 0 : messages.Max(m => m.Seq);
-                f.Meet(chat, newChat ? 0 : last);
+                var from = new[] { readFrom, f.EnabledAt, f.RememberedAt.GetValueOrDefault(chat) }.Max();
+                f.Meet(chat, messages.Where(m => m.Date < from).Select(m => m.Seq).DefaultIfEmpty(0).Max());
             }
             f.Enqueue(chat, messages, Now);
         });
@@ -212,7 +222,7 @@ public sealed class MemoryService : IAsyncDisposable
     {
         Change(f =>
         {
-            f.SetOptedOut(chat, optedOut);
+            f.SetOptedOut(chat, optedOut, Now);
             if (optedOut && forgetLearned) f.ForgetLearned(chat, keepState: true, Now);
         });
     }
@@ -227,8 +237,38 @@ public sealed class MemoryService : IAsyncDisposable
     {
         lock (sync)
         {
-            if (running is { IsCompleted: false } || stopping.IsCancellationRequested) return;
-            running = Task.Run(() => RunQueueAsync(stopping.Token));
+            if (stopping.IsCancellationRequested) return;
+            if (running is { IsCompleted: false })
+            {
+                // Looked at again once this run ends: nothing asked for meanwhile is missed.
+                pokedWhileRunning = true;
+                return;
+            }
+            running = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    await RunQueueAsync(stopping.Token).ConfigureAwait(false);
+                    lock (sync)
+                    {
+                        if (!pokedWhileRunning || stopping.IsCancellationRequested) return;
+                        pokedWhileRunning = false;
+                    }
+                }
+            });
+        }
+    }
+
+    bool pokedWhileRunning;
+
+    void TrySave()
+    {
+        try
+        {
+            Save("notes.json", file, MemoryJson.Default.MemoryFile);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -255,11 +295,11 @@ public sealed class MemoryService : IAsyncDisposable
                     batch = file.Queue.FirstOrDefault(b => notBefore.GetValueOrDefault(b.Id, DateTimeOffset.MinValue) <= t
                         && t - activity.GetValueOrDefault(b.Chat, DateTimeOffset.MinValue) >= quiet
                         && (b.Model is null || string.Equals(b.Model, loadedModel(), StringComparison.OrdinalIgnoreCase)));
-                    if (file.Queue.Count == 0)
-                    {
-                        Status = "";
-                        return;
-                    }
+                }
+                if (Read(f => f.Queue.Count) == 0)
+                {
+                    SetStatus("");
+                    return;
                 }
                 if (!now.Enabled || now.Kinds.Count == 0)
                 {
@@ -303,6 +343,8 @@ public sealed class MemoryService : IAsyncDisposable
     sealed record Outcome(Kind Kind, string Why = "");
 
     sealed class LaterException(string why) : Exception(why);
+
+    sealed class FailedException(string why) : Exception(why);
 
     /// <summary>True to go on with the next batch.</summary>
     bool Handle(Outcome outcome, MemoryBatch batch)
@@ -353,7 +395,8 @@ public sealed class MemoryService : IAsyncDisposable
         {
             BackgroundWork.Outcome.Done => result.Text,
             BackgroundWork.Outcome.NotLoaded => throw new LaterException("Waits for the model to be loaded."),
-            BackgroundWork.Outcome.Failed => throw new InvalidOperationException(result.Text),
+            // The model refused or failed: counted, and dropped after a few (not tried for ever).
+            BackgroundWork.Outcome.Failed => throw new FailedException(result.Text),
             _ => throw new LaterException("Waits for the model to be free."),
         };
     }
@@ -586,6 +629,10 @@ public sealed class MemoryService : IAsyncDisposable
         {
             return new Outcome(Kind.Later, e.Message);
         }
+        catch (FailedException e)
+        {
+            return new Outcome(Kind.Failed, e.Message);
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return new Outcome(Kind.Later, "Waits for the model to be free.");
@@ -593,6 +640,11 @@ public sealed class MemoryService : IAsyncDisposable
         catch (Exception e) when (e is InvalidOperationException or HttpRequestException or IOException)
         {
             return new Outcome(Kind.Later, $"The embedding model or the model failed: {e.Message}");
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // Anything else (a malformed answer, a file that can't be written): this batch failed, the queue goes on.
+            return new Outcome(Kind.Failed, e.Message);
         }
     }
 

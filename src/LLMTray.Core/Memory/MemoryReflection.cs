@@ -327,7 +327,7 @@ public static class MemoryReflection
     public const float SameFloor = 0.95f;
 
     public static List<Relation> Settled(IReadOnlyList<Relation> relations, IReadOnlyList<float?> similarities) =>
-        relations.Select((r, i) => r == Relation.Different && i < similarities.Count && similarities[i] is >= SameFloor ? Relation.Same : r).ToList();
+        relations.Select((r, i) => i < similarities.Count && similarities[i] is >= SameFloor ? Relation.Same : r).ToList();
 
     // ---- Provenance ----
 

@@ -34,7 +34,8 @@ public static class MemorySelection
     {
         if (!settings.Enabled) return null;
         var eligible = file.Notes.Where(n => settings.Allows(n)).ToList();
-        var mood = file.Mood is { } m && m.IsFresh(now, settings.MoodHours) ? m : null;
+        // The mood is how the user talks right now: only with "How you talk" on.
+        var mood = settings.Has(MemoryKind.Observation) && file.Mood is { } m && m.IsFresh(now, settings.MoodHours) ? m : null;
         var moodText = mood is null ? null : MoodLine(mood) is var line && Tokens(line) <= budget / 2 ? line : null;
         var room = budget - (moodText is null ? 0 : Tokens(moodText) + 1);
         MemorySnapshot Snapshot(List<MemoryNote> chosen)
@@ -83,6 +84,8 @@ public static class MemorySelection
     {
         if (!settings.Enabled || snapshot.Settings != settings.Fingerprint) return false;
         if (snapshot.MoodUntil is { } until && (until <= now || file.Mood is not { } mood || mood.Until(settings.MoodHours) != until)) return false;
+        // A mood that came since: chosen again, so it reaches the chat while it lasts.
+        if (snapshot.MoodUntil is null && settings.Has(MemoryKind.Observation) && file.Mood is { } fresh && fresh.IsFresh(now, settings.MoodHours)) return false;
         if (snapshot.Text.Length > 0 && Tokens(snapshot.Text) > budget) return false;
         foreach (var id in snapshot.NoteIds)
         {
@@ -104,7 +107,8 @@ public static class MemoryChats
         for (var i = 0; i < file.Messages.Count; i++)
         {
             var m = file.Messages[i];
-            seq = m.Seq ?? seq + 1;
+            // As the chat numbers it when it's opened: one without a number gets the next after the last.
+            seq = m.Seq ?? Math.Max(seq, file.LastSeq ?? 0) + 1;
             if (m.Role == "assistant" && !m.IsSummary)
             {
                 before = m.Content;

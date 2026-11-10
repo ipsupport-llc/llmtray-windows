@@ -302,7 +302,7 @@ public static partial class MemoryExtraction
 
         // The mood: only from messages recent enough, the last few; never one about a sensitive topic.
         Mood? mood = null;
-        if (moodSince is { } since)
+        if (moodSince is { } since && settings.Has(MemoryKind.Observation))
         {
             var feeling = With(Label.Mood).Where(m => m.Date >= since && !MemoryText.Sensitive(m.Text)).TakeLast(4).ToList();
             if (feeling.Count > 0)
@@ -310,7 +310,8 @@ public static partial class MemoryExtraction
                 var reply = (await ask(MoodMessages(feeling, language), 200, cancellationToken).ConfigureAwait(false)).Trim();
                 if (reply.ToUpperInvariant() is not ("NONE" or "NONE."))
                 {
-                    if (MemoryReflection.Object(reply) is not { } o) return null;
+                    // Optional: an unreadable answer is no mood, not a batch to read again.
+                    var o = MemoryReflection.Object(reply) ?? [];
                     var observed = (o["observed"] as JsonValue)?.ToString().Trim();
                     var text = (o["text"] as JsonValue)?.ToString().Trim();
                     var quote = (o["quote"] as JsonValue)?.ToString();

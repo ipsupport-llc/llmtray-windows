@@ -105,8 +105,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
 
     /// <summary>The last message number given in this chat.</summary>
     int lastSeq;
-    /// <summary>Started in this session (memory reads it from its start), not opened from a file.</summary>
-    bool startedHere = true;
+    /// <summary>When memory may start reading this chat: its start, or when it was opened.</summary>
+    DateTimeOffset readFrom = DateTimeOffset.MinValue;
     /// <summary>The memory block this chat got (adr/0018), kept with it so its prompt stays the same.</summary>
     Memory.MemorySnapshot? memorySnapshot;
     Memory.MemoryService? memory;
@@ -138,15 +138,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     {
         Guid id;
         List<Memory.MemoryBatchMessage> messages;
-        bool fresh;
+        DateTimeOffset from;
         lock (sync)
         {
             if (memory is null || Temporary || Id is not { } chat) return;
             id = chat;
             messages = UserMessagesLocked();
-            fresh = startedHere;
+            from = readFrom;
         }
-        memory.Queue(id, messages, fresh, leaving);
+        memory.Queue(id, messages, from, leaving);
     }
 
     /// <summary>Whether memory reads this chat ("Don't remember this chat" when false).</summary>
@@ -181,7 +181,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             chatAllowed.Clear();
             EndVisit();
             lastSeq = 0;
-            startedHere = true;
+            readFrom = DateTimeOffset.MinValue;
             memorySnapshot = null;
             Id = null;
             loaded = null;
@@ -203,7 +203,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             epoch++;
             chatAllowed.Clear();
             EndVisit();
-            startedHere = false;
+            readFrom = DateTimeOffset.UtcNow;
             memorySnapshot = file.WindowsMemorySnapshot;
             lastSeq = Math.Max(file.LastSeq ?? 0, file.Messages.Max(m => m.Seq) ?? 0);
             Id = file.Id;
@@ -880,12 +880,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         return "The chat changed while it was being compacted.";
                     }
                     // What memory hasn't read yet goes to its queue first: a summary is never evidence.
-                    if (memory is not null && !Temporary && Id is { } chat)
-                    {
-                        var said = UserMessagesLocked();
-                        var fresh = startedHere;
-                        ThreadPool.QueueUserWorkItem(_ => memory.Queue(chat, said, fresh));
-                    }
+                    if (memory is not null && !Temporary && Id is { } chat) memory.Queue(chat, UserMessagesLocked(), readFrom);
                     Messages.RemoveRange(range.Start, range.End - range.Start);
                     Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow, Seq = ++lastSeq });
                     file = SnapshotLocked();

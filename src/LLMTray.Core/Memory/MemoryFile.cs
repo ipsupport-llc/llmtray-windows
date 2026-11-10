@@ -35,6 +35,10 @@ public sealed class MemoryFile
     public Dictionary<Guid, int> MetFrom { get; set; } = [];
     /// <summary>Chats marked "Don't remember this chat".</summary>
     public HashSet<Guid> OptedOut { get; set; } = [];
+    /// <summary>When memory was last turned on: nothing said before it is read.</summary>
+    public DateTimeOffset EnabledAt { get; set; }
+    /// <summary>Per chat, when it was last remembered again after "Don't remember": nothing said before it is read.</summary>
+    public Dictionary<Guid, DateTimeOffset> RememberedAt { get; set; } = [];
     public List<MemoryTombstone> Tombstones { get; set; } = [];
     public int NextBatchId { get; set; } = 1;
     public MemoryMood? Mood { get; set; }
@@ -218,21 +222,33 @@ public sealed class MemoryFile
         return true;
     }
 
+    static int Bytes(MemoryBatchMessage m) => System.Text.Encoding.UTF8.GetByteCount(m.Text) + System.Text.Encoding.UTF8.GetByteCount(m.Before ?? "");
+
+    /// <summary>
+    /// Messages (in order) as batches of at most <see cref="MemoryBatch.MaxBytes"/>,
+    /// one model each. A chat's last batch still waiting takes more of the same
+    /// model, so messages answered one by one are read together (a manner shows
+    /// in two of them).
+    /// </summary>
     void AppendBatches(List<MemoryBatchMessage> messages, Guid chat, DateTimeOffset now)
     {
-        var batch = new List<MemoryBatchMessage>();
-        var bytes = 0;
+        var open = Queue.FindLastIndex(b => b.Chat == chat);
+        var batch = open >= 0 && Queue[open].Failures == 0 && Queue[open].Attempts == 0 ? Queue[open].Messages.ToList() : [];
+        if (batch.Count == 0) open = -1;
+        var bytes = batch.Sum(Bytes);
         void Flush()
         {
             if (batch.Count == 0) return;
-            Queue.Add(new MemoryBatch { Id = NextBatchId++, Chat = chat, Created = now, Messages = batch });
+            if (open >= 0) Queue[open] = Queue[open] with { Messages = batch };
+            else Queue.Add(new MemoryBatch { Id = NextBatchId++, Chat = chat, Created = now, Messages = batch });
+            open = -1;
             batch = [];
             bytes = 0;
         }
         foreach (var m in messages)
         {
-            var size = System.Text.Encoding.UTF8.GetByteCount(m.Text) + System.Text.Encoding.UTF8.GetByteCount(m.Before ?? "");
-            if (bytes + size > MemoryBatch.MaxBytes) Flush();
+            var size = Bytes(m);
+            if (batch.Count > 0 && (bytes + size > MemoryBatch.MaxBytes || !string.Equals(batch[^1].Model, m.Model, StringComparison.OrdinalIgnoreCase))) Flush();
             batch.Add(m.Clipped());
             bytes += Math.Min(size, MemoryBatch.MaxBytes);
         }
@@ -244,7 +260,7 @@ public sealed class MemoryFile
     /// queued goes; remembered again, memory meets it anew at its next message
     /// (nothing said meanwhile is read).
     /// </summary>
-    public void SetOptedOut(Guid chat, bool optedOut)
+    public void SetOptedOut(Guid chat, bool optedOut, DateTimeOffset now)
     {
         if (optedOut)
         {
@@ -253,9 +269,10 @@ public sealed class MemoryFile
             Watermarks.Remove(chat);
             MetFrom.Remove(chat);
         }
-        else
+        else if (OptedOut.Remove(chat))
         {
-            OptedOut.Remove(chat);
+            // Remembered again: from what it says next; nothing said while it was out.
+            RememberedAt[chat] = now;
         }
         Bump();
     }
@@ -394,6 +411,7 @@ public sealed class MemoryFile
             {
                 var change = raw switch
                 {
+                    MemoryChange.Forget forget => forget with { Id = Redirect(forget.Id) },
                     MemoryChange.Confirm c => c with { Id = Redirect(c.Id) },
                     MemoryChange.Update u => u with { Id = Redirect(u.Id) },
                     MemoryChange.Supersede s => s with { Id = Redirect(s.Id) },
@@ -431,7 +449,7 @@ public sealed class MemoryFile
         {
             case MemoryChange.Add a:
             {
-                if (!settings.Has(a.Kind) || MemoryText.ProblemOf(a.Text) is not null || (a.Observed is { } o && MemoryText.ProblemOf(o) is not null)
+                if (!settings.Has(a.Kind) || MemoryText.ProblemOf(a.Text) is not null || MemoryText.Sensitive(a.Text) || (a.Observed is { } o && MemoryText.ProblemOf(o) is not null)
                     || Tombstones.Any(t => t.Subject == a.Subject && t.Blocks(a.Evidence.Quote)) || Tombstoned(a.Vector, a.Subject)) return null;
                 if (Add(a.Subject, a.Topic, a.Kind, a.Text, now, a.Observed, reviewed: false, a.Confidence) is not { } id) return null;
                 var i = IndexOf(id);
@@ -466,7 +484,8 @@ public sealed class MemoryFile
                     (id, text, evidence, vector) = (s.Id, s.Text, s.Evidence, s.Vector);
                 }
                 var i = Index(id);
-                if (i < 0 || MemoryText.ProblemOf(text) is not null || Tombstoned(vector, Notes[i].Subject)) return null;
+                if (i < 0 || MemoryText.ProblemOf(text) is not null || MemoryText.Sensitive(text) || Tombstoned(vector, Notes[i].Subject)
+                    || Tombstones.Any(t => t.Subject == Notes[i].Subject && t.Blocks(evidence.Quote))) return null;
                 var n = Notes[i];
                 n = n with { History = WithHistory(n, text, now), Text = text };
                 // Superseded: the user's own words now.
@@ -483,7 +502,8 @@ public sealed class MemoryFile
                 if (m.Keep == m.Drop) return null;
                 var k = Index(m.Keep);
                 var d = Index(m.Drop);
-                if (k < 0 || d < 0 || Notes[k].Subject != Notes[d].Subject || MemoryText.ProblemOf(m.Text) is not null || Tombstoned(m.Vector, Notes[k].Subject)) return null;
+                if (k < 0 || d < 0 || Notes[k].Subject != Notes[d].Subject || MemoryText.ProblemOf(m.Text) is not null || MemoryText.Sensitive(m.Text)
+                    || Tombstoned(m.Vector, Notes[k].Subject) || Tombstones.Any(t => t.Subject == Notes[k].Subject && t.Blocks(m.Evidence.Quote))) return null;
                 var gone = Notes[d];
                 var kept = Notes[k];
                 foreach (var e in gone.Evidence.Append(m.Evidence)) kept = kept with { Evidence = WithEvidence(kept, e) };

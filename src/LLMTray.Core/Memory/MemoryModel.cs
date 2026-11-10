@@ -260,13 +260,18 @@ public static partial class MemoryText
     static readonly string[] SensitiveStems =
     [
         "diagnosed", "diagnosis", "disease", "illness", "depression", "depressed", "anxiety", "therapist", "therapy",
-        "medication", "pregnan",
+        "medication", "pregnan", "diabet", "cancer", "tumor", "hiv", "aids", "asthma", "epilep", "autis", "adhd", "bipolar", "schizo",
+        "disabled", "disability", "surgery", "hospital",
+        "диабет", "онколог", "опухол", "вич", "астм", "эпилеп", "аутиз", "сдвг", "биполяр", "шизо", "инвалид", "операци", "больниц",
         "диагноз", "болезн", "болит", "депресси", "тревожност", "терапевт", "лекарств", "беремен",
         "хвороб", "депресі",
         "drug", "lsd", "cocaine", "heroin", "cannabis", "marijuana", "psychedel", "alcohol", "drunk",
         "наркот", "лсд", "кокаин", "психодел", "алкогол", "пьян", "п'ян",
         "sex", "porn", "секс", "порн",
-        "religion", "religious", "political", "politics", "религи", "церков", "политическ", "релігі", "політичн",
+        "religion", "religious", "political", "politics", "catholic", "protestant", "orthodox", "christian", "muslim", "islam", "jewish", "judais",
+        "buddhis", "hindu", "atheis", "church", "mosque", "synagog", "democrat", "republican", "liberal", "conservative", "communis", "socialis",
+        "религи", "церков", "политическ", "релігі", "політичн", "католи", "православ", "христиан", "мусульман", "ислам", "иудей", "еврей",
+        "буддис", "атеис", "мечет", "синагог", "коммунис", "либерал",
         "salary", "lawsuit", "arrested", "criminal", "зарплат", "арестов", "преступлен", "судим", "злочин",
     ];
 

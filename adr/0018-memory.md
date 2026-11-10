@@ -32,7 +32,15 @@ hold unless written otherwise here.
      then.
 
   A chat is read once it has been quiet for 10 minutes (a setting), when
-  the user leaves it, and before it is compacted.
+  the user leaves it, and before it is compacted. Messages answered one
+  by one join the chat's waiting batch, one model per batch, so a manner
+  can show in two of them. Nothing is read that was said before memory
+  was turned on, before a chat was remembered again, or, for an older
+  chat, before it was opened. Its first new message is read.
+- **Failures.** A model that fails or answers what can't be read counts
+  against the batch, which is dropped after three. Busy or not loaded
+  only puts it off. An unreadable mood is no mood, not a failed batch. A
+  model switch from the window preempts the reading as a request does.
 - **Background work, preempted.** Reading only uses the model that's
   loaded, and only the one the chat was written with. It never loads or
   switches a model. The proxy marks every request, from the chat or an
@@ -53,7 +61,8 @@ hold unless written otherwise here.
   chat (`windowsMemorySnapshot` in its file, apart from the Mac's
   `memorySnapshot`), so the prompt prefix stays the same for the
   server's cache. It's chosen again only when one of its notes changed,
-  went or expired, or the settings changed. Temporary chats and API
+  went or expired, or the settings changed, or a mood came since. Faded
+  notes expire before a block is reused. The mood needs "How you talk" on. Temporary chats and API
   clients get nothing.
 - **Message numbers.** Chat messages keep their number (`seq`) for good:
   given once, saved, not renumbered by a save or a compaction. A message
@@ -74,11 +83,20 @@ hold unless written otherwise here.
   Each chat in the list has **Remember This Chat** in its menu. Deleting
   a chat forgets what was learned only from it.
 
+Beyond the Mac's list of topics never learned, this one also names
+common illnesses and faiths (`diabetes`, `catholic`, …). Texts at 0.95 or
+closer count as the same whatever classify says, not only when it says
+"different". Pasted text is told from typed text only by shape (fences,
+`>` quotes, long paragraphs), as on the Mac. A short pasted paragraph
+reads as typed.
+
 ## Not yet (the Mac has them)
 
 Projects, and so project notes and sharing between them. The daily
 tidy-up (pairwise merges), and the wrong-language marking that feeds it.
-A model set for memory, or memory loading one itself when idle. Apple's
+A model set for memory, or memory loading one itself when idle. The 5%
+context cap (the chat doesn't know the model's context here, so the
+budget alone applies). Apple's
 model as a sorter. The "read what was said meanwhile?" question when
 memory or a chat is turned back on: here it's always "from now on". A
 Kaggle mirror of the embedding model for networks that block Hugging

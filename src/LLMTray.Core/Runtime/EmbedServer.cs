@@ -67,34 +67,44 @@ public sealed class EmbedServer(IProcessLauncher launcher, Func<string?> serverE
         var started = launcher.Start(plan);
         var uri = new Uri($"http://127.0.0.1:{port}");
         var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(2);
-        while (true)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (started.Exited.IsCompleted)
-            {
-                started.Dispose();
-                throw new InvalidOperationException($"the embedding server exited with code {started.Exited.Result}");
-            }
-            try
-            {
-                using var health = await http.GetAsync(new Uri(uri, "/health"), cancellationToken).ConfigureAwait(false);
-                if (health.StatusCode == HttpStatusCode.OK) break;
-            }
-            catch (HttpRequestException)
-            {
-            }
-            if (DateTime.UtcNow > deadline)
-            {
-                started.Kill();
-                started.Dispose();
-                throw new InvalidOperationException("the embedding server didn't start in 2 minutes");
-            }
-            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+            await WaitReadyAsync(started, uri, deadline, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Not ready, stopped or cancelled: the child goes with it, never left behind.
+            if (!started.Exited.IsCompleted) started.Kill();
+            started.Dispose();
+            throw;
         }
         process = started;
         baseUri = uri;
         idle ??= new Timer(_ => _ = StopIfIdleAsync(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         return (uri, key);
+    }
+
+    async Task WaitReadyAsync(IChildProcess started, Uri uri, DateTime deadline, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (started.Exited.IsCompleted) throw new InvalidOperationException($"the embedding server exited with code {started.Exited.Result}");
+            try
+            {
+                using var health = await http.GetAsync(new Uri(uri, "/health"), cancellationToken).ConfigureAwait(false);
+                if (health.StatusCode == HttpStatusCode.OK) return;
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // One health check timed out: the deadline decides.
+            }
+            if (DateTime.UtcNow > deadline) throw new InvalidOperationException("the embedding server didn't start in 2 minutes");
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken)

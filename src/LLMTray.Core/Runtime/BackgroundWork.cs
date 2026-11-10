@@ -50,6 +50,12 @@ public sealed class BackgroundWork(ModelHost host) : IBackgroundModel
         }
     }
 
+    /// <summary>The background call running now (if any) is cancelled.</summary>
+    public void Preempt()
+    {
+        lock (sync) running?.Cancel();
+    }
+
     public bool IsForegroundActive
     {
         get

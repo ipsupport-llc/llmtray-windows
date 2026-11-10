@@ -184,6 +184,7 @@ public partial class App : Application
         // Memory (adr/0018): its reading is background work every request preempts; its vectors come
         // from a second llama-server on the CPU.
         var background = new LLMTray.Core.Runtime.BackgroundWork(Host);
+        Host.BeforeSwitch = background.Preempt;
         Embedder = new LLMTray.Core.Runtime.EmbedServer(launcher, () => LlamaRuntime.Find(runtimeRoot).FirstOrDefault(b => b.Name == "cpu")?.ServerPath,
             EmbedderFile, Path.Combine(DataFolder, "logs", "embed-server.log"));
         Memory = new LLMTray.Core.Memory.MemoryService(Path.Combine(DataFolder, "memory"), background,
