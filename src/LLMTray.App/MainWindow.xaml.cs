@@ -79,8 +79,9 @@ public sealed partial class MainWindow : Window
         {
             if (page != "updates") return;
             // Progress and status change in place; the page is made again only when its rows change.
-            if (liveUpdates is not null && UpdatesKey() == renderedUpdatesKey) liveUpdates();
-            else RenderPageSoon();
+            // The status line follows even while a full redraw waits for the user to leave a field.
+            liveUpdates?.Invoke();
+            if (UpdatesKey() != renderedUpdatesKey) RenderPageSoon();
         };
 
         state = App.Current.Host.State;
@@ -158,13 +159,17 @@ public sealed partial class MainWindow : Window
     string ToolsKey() => string.Join("\n", App.Current.Mcp.Store.Load().Select(c =>
     {
         var st = App.Current.Mcp.State(c);
-        return $"{c.Key}|{c.Enabled}|{st.Status}|{st.Running}|{string.Join(",", st.Tools?.Select(t => t.DefinitionHash) ?? [])}|{(mcpLogOpen.Contains(c.Key) ? st.Log.Count : -1)}";
+        // Not listed and listed-empty differ; an open log changes with its last line even at its 200-line cap.
+        var tools = st.Tools is null ? "?" : string.Join(",", st.Tools.Select(t => t.DefinitionHash));
+        var log = mcpLogOpen.Contains(c.Key) ? $"{st.Log.Count}:{st.Log.LastOrDefault()}" : "";
+        var reviewed = string.Join(",", c.Reviewed.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Key + "=" + kv.Value));
+        return $"{c.Key}|{c.Name}|{c.Enabled}|{st.Status}|{st.Running}|{tools}|{reviewed}|{string.Join(",", c.RunWithoutAsking.Order(StringComparer.Ordinal))}|{log}";
     }));
 
     string UpdatesKey()
     {
         var u = App.Current.Updater;
-        return $"{u.CanUpdate}|{u.Available?.Tag.DisplayVersion}";
+        return $"{u.CanUpdate}|{u.Available?.Tag.DisplayVersion}|{u.Channel}";
     }
 
     void RenderPage()
