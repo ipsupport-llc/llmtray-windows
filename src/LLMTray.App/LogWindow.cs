@@ -22,10 +22,10 @@ sealed class LogWindow : Window
     const long TailBytes = 4L << 20;
 
     readonly SelectorBar scopes = new();
-    readonly SelectorBarItem all = new() { Text = "All" };
-    readonly SelectorBarItem requests = new() { Text = "Requests" };
-    readonly SelectorBarItem problems = new() { Text = "Problems" };
-    readonly TextBox search = new() { PlaceholderText = "Search", Width = 240 };
+    readonly SelectorBarItem all = new() { Text = L.T("All") };
+    readonly SelectorBarItem requests = new() { Text = L.T("Requests") };
+    readonly SelectorBarItem problems = new() { Text = L.T("Problems") };
+    readonly TextBox search = new() { PlaceholderText = L.T("Search"), Width = 240 };
     readonly ToggleButton follow = new() { IsChecked = true, Content = new FontIcon { Glyph = "", FontSize = 14 } };
     readonly ListView list = new() { SelectionMode = ListViewSelectionMode.None };
     readonly Microsoft.UI.Xaml.Shapes.Ellipse dot = Ui.Dot(Ui.Gray, 7);
@@ -40,7 +40,7 @@ sealed class LogWindow : Window
 
     public LogWindow()
     {
-        Title = "Server Log — LLMTray";
+        Title = L.T("Server Log — LLMTray");
         SystemBackdrop = new MicaBackdrop();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
 
@@ -50,17 +50,17 @@ sealed class LogWindow : Window
         scopes.SelectedItem = all;
         scopes.SelectionChanged += (_, _) => Render();
         search.TextChanged += (_, _) => Render();
-        ToolTipService.SetToolTip(follow, "Follow: keep the newest in view");
+        ToolTipService.SetToolTip(follow, L.T("Follow: keep the newest in view"));
         follow.Checked += (_, _) => ScrollToEnd();
 
         var more = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 } };
-        ToolTipService.SetToolTip(more, "Copy, save or open");
+        ToolTipService.SetToolTip(more, L.T("Copy, save or open"));
         var menu = new MenuFlyout();
-        menu.Items.Add(Item("Copy shown", () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
-        menu.Items.Add(Item("Copy the whole log", () => Copy(ReadAll())));
+        menu.Items.Add(Item(L.T("Copy shown"), () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
+        menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll())));
         menu.Items.Add(new MenuFlyoutSeparator());
-        menu.Items.Add(Item("Open logs folder", () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
-        menu.Items.Add(Item("Open the previous run's log", () => Ui.Open(Path.Combine(App.Current.DataFolder, "logs", "llama-server.previous.log"))));
+        menu.Items.Add(Item(L.T("Open logs folder"), () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
+        menu.Items.Add(Item(L.T("Open the previous run's log"), () => Ui.Open(Path.Combine(App.Current.DataFolder, "logs", "llama-server.previous.log"))));
         more.Flyout = menu;
 
         var toolbar = new Grid { Padding = new Thickness(12, 8, 12, 8), ColumnSpacing = 10 };
@@ -198,14 +198,14 @@ sealed class LogWindow : Window
     {
         var visible = ShownEntries().ToList();
         var problemCount = entries.Count(e => e.IsProblem);
-        problems.Text = problemCount > 0 ? $"Problems {problemCount}" : "Problems";
+        problems.Text = problemCount > 0 ? L.F("Problems {0}", problemCount) : L.T("Problems");
         var rows = new List<UIElement>(visible.Count);
         foreach (var entry in visible) rows.Add(Row(entry));
         if (rows.Count == 0)
         {
             rows.Add(new TextBlock
             {
-                Text = entries.Count == 0 ? "No server log yet. It starts when a model loads." : "Nothing matches.",
+                Text = entries.Count == 0 ? L.T("No server log yet. It starts when a model loads.") : L.T("Nothing matches."),
                 Foreground = Ui.Secondary,
                 Margin = new Thickness(12),
             });
@@ -216,10 +216,10 @@ sealed class LogWindow : Window
         var warnings = problemCount - errors;
         var requestCount = entries.Count(e => e.Kind == LogKind.Request);
         counts.Inlines.Clear();
-        counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"{requestCount} requests   ", Foreground = Ui.Secondary });
+        counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = L.F("{0} requests", requestCount) + "   ", Foreground = Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"✕ {errors}   ", Foreground = errors > 0 ? Ui.Red : Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"⚠ {warnings}", Foreground = warnings > 0 ? Ui.Orange : Ui.Secondary });
-        shown.Text = visible.Count != entries.Count ? $"{visible.Count} of {entries.Count} shown" : "";
+        shown.Text = visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "";
         shown.Foreground = Ui.Secondary;
         if (follow.IsChecked == true) ScrollToEnd();
     }

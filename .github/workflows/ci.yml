@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # translate.yml runs it on its proposal branch (a PR opened by the
+  # Actions token gets no checks by itself).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +27,18 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet test --project tests/LLMTray.Core.Tests
+      - id: mac
+        name: The Mac app's translations (pinned in l10n/mac.json)
+        run: echo "commit=$(jq -r .commit l10n/mac.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ipsupport-llc/llmtray
+          ref: ${{ steps.mac.outputs.commit }}
+          sparse-checkout: Resources/Localization
+          path: mac
+          persist-credentials: false
+      - name: Translations are valid
+        run: python3 scripts/l10n.py check --mac mac/Resources/Localization
       - name: The Scoop bump script (on stand-in ZIPs)
         shell: pwsh
         run: |
@@ -88,6 +103,20 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - id: mac
+        name: The Mac app's translations (pinned in l10n/mac.json)
+        shell: pwsh
+        run: '"commit=" + (Get-Content l10n/mac.json -Raw | ConvertFrom-Json).commit >> $env:GITHUB_OUTPUT'
+      - name: Collect the translations
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ipsupport-llc/llmtray
+          ref: ${{ steps.mac.outputs.commit }}
+          sparse-checkout: Resources/Localization
+          path: mac
+          persist-credentials: false
+      - name: Build the translations
+        run: python scripts/l10n.py build --mac mac/Resources/Localization --out src/LLMTray.App/Strings
       - name: Collect the licenses
         shell: pwsh
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
@@ -161,6 +190,20 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - id: mac
+        name: The Mac app's translations (pinned in l10n/mac.json)
+        shell: pwsh
+        run: '"commit=" + (Get-Content l10n/mac.json -Raw | ConvertFrom-Json).commit >> $env:GITHUB_OUTPUT'
+      - name: Collect the translations
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ipsupport-llc/llmtray
+          ref: ${{ steps.mac.outputs.commit }}
+          sparse-checkout: Resources/Localization
+          path: mac
+          persist-credentials: false
+      - name: Build the translations
+        run: python scripts/l10n.py build --mac mac/Resources/Localization --out src/LLMTray.App/Strings
       - name: Collect the licenses
         shell: pwsh
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}

@@ -123,21 +123,21 @@ sealed class PopoverWindow : Window
             var title = new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
             head.Children.Add(Ui.Horizontal(Ui.Dot(color), title));
             var tools = Ui.Horizontal(
-                Ui.IconButton("", "Server log", () => { Hide(); app.ShowLog(); }),
-                Ui.IconButton("", "Open LLMTray", () => { Hide(); app.ShowWindow(); }));
+                Ui.IconButton("", L.T("Server log"), () => { Hide(); app.ShowLog(); }),
+                Ui.IconButton("", L.T("Open LLMTray"), () => { Hide(); app.ShowWindow(); }));
             Grid.SetColumn(tools, 1);
             head.Children.Add(tools);
             root.Children.Add(head);
 
             // The model picker and its eject button.
             var models = app.Library.Current.Models;
-            var picker = this.picker = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, PlaceholderText = models.Count == 0 ? "No models yet" : "Choose a model" };
+            var picker = this.picker = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, PlaceholderText = models.Count == 0 ? L.T("No models yet") : L.T("Choose a model") };
             foreach (var model in models) picker.Items.Add(new ComboBoxItem { Content = model.Name, Tag = model });
             var current = state.Status is HostStatus.Running or HostStatus.Loading ? state.Model : null;
             picker.SelectedItem = picker.Items.OfType<ComboBoxItem>().FirstOrDefault(i => ((ModelEntry)i.Tag).FullPath == current?.FullPath);
             picker.IsEnabled = models.Count > 0;
             picker.DropDownClosed += (_, _) => DispatcherQueue.TryEnqueue(Render);
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, "Model");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, L.T("Model"));
             picker.SelectionChanged += (_, _) =>
             {
                 if (rendering || picker.SelectedItem is not ComboBoxItem { Tag: ModelEntry chosen }) return;
@@ -146,7 +146,7 @@ sealed class PopoverWindow : Window
                     _ = app.LoadAsync(chosen);
                 }
             };
-            var eject = Ui.IconButton("\uE71A", "Unload the model", () => _ = app.StopAsync());
+            var eject = Ui.IconButton("\uE71A", L.T("Unload the model"), () => _ = app.StopAsync());
             eject.IsEnabled = current is not null;
             var pickRow = new Grid { ColumnSpacing = 6 };
             pickRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -160,7 +160,7 @@ sealed class PopoverWindow : Window
             if (current is not null) facts.Add(Ui.Size(current.SizeBytes));
             if (Status.Device(state) is { } device) facts.Add(device);
             if (state.Message is { } message) facts.Add(message);
-            if (facts.Count == 0) facts.Add($"API at {AppInfo.ApiBaseUrl}");
+            if (facts.Count == 0) facts.Add(L.F("API at {0}", AppInfo.ApiBaseUrl));
             root.Children.Add(Ui.Caption(string.Join(" · ", facts), state.Status == HostStatus.Failed ? Ui.Red : null));
 
             // A download in progress.
@@ -170,7 +170,7 @@ sealed class PopoverWindow : Window
                 var progress = new ProgressBar { Maximum = 1000, IsIndeterminate = download.Total is null };
                 if (download.Total is long total && total > 0) progress.Value = 1000.0 * download.Received / total;
                 var line = new StackPanel { Spacing = 4 };
-                line.Children.Add(Ui.Caption($"Downloading {job.Title}: {Ui.Size(download.Received)}" + (download.Total is long t ? $" of {Ui.Size(t)}" : "")));
+                line.Children.Add(Ui.Caption(download.Total is long t ? L.F("Downloading {0}: {1} of {2}", job.Title, Ui.Size(download.Received), Ui.Size(t)) : L.F("Downloading {0}: {1}", job.Title, Ui.Size(download.Received))));
                 line.Children.Add(progress);
                 root.Children.Add(line);
             }
@@ -181,8 +181,8 @@ sealed class PopoverWindow : Window
                 var row = new Grid { ColumnSpacing = 8 };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                row.Children.Add(Ui.Caption(app.Updater.Status ?? $"LLMTray {update.Tag.DisplayVersion} is available.", Ui.Green));
-                var install = Ui.Button("Install", () => _ = app.Updater.InstallAsync());
+                row.Children.Add(Ui.Caption(app.Updater.Status ?? L.F("LLMTray {0} is available.", update.Tag.DisplayVersion), Ui.Green));
+                var install = Ui.Button(L.T("Install"), () => _ = app.Updater.InstallAsync());
                 install.IsEnabled = !app.Updater.Busy;
                 Grid.SetColumn(install, 1);
                 row.Children.Add(install);
@@ -193,9 +193,9 @@ sealed class PopoverWindow : Window
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.Children.Add(Ui.Horizontal(
-                Ui.Button("Chat", () => { Hide(); app.ShowChat(); }, accent: true),
-                Ui.Button("Get models…", () => { Hide(); app.ShowWindow("models", getModels: true); })));
-            var quit = Ui.Button("Quit", () => _ = app.QuitAsync());
+                Ui.Button(L.T("Chat"), () => { Hide(); app.ShowChat(); }, accent: true),
+                Ui.Button(L.T("Get models…"), () => { Hide(); app.ShowWindow("models", getModels: true); })));
+            var quit = Ui.Button(L.T("Quit"), () => _ = app.QuitAsync());
             Grid.SetColumn(quit, 1);
             footer.Children.Add(quit);
             root.Children.Add(footer);

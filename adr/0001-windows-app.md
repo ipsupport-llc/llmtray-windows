@@ -166,7 +166,7 @@ feature without a settled Windows path stays on the list as open work.
 | Server log window | Same | 1 |
 | Responses API (0029), Anthropic Messages | Conversion in the proxy | 1 |
 | Updates (0004) | Direct: the app checks GitHub Releases itself, stable and beta channels, at start, every 12 h and on request (ADR 0003; replaces `.appinstaller` feeds); Store: Store updates | 1 |
-| Localization (0008) | `.resw` generated from the Mac app's `Localizable.strings` and `.stringsdict` by a script. The script converts format specifiers (`%@`, `%1$@`) and turns plural rules into ICU MessageFormat, so wording stays in one place | 1 |
+| Localization (0008) | The Mac app's translations read at a pinned commit, Windows-only text machine-translated in CI (ADR 0006) | 1 |
 | Chat tools (0007): web, weather, calculator | Port to Core; same tool names and outputs | 2 |
 | First-run wizard (0013) | Same steps, plus GPU probing and backend choice | 2 |
 | Project files and RAG (0012) | SQLite FTS5 (in Microsoft.Data.Sqlite's bundled SQLite) plus vectors stored as blobs and scored in code, as on the Mac; bge-m3 GGUF through a second llama-server with `--embedding` and the model's pooling and prefixes; OCR from `Windows.Media.Ocr` (needs the language's OCR pack and a page renderer for PDFs) | 2 |

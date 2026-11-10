@@ -17,6 +17,9 @@ public sealed record AppSettings
     /// <summary>Where the download window gets models: some networks reach only one source.</summary>
     public Downloads.DownloadSource DownloadSource { get; init; } = Downloads.DownloadSource.HuggingFace;
 
+    /// <summary>The app's language ("de", "pt-BR", …); null: Windows' display language.</summary>
+    public string? Language { get; init; }
+
     /// <summary>null: beta when running a beta, else stable (the Mac app's default).</summary>
     public Updates.UpdateChannel? UpdateChannel { get; init; }
 

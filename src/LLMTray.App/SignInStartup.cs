@@ -57,9 +57,9 @@ static class SignInStartup
             return state switch
             {
                 StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy => null,
-                StartupTaskState.DisabledByUser => "Turned off in Windows Settings › Apps › Startup: turn LLMTray on there.",
-                StartupTaskState.DisabledByPolicy => "Your organization's policy doesn't allow it.",
-                _ => "Windows didn't allow it.",
+                StartupTaskState.DisabledByUser => L.T("Turned off in Windows Settings › Apps › Startup: turn LLMTray on there."),
+                StartupTaskState.DisabledByPolicy => L.T("Your organization's policy doesn't allow it."),
+                _ => L.T("Windows didn't allow it."),
             };
         }
         try
