@@ -13,7 +13,6 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
     Func<string, Task<IPAddress[]>>? resolve = null, Func<DateTimeOffset>? clock = null)
 {
     readonly object sync = new();
-    readonly Dictionary<string, Task<string?>> refreshes = [];
     /// <summary>Bumped by every sign-in and sign-out: a refresh begun before one commits nothing.</summary>
     readonly Dictionary<string, int> generation = [];
     readonly HashSet<string> signingIn = [];
@@ -37,11 +36,6 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         lock (sync) return generation.GetValueOrDefault(key);
     }
 
-    void Bump(string key)
-    {
-        lock (sync) generation[key] = generation.GetValueOrDefault(key) + 1;
-    }
-
     public OAuthTokens? Tokens(string key)
     {
         if (secrets.Get(TokensName(key)) is not { } text) return null;
@@ -58,23 +52,41 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
     void Keep(string key, OAuthTokens? tokens) =>
         secrets.Set(TokensName(key), tokens is null ? null : JsonSerializer.Serialize(tokens, McpJson.Default.OAuthTokens));
 
-    /// <summary>The access token for a request: refreshed first when it has expired; null when there's none to use.</summary>
+    /// <summary>A refresh's outcome: a token, or none because the sign-in was refused (<see cref="Refused"/>) or couldn't be reached.</summary>
+    public sealed record Renewal(string? Token, bool Refused);
+
+    /// <summary>
+    /// The access token for a request: refreshed first when it has expired;
+    /// null when there's none to use. A refresh that couldn't reach the
+    /// sign-in server throws (the tokens stay for the next try).
+    /// </summary>
     public async Task<string?> TokenAsync(string key, CancellationToken cancellationToken)
     {
         if (store.Load().FirstOrDefault(s => s.Key == key)?.OAuth is not { NeedsSignIn: false } || Tokens(key) is not { } t) return null;
         if (!t.Expired(Now)) return t.AccessToken;
-        return await RefreshAsync(key).WaitAsync(cancellationToken).ConfigureAwait(false);
+        return Use(await RefreshAsync(key).WaitAsync(cancellationToken).ConfigureAwait(false));
     }
 
+    /// <summary>A renewal as a request takes it: a token, none (refused: sign in again), or a failure to say.</summary>
+    public static string? Use(Renewal renewal) => renewal is { Token: null, Refused: false }
+        ? throw new McpException("the sign-in couldn't be renewed (its server didn't answer); try again in a moment", notSent: true)
+        : renewal.Token;
+
     /// <summary>
-    /// A refresh (after expiry or a 401), one at a time per server: rotated
-    /// tokens kept at once; a refused grant marks "Sign In" again; a dropped
-    /// dynamic registration is forgotten too; a network failure keeps what there is.
+    /// A refresh (after expiry, or a 401 of <paramref name="rejected"/>), one
+    /// at a time per server: a token another request has already renewed is
+    /// used as it is; rotated tokens are kept at once; a refused grant marks
+    /// "Sign In" again (a dropped dynamic registration is forgotten too); a
+    /// network failure keeps what there is.
     /// </summary>
-    public Task<string?> RefreshAsync(string key)
+    public Task<Renewal> RefreshAsync(string key, string? rejected = null)
     {
         lock (sync)
         {
+            if (rejected is not null && Tokens(key) is { } current && current.AccessToken != rejected && !current.Expired(Now))
+            {
+                return Task.FromResult(new Renewal(current.AccessToken, false));
+            }
             if (refreshes.TryGetValue(key, out var running)) return running;
             var task = RefreshOnceAsync(key);
             refreshes[key] = task;
@@ -82,29 +94,40 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         }
     }
 
-    async Task<string?> RefreshOnceAsync(string key)
+    readonly Dictionary<string, Task<Renewal>> refreshes = [];
+
+    async Task<Renewal> RefreshOnceAsync(string key)
     {
         await Task.Yield();
         var started = Generation(key);
         try
         {
-            if (store.Load().FirstOrDefault(s => s.Key == key)?.OAuth is not { } state || Tokens(key) is not { } t) return null;
+            if (store.Load().FirstOrDefault(s => s.Key == key)?.OAuth is not { } state || Tokens(key) is not { } t) return new Renewal(null, true);
             try
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 var fresh = await McpOAuth.RefreshAsync(t, state, fetch, Now, limit.Token, resolve).ConfigureAwait(false);
-                if (Generation(key) != started) return Tokens(key)?.AccessToken;
-                Keep(key, fresh);
-                return fresh.AccessToken;
+                // Checked and kept together: a sign-in or sign-out since wins.
+                lock (sync)
+                {
+                    if (generation.GetValueOrDefault(key) != started) return new Renewal(Tokens(key)?.AccessToken, Tokens(key) is null);
+                    Keep(key, fresh);
+                }
+                return new Renewal(fresh.AccessToken, false);
             }
             catch (McpOAuthException e) when (e.Kind is McpOAuthFailure.InvalidGrant or McpOAuthFailure.InvalidClient)
             {
-                if (Generation(key) == started) MarkNeedsSignIn(key, dropRegistration: e.Kind == McpOAuthFailure.InvalidClient && state.Registration == OAuthRegistration.Dynamic);
-                return null;
+                lock (sync)
+                {
+                    if (generation.GetValueOrDefault(key) != started) return new Renewal(Tokens(key)?.AccessToken, Tokens(key) is null);
+                    MarkNeedsSignInLocked(key, dropRegistration: e.Kind == McpOAuthFailure.InvalidClient && state.Registration == OAuthRegistration.Dynamic);
+                }
+                Changed?.Invoke();
+                return new Renewal(null, true);
             }
             catch (Exception e) when (e is McpOAuthException or HttpRequestException or IOException or OperationCanceledException)
             {
-                return null;
+                return new Renewal(null, false);
             }
         }
         finally
@@ -116,9 +139,15 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
     /// <summary>The tokens dropped; the server says "Sign In" (a dropped registration is registered anew then).</summary>
     public void MarkNeedsSignIn(string key, bool dropRegistration = false)
     {
+        lock (sync) MarkNeedsSignInLocked(key, dropRegistration);
+        Changed?.Invoke();
+    }
+
+    void MarkNeedsSignInLocked(string key, bool dropRegistration)
+    {
+        generation[key] = generation.GetValueOrDefault(key) + 1;
         Keep(key, null);
         store.Update(key, c => c.OAuth is null ? c : c with { OAuth = dropRegistration ? null : c.OAuth with { NeedsSignIn = true } });
-        Changed?.Invoke();
     }
 
     /// <summary>A call was refused for want of scopes (403 insufficient_scope): asked for at the next sign-in.</summary>
@@ -155,26 +184,34 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             var scope = discovery.Scope;
             var stepUp = parsed?.Scope is { Length: > 0 } s ? s : config.OAuth?.StepUpScope;
             if (stepUp is { Length: > 0 }) scope = McpOAuth.Scope(stepUp, discovery.Resource, Tokens(key)?.Scope ?? config.OAuth?.Scope);
+            // The browser goes nowhere on this PC or its network for an outside server.
+            if (!await McpOAuth.FetchableAsync(new Uri(discovery.Server.AuthorizationEndpoint), server, resolve).ConfigureAwait(false))
+            {
+                throw McpOAuthException.Of(McpOAuthFailure.InsecureUrl);
+            }
             using var listener = new LoopbackCallback();
             var flow = new OAuthFlow(discovery.Server, clientId, registration, discovery.ResourceUrl, scope, listener.Port);
             listener.Accepts = flow.IsMine;
             openBrowser(flow.AuthorizationUrl);
             var target = await listener.WaitAsync(CallbackTimeout, cancellationToken).ConfigureAwait(false);
             var fresh = await flow.ExchangeAsync(target, fetch, Now, cancellationToken, resolve).ConfigureAwait(false);
-            Bump(key);
-            Keep(key, fresh);
-            store.Update(key, c => c with
+            lock (sync)
             {
-                OAuth = new McpOAuthState
+                generation[key] = generation.GetValueOrDefault(key) + 1;
+                Keep(key, fresh);
+                store.Update(key, c => c with
                 {
-                    Metadata = discovery.Server,
-                    ClientId = clientId,
-                    Registration = registration,
-                    Resource = discovery.ResourceUrl,
-                    Scope = fresh.Scope ?? scope,
-                    NeedsSignIn = false,
-                },
-            });
+                    OAuth = new McpOAuthState
+                    {
+                        Metadata = discovery.Server,
+                        ClientId = clientId,
+                        Registration = registration,
+                        Resource = discovery.ResourceUrl,
+                        Scope = fresh.Scope ?? scope,
+                        NeedsSignIn = false,
+                    },
+                });
+            }
         }
         finally
         {
@@ -200,14 +237,16 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             {
             }
         }
-        Bump(key);
         MarkNeedsSignIn(key);
     }
 
     /// <summary>A server removed: its tokens go with it.</summary>
     public void Forget(string key)
     {
-        Bump(key);
-        Keep(key, null);
+        lock (sync)
+        {
+            generation[key] = generation.GetValueOrDefault(key) + 1;
+            Keep(key, null);
+        }
     }
 }

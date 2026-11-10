@@ -142,6 +142,9 @@ public sealed class McpOAuthTests : IDisposable
         Assert.True(McpOAuth.MixUpSafe(m, OAuthRegistration.Dynamic));
         Assert.True(McpOAuth.MixUpSafe(m, OAuthRegistration.MetadataDocument));
         Assert.False(McpOAuth.MixUpSafe(m with { TokenEndpoint = "https://tokens.example.net/token" }, OAuthRegistration.MetadataDocument));
+        // A per-issuer callback alone isn't enough (RFC 9700 §4.4.2.2): without iss, the endpoints must be the issuer's.
+        Assert.False(McpOAuth.MixUpSafe(m with { TokenEndpoint = "https://tokens.example.net/token" }, OAuthRegistration.Dynamic));
+        Assert.True(McpOAuth.MixUpSafe(m with { TokenEndpoint = "https://tokens.example.net/token", SendsIssInResponse = true }, OAuthRegistration.Dynamic));
     }
 
     [Fact]
@@ -184,7 +187,8 @@ public sealed class McpOAuthTests : IDisposable
         var outside = new Uri("https://mcp.example.com/mcp");
         Assert.False(await McpOAuth.FetchableAsync(new Uri("https://127.0.0.1/x"), outside, Public));
         Assert.False(await McpOAuth.FetchableAsync(new Uri("https://intranet.local/x"), outside, Public));
-        Assert.False(await McpOAuth.FetchableAsync(new Uri("https://rebind.example.com/x"), outside, _ => Task.FromResult(new[] { IPAddress.Loopback })));
+        Assert.False(await McpOAuth.FetchableAsync(new Uri("https://rebind.example.com/x"), outside,
+            h => Task.FromResult(h == "rebind.example.com" ? new[] { IPAddress.Loopback } : new[] { IPAddress.Parse("93.184.216.34") })));
         Assert.True(await McpOAuth.FetchableAsync(new Uri("https://auth.example.com/x"), outside, Public));
         // A server on this PC may sign in on this PC.
         Assert.True(await McpOAuth.FetchableAsync(new Uri("http://127.0.0.1:9000/x"), new Uri("http://127.0.0.1:9000/mcp"), Public));
@@ -220,7 +224,7 @@ public sealed class McpOAuthTests : IDisposable
             """{"resource":"https://mcp.example.com/mcp","authorization_servers":["https://auth.example.com"]}""");
         fetch.Answers["https://auth.example.com/.well-known/oauth-authorization-server"] = (200, AuthServer);
         fetch.Answers["https://auth.example.com/register"] = (201, """{"client_id":"dyn-1","token_endpoint_auth_method":"none"}""");
-        fetch.Answers["https://auth.example.com/token"] = (200, """{"access_token":"tok","refresh_token":"ref","expires_in":3600,"token_type":"bearer"}""");
+        fetch.Answers["https://auth.example.com/token"] = (200, """{"access_token":"at-7f3c9","refresh_token":"rt-2b81d","expires_in":3600,"token_type":"bearer"}""");
         var secrets = new MemorySecrets();
         using var browser = new HttpClient();
         Uri? opened = null;
@@ -245,15 +249,20 @@ public sealed class McpOAuthTests : IDisposable
         Assert.Equal(OAuthRegistration.Dynamic, saved.OAuth.Registration);
         Assert.False(saved.OAuth.NeedsSignIn);
         // Tokens only in the secret store, never in the settings file.
-        Assert.DoesNotContain("tok", File.ReadAllText(Path.Combine(root, "mcp-servers.json")), StringComparison.Ordinal);
-        Assert.Equal("tok", await signIn.TokenAsync(server.Key, default));
+        Assert.DoesNotContain("at-7f3c9", File.ReadAllText(Path.Combine(root, "mcp-servers.json")), StringComparison.Ordinal);
+        Assert.Equal("at-7f3c9", await signIn.TokenAsync(server.Key, default));
         var exchange = fetch.Requests.Single(r => r.Url == "https://auth.example.com/token");
         Assert.Contains("code_verifier=", exchange.Body);
         Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", exchange.Body);
 
+        // A sign-in server that can't be reached keeps the tokens.
+        fetch.Answers["https://auth.example.com/token"] = (503, "");
+        Assert.Equal(new McpSignIn.Renewal(null, false), await signIn.RefreshAsync(server.Key));
+        Assert.NotNull(signIn.Tokens(server.Key));
+        Assert.False(store.Load().Single().OAuth!.NeedsSignIn);
         // A refused refresh means "Sign In" again, tokens gone.
         fetch.Answers["https://auth.example.com/token"] = (400, """{"error":"invalid_grant"}""");
-        Assert.Null(await signIn.RefreshAsync(server.Key));
+        Assert.Equal(new McpSignIn.Renewal(null, true), await signIn.RefreshAsync(server.Key));
         Assert.True(store.Load().Single().OAuth!.NeedsSignIn);
         Assert.Null(signIn.Tokens(server.Key));
     }
@@ -274,7 +283,7 @@ public sealed class McpOAuthTests : IDisposable
         public int Refreshes;
         public Task<string?> TokenAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(first);
 
-        public Task<string?> RefreshAsync(CancellationToken cancellationToken)
+        public Task<string?> RefreshAsync(string rejected, CancellationToken cancellationToken)
         {
             Refreshes++;
             return Task.FromResult(second);

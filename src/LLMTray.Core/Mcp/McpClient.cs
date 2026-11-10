@@ -49,11 +49,16 @@ public sealed class McpAuthException(string message, int status, string? challen
     public string? Challenge { get; } = challenge;
 }
 
-/// <summary>A signed-in server's token for each request, and a refresh after a 401 (null: none to give).</summary>
+/// <summary>
+/// A signed-in server's token for each request, and a refresh after a 401
+/// of <c>rejected</c> (null: the sign-in was refused, none to give). A
+/// refresh that couldn't reach the sign-in server throws <see cref="McpException"/>
+/// (not sent): the tokens are kept for the next try.
+/// </summary>
 public interface IMcpBearer
 {
     Task<string?> TokenAsync(CancellationToken cancellationToken);
-    Task<string?> RefreshAsync(CancellationToken cancellationToken);
+    Task<string?> RefreshAsync(string rejected, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -625,7 +630,7 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
                     if (status == 401 && token is not null && bearer is not null && !refreshed)
                     {
                         refreshed = true;
-                        token = await bearer.RefreshAsync(ct).ConfigureAwait(false);
+                        token = await bearer.RefreshAsync(token, ct).ConfigureAwait(false);
                         if (token is not null) continue;
                     }
                     if (status == 401) throw new McpAuthException("the server needs you to sign in", 401, challenge);

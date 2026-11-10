@@ -30,24 +30,40 @@ with the Mac app's rules unchanged:
   no URL reservation or admin rights are needed, and loopback raises no
   firewall prompt), open for that one sign-in and 5 minutes at most.
   Only the flow's own path and `state` end the wait. Any other request
-  gets a 400. Mix-up defence: a required `iss`, or a per-issuer callback
-  path for a dynamic registration, or, with neither, endpoints on the
-  issuer's origin.
+  gets a 400. Mix-up defence: a required `iss`, or else the authorization
+  and token endpoints on the issuer's own origin. A per-issuer callback
+  path (kept for dynamic registrations) isn't enough by itself: a hostile
+  server can register at an honest one with its own path (RFC 9700
+  §4.4.2.2). This is stricter than the Mac app, which takes the
+  per-issuer path alone. The authorization endpoint goes through the
+  same private-address check as every other sign-in address, so the
+  browser isn't sent into this PC's network for an outside server. A host
+  that doesn't resolve counts as private.
 - **Tokens** are kept per server, encrypted with DPAPI for the current
   Windows user, in `secrets\` under the app's data. They are never in
-  `mcp-servers.json`, logs or URLs. The settings file keeps only where
+  `mcp-servers.json`, logs or URLs, and are blanked from what a server
+  says when it fails to start. The settings file keeps only where
   the server signs in (issuer, endpoints, client id, resource, scopes).
 - **A token goes only to the server it was issued for** (its resource
   covers the server's URL), and never in the clear except to this PC.
   MCP requests and sign-in requests follow no redirects (a sign-in GET
   only within its origin) and keep no cookies.
 - **Refresh** before expiry, and once after a 401 to a request that
-  carried a token. The same message is then sent once more: a 401 means
-  it wasn't done. Only one refresh runs per server, and rotated tokens
-  replace the old ones at once.
+  carried a token. The same message is then sent once more, because by
+  the spec a 401 means it wasn't done. A non-compliant server that acts
+  and then answers 401 would see it twice. That is the spec's assumption,
+  not one this client can check.
+  - Only one refresh runs per server. A 401 for a token another request
+    has already renewed uses the new token.
+  - Rotated tokens replace the old ones at once, checked and kept under
+    one lock with sign-in and sign-out, so a late refresh can't bring
+    back tokens a sign-out deleted.
   - `invalid_grant` means "Sign in again".
   - `invalid_client` drops a dynamic registration too.
-  - A network failure keeps the tokens.
+  - A network failure keeps the tokens. The request fails as "couldn't be
+    renewed, try again", not as "sign in".
+- A server that answers 401 while running is stopped. Its tools are
+  dropped until the user signs in.
 - **A 403 `insufficient_scope`** fails the call ("needs more access",
   for the model to tell the user). The scopes it asks for are kept, and
   **Sign In Again** in Settings asks for those already granted plus

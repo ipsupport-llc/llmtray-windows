@@ -133,6 +133,20 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         }
     }
 
+    /// <summary>What a server said, without its secrets or its sign-in's tokens.</summary>
+    string Redact(string text, McpServerConfig config)
+    {
+        text = Blank(text, config);
+        if (signIn?.Tokens(config.Key) is { } t)
+        {
+            foreach (var secret in new[] { t.AccessToken, t.RefreshToken }.OfType<string>().Where(v => v.Length >= 8))
+            {
+                text = text.Replace(secret, "••••", StringComparison.Ordinal);
+            }
+        }
+        return text;
+    }
+
     /// <summary>Secret values (its environment and headers) never reach the log.</summary>
     static string Blank(string line, McpServerConfig config)
     {
@@ -153,6 +167,24 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
         try
         {
             r.LastUsed = DateTimeOffset.UtcNow;
+            bool waiting;
+            lock (r.Log) waiting = r.NeedsSignIn;
+            if (!config.IsCommand && (waiting || config.OAuth?.NeedsSignIn == true))
+            {
+                // Asked to sign in: a client still running is let go, and nothing starts until the sign-in.
+                if (r.Client is { } stale)
+                {
+                    r.Client = null;
+                    lock (r.Log)
+                    {
+                        r.Tools = null;
+                        r.ToolsFrom = null;
+                    }
+                    await stale.DisposeAsync().ConfigureAwait(false);
+                }
+                r.Status = "needs sign-in";
+                throw new McpAuthException($"{config.Name} needs the user to sign in (Settings › Tools)", 401, Challenge(config.Key));
+            }
             if (r.Client is { IsClosed: false } running) return running;
             if (r.Client is { } old)
             {
@@ -170,13 +202,6 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
                 // A token in a header would cross the network in the clear.
                 r.Status = "headers go only to an https:// address";
                 throw new McpException($"{config.Name}: headers go only to an https:// address (or this PC)", notSent: true);
-            }
-            bool waiting;
-            lock (r.Log) waiting = r.NeedsSignIn;
-            if (!config.IsCommand && (waiting || config.OAuth?.NeedsSignIn == true))
-            {
-                r.Status = "needs sign-in";
-                throw new McpAuthException($"{config.Name} needs the user to sign in (Settings › Tools)", 401, Challenge(config.Key));
             }
             r.Status = "starting";
             Changed?.Invoke();
@@ -227,7 +252,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             catch (Exception e)
             {
                 await client.DisposeAsync().ConfigureAwait(false);
-                AddLog(r, $"[LLMTray] didn't start: {e.Message}");
+                var said = Redact(e.Message, config);
+                AddLog(r, $"[LLMTray] didn't start: {said}");
                 lock (r.Log)
                 {
                     if (e is not OperationCanceledException && !counted)
@@ -235,7 +261,7 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
                         counted = true;
                         Crashed(r);
                     }
-                    r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"didn't start: {e.Message}";
+                    r.Status = r.Blocked ? "keeps crashing: see its log, then Restart" : $"didn't start: {said}";
                 }
                 Changed?.Invoke();
                 throw;
@@ -265,7 +291,8 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     sealed class SignedIn(McpSignIn signIn, string key) : IMcpBearer
     {
         public Task<string?> TokenAsync(CancellationToken cancellationToken) => signIn.TokenAsync(key, cancellationToken);
-        public Task<string?> RefreshAsync(CancellationToken cancellationToken) => signIn.RefreshAsync(key).WaitAsync(cancellationToken);
+        public async Task<string?> RefreshAsync(string rejected, CancellationToken cancellationToken) =>
+            McpSignIn.Use(await signIn.RefreshAsync(key, rejected).WaitAsync(cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>Under the log lock: a crash counted; the third in a minute latches.</summary>

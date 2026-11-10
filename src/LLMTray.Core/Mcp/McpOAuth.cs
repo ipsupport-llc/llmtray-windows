@@ -323,12 +323,14 @@ public static class McpOAuth
 
     /// <summary>
     /// Whether this issuer may be signed in to without being confused with
-    /// another: <c>iss</c> in the response, or a per-issuer callback, or (a
-    /// metadata document and no <c>iss</c>) its endpoints on its own origin.
+    /// another: <c>iss</c> in the response, else its authorization and token
+    /// endpoints on its own origin. A per-issuer callback path alone isn't
+    /// enough: a hostile server can register at an honest one with its own
+    /// path (RFC 9700 §4.4.2.2), so it only adds to these.
     /// </summary>
     public static bool MixUpSafe(OAuthServerMetadata m, OAuthRegistration registration)
     {
-        if (m.SendsIssInResponse || registration != OAuthRegistration.MetadataDocument) return true;
+        if (m.SendsIssInResponse) return true;
         if (!Uri.TryCreate(m.Issuer, UriKind.Absolute, out var issuer)
             || !Uri.TryCreate(m.AuthorizationEndpoint, UriKind.Absolute, out var auth)
             || !Uri.TryCreate(m.TokenEndpoint, UriKind.Absolute, out var token)) return false;
@@ -434,7 +436,9 @@ public static class McpOAuth
     public static async Task<bool> FetchableAsync(Uri url, Uri server, Func<string, Task<IPAddress[]>>? resolve = null)
     {
         resolve ??= Resolve;
-        return !await IsLocalAsync(url.IdnHost, resolve).ConfigureAwait(false) || await IsLocalAsync(server.IdnHost, resolve).ConfigureAwait(false);
+        // A target that doesn't resolve now counts as local (it could resolve to one when fetched); the server, as not.
+        return !await IsLocalAsync(url.IdnHost, resolve, unresolvedIsLocal: true).ConfigureAwait(false)
+            || await IsLocalAsync(server.IdnHost, resolve).ConfigureAwait(false);
     }
 
     static async Task<IPAddress[]> Resolve(string host)
@@ -451,13 +455,14 @@ public static class McpOAuth
     }
 
     /// <summary>Whether a host is this PC, a private network or link-local.</summary>
-    public static async Task<bool> IsLocalAsync(string host, Func<string, Task<IPAddress[]>> resolve)
+    public static async Task<bool> IsLocalAsync(string host, Func<string, Task<IPAddress[]>> resolve, bool unresolvedIsLocal = false)
     {
         var h = host.ToLowerInvariant().Trim('[', ']').TrimEnd('.');
         if (h.Length == 0) return true;
         if (IPAddress.TryParse(h, out var ip)) return IsLocal(ip);
         if (h == "localhost" || h.EndsWith(".localhost", StringComparison.Ordinal) || h.EndsWith(".local", StringComparison.Ordinal)) return true;
-        return (await resolve(h).ConfigureAwait(false)).Any(IsLocal);
+        var addresses = await resolve(h).ConfigureAwait(false);
+        return addresses.Length == 0 ? unresolvedIsLocal : addresses.Any(IsLocal);
     }
 
     /// <summary>This PC, a private or local network, link-local, multicast or broadcast: nothing an outside fetch may reach.</summary>
@@ -741,12 +746,22 @@ public sealed class LoopbackCallback : IDisposable
             {
                 return;
             }
+            // A few at a time: a flood of idle connections can't pile up.
+            if (Interlocked.Increment(ref open) > 8)
+            {
+                Interlocked.Decrement(ref open);
+                client.Dispose();
+                continue;
+            }
             _ = AnswerAsync(client);
         }
     }
 
+    int open;
+
     async Task AnswerAsync(TcpClient client)
     {
+        using var counted = new Counted(() => Interlocked.Decrement(ref open));
         using (client)
         {
             try
@@ -780,6 +795,11 @@ public sealed class LoopbackCallback : IDisposable
             {
             }
         }
+    }
+
+    sealed class Counted(Action done) : IDisposable
+    {
+        public void Dispose() => done();
     }
 
     /// <summary>The callback's request target, or a timeout.</summary>
