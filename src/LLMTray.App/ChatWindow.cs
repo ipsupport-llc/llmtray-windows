@@ -442,6 +442,7 @@ sealed partial class ChatWindow : Window
         {
             messages.Children.Clear();
             renderedCount = 0;
+            live = null;
             var empty = new StackPanel { Spacing = 6, Margin = new Thickness(0, 120, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
             empty.Children.Add(new TextBlock { Text = chat.Temporary ? L.T("A temporary chat") : L.T("Ask anything"), FontSize = 22, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
             empty.Children.Add(Ui.Caption(chat.Temporary
@@ -471,11 +472,12 @@ sealed partial class ChatWindow : Window
                 {
                     var message = chat.Messages[i];
                     var isLast = i == chat.Messages.Count - 1;
-                    if (isLast && message.Streaming && message.Role == "assistant" && !message.IsSummary)
+                    // In place while it can show all of it; otherwise drawn whole (an MCP record, an error, a picture).
+                    if (isLast && message.Streaming && message.Role == "assistant" && !message.IsSummary
+                        && new LiveAnswer(this, message) is var candidate && candidate.Update())
                     {
-                        live = new LiveAnswer(this, message);
-                        live.Update();
-                        messages.Children.Add(live.Root);
+                        live = candidate;
+                        messages.Children.Add(candidate.Root);
                     }
                     else
                     {
@@ -612,29 +614,7 @@ sealed partial class ChatWindow : Window
             }
         }
 
-        if (message.McpCalls.Count > 0)
-        {
-            // What each MCP call did, as approved: saved with the answer.
-            var calls = new StackPanel { Spacing = 2 };
-            foreach (var call in message.McpCalls)
-            {
-                var outcome = call.Outcome switch
-                {
-                    "done" => L.T("done"),
-                    "failed" => L.T("failed"),
-                    "denied" => L.T("denied"),
-                    "unknown" => L.T("outcome unknown"),
-                    _ => L.T("not sent"),
-                };
-                var line = Ui.Caption($"{call.Server} · {call.Tool} {call.Arguments} — {outcome}",
-                    call.Outcome is "done" ? null : call.Outcome == "denied" ? Ui.Gray : Ui.Orange);
-                line.IsTextSelectionEnabled = true;
-                line.MaxLines = 3;
-                line.TextTrimming = TextTrimming.CharacterEllipsis;
-                calls.Children.Add(line);
-            }
-            stack.Children.Add(calls);
-        }
+        if (message.McpCalls.Count > 0) stack.Children.Add(McpCallsView(message));
 
         if (!message.Streaming && message.Sources.Count > 0)
         {
@@ -667,6 +647,30 @@ sealed partial class ChatWindow : Window
         return stack;
     }
 
+    /// <summary>What each MCP call did, as approved: saved with the answer.</summary>
+    static UIElement McpCallsView(ChatMessage message)
+    {
+        var calls = new StackPanel { Spacing = 2 };
+        foreach (var call in message.McpCalls)
+        {
+            var outcome = call.Outcome switch
+            {
+                "done" => L.T("done"),
+                "failed" => L.T("failed"),
+                "denied" => L.T("denied"),
+                "unknown" => L.T("outcome unknown"),
+                _ => L.T("not sent"),
+            };
+            var line = Ui.Caption($"{call.Server} · {call.Tool} {call.Arguments} — {outcome}",
+                call.Outcome is "done" ? null : call.Outcome == "denied" ? Ui.Gray : Ui.Orange);
+            line.IsTextSelectionEnabled = true;
+            line.MaxLines = 3;
+            line.TextTrimming = TextTrimming.CharacterEllipsis;
+            calls.Children.Add(line);
+        }
+        return calls;
+    }
+
     /// <summary>The app's mark, decoded once for every answer (a new image per answer would blink in).</summary>
     static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? mark;
 
@@ -686,6 +690,8 @@ sealed partial class ChatWindow : Window
     sealed class LiveAnswer(ChatWindow window, ChatMessage message)
     {
         public ChatMessage Message { get; } = message;
+        UIElement? calls;
+        int callsShown;
         public StackPanel Root { get; } = new() { Spacing = 6 };
         readonly UIElement who = Who(message);
         Expander? thought;
@@ -696,13 +702,13 @@ sealed partial class ChatWindow : Window
         TextBlock? doingText;
         UIElement? doing;
         int blocks;
-        int mcpCalls = message.McpCalls.Count;
 
         /// <summary>False when the answer now needs drawing whole.</summary>
         public bool Update()
         {
             var m = Message;
-            if (m.Error is not null || m.McpCalls.Count != mcpCalls || m.Images.Count > 0 || !m.Streaming) return false;
+            // Only what this view draws: an error or a picture needs the whole view.
+            if (m.Error is not null || m.Images.Count > 0 || !m.Streaming) return false;
             var parts = new List<UIElement> { who };
             if (m.Reasoning.Length > 0)
             {
@@ -721,7 +727,8 @@ sealed partial class ChatWindow : Window
                 }
                 var header = m.Content.Length == 0 ? L.T("Thinking…") : L.T("Thought process");
                 if (!Equals(thought.Header, header)) thought.Header = header;
-                thoughtText!.Text = m.Reasoning.Trim();
+                var reasoning = m.Reasoning.Trim();
+                if (thoughtText!.Text != reasoning) thoughtText.Text = reasoning;
                 parts.Add(thought);
             }
             if (m.Content.Length > 0 || m.Reasoning.Length == 0)
@@ -766,11 +773,26 @@ sealed partial class ChatWindow : Window
                 doingText!.Text = Activity(activity);
                 parts.Add(doing);
             }
-            // Only a part coming or going changes the column.
-            if (!parts.SequenceEqual(Root.Children))
+            if (m.McpCalls.Count > 0)
             {
-                Root.Children.Clear();
-                foreach (var part in parts) Root.Children.Add(part);
+                // The records of MCP calls, made again only when one is added.
+                if (calls is null || callsShown != m.McpCalls.Count)
+                {
+                    calls = McpCallsView(m);
+                    callsShown = m.McpCalls.Count;
+                }
+                parts.Add(calls);
+            }
+            // Only a part coming or going changes the column, and the others stay where they are
+            // (taken out and put back, an open thought would lose its place and selection).
+            for (var i = Root.Children.Count - 1; i >= 0; i--)
+            {
+                if (!parts.Contains(Root.Children[i])) Root.Children.RemoveAt(i);
+            }
+            for (var i = 0; i < parts.Count; i++)
+            {
+                if (i < Root.Children.Count && Root.Children[i] == parts[i]) continue;
+                Root.Children.Insert(i, parts[i]);
             }
             return true;
         }
