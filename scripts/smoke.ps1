@@ -43,6 +43,43 @@ try {
     if ($models.data.id -notcontains $Model) { throw "$Model is not listed" }
     Save-Screenshot '1-started'
 
+    # The first-run wizard (adr/0010) opens on a fresh install: each step
+    # photographed, then Finish, which opens the main window.
+    try {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $wauto = [System.Windows.Automation.AutomationElement]
+        $wname = [System.Windows.Automation.AutomationElement]::NameProperty
+        $deadline = (Get-Date).AddSeconds(30)
+        do {
+            Start-Sleep -Seconds 1
+            $setup = $wauto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+                (New-Object System.Windows.Automation.PropertyCondition($wname, 'Set Up LLMTray')))
+        } until ($setup -or (Get-Date) -gt $deadline)
+        if (-not $setup) { throw 'the setup wizard did not open on a fresh install' }
+        function Press([string]$label) {
+            $b = $setup.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition($wname, $label)))
+            if (-not $b) { throw "no '$label' button in the wizard" }
+            $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            Start-Sleep -Seconds 2
+        }
+        Save-Screenshot 'setup-0'
+        Press 'Get Started'
+        foreach ($i in 1..6) {
+            Save-Screenshot "setup-$i"
+            Press 'Next'
+        }
+        Save-Screenshot 'setup-7'
+        Press 'Finish'
+        $settings = Get-Content (Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalState\settings.json") -Raw | ConvertFrom-Json
+        if ($settings.setupCompleted -ne 1) { throw "setup didn't record that it finished: $($settings.setupCompleted)" }
+        Write-Host 'setup wizard: 8 steps walked through, finished'
+    }
+    catch {
+        Save-Screenshot 'setup-failure'
+        throw
+    }
+
     $body = @{ model = $Model; max_tokens = 48; messages = @(@{ role = 'user'; content = 'Say hello in five words.' }) } | ConvertTo-Json -Depth 5
     $started = Get-Date
     $answer = Invoke-RestMethod "$api/v1/chat/completions" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 900

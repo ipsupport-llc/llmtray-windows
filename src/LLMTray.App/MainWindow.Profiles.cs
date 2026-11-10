@@ -238,7 +238,7 @@ public sealed partial class MainWindow
     }
 
     /// <summary>A tool's name in the user's language (the Mac app's words).</summary>
-    static string ToolTitle(string name, string english) => name switch
+    internal static string ToolTitle(string name, string english) => name switch
     {
         "get_current_date" => L.T("Date & time"),
         "get_current_time_in_city" => L.T("Time in a city"),

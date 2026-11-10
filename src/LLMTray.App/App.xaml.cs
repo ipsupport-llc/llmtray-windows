@@ -102,7 +102,22 @@ public partial class App : Application
         };
         Downloads = new DownloadQueue(new ModelDownloader(Web));
         Downloads.Changed += _ => dispatcher.TryEnqueue(() => DownloadsChanged?.Invoke(Downloads.State));
-        Downloads.Completed += _ => Library.Rescan();
+        Downloads.Completed += job =>
+        {
+            Library.Rescan();
+            // The wizard's chat model: loaded once it's here.
+            if (loadAfterDownload is { } wanted && wanted.Job == job)
+            {
+                loadAfterDownload = null;
+                dispatcher.TryEnqueue(() =>
+                {
+                    if (Library.Current.Models.FirstOrDefault(m => string.Equals(Path.GetFullPath(m.FullPath), Path.GetFullPath(wanted.Path), StringComparison.OrdinalIgnoreCase)) is { } model)
+                    {
+                        _ = LoadAsync(model);
+                    }
+                });
+            }
+        };
 
         Updater = new AppUpdater(dispatcher, Web, DataFolder);
         Chats = new LLMTray.Core.Chat.ChatStore(Path.Combine(DataFolder, "sessions"));
@@ -123,7 +138,7 @@ public partial class App : Application
         });
 
         launcher = new JobObjectLauncher();
-        var runtimeRoot = Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
+        var runtimeRoot = RuntimeRoot;
         Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), m => Profiles.ResolvedFor(m.FullPath).ServerOptions,
             Path.Combine(DataFolder, "logs"));
         // The state is read again when the UI thread gets to it: events from
@@ -146,7 +161,12 @@ public partial class App : Application
         if (!tray.IsAdded) RetryTray();
 
         // Started at sign-in: only the tray icon until the user opens the window.
-        if (!SignInStartup.StartedInBackground()) ShowWindow();
+        // A fresh install opens the setup wizard instead (adr/0010).
+        if (!SignInStartup.StartedInBackground())
+        {
+            if (LLMTray.Core.Setup.SetupWizard.ShouldOpen(Settings) && !Environment.GetCommandLineArgs().Contains("--no-setup")) ShowSetup();
+            else ShowWindow();
+        }
         ListenForSecondLaunch();
         // For screenshots in CI and for support: open the panel or the log at start.
         var commandLine = Environment.GetCommandLineArgs();
@@ -174,6 +194,32 @@ public partial class App : Application
     }
 
     ChatWindow? chatWindow;
+    SetupWindow? setupWindow;
+    (LLMTray.Core.Downloads.DownloadJob Job, string Path)? loadAfterDownload;
+
+    /// <summary>llama.cpp's builds inside the app.</summary>
+    public static string RuntimeRoot => Path.Combine(AppContext.BaseDirectory, "runtime", "llama");
+
+    public IReadOnlyList<LlamaBackend> Runtimes => LlamaRuntime.Find(RuntimeRoot);
+
+    /// <summary>The first-run wizard (also from Settings › General and the tray menu).</summary>
+    public void ShowSetup()
+    {
+        if (Quitting) return;
+        setupWindow ??= new SetupWindow();
+        setupWindow.AppWindow.Show();
+        setupWindow.Activate();
+    }
+
+    internal void SetupClosed(SetupWindow closed)
+    {
+        if (setupWindow == closed) setupWindow = null;
+        // Something stays open: the window with the models and settings.
+        ShowWindow();
+    }
+
+    /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it.</summary>
+    public void LoadWhenDownloaded(LLMTray.Core.Downloads.DownloadJob job, string path) => loadAfterDownload = (job, path);
 
     /// <summary>The chat window; a new chat in it when asked.</summary>
     public void ShowChat(bool newChat = false)
@@ -286,7 +332,7 @@ public partial class App : Application
     IReadOnlyList<TrayMenuItem> TrayMenu()
     {
         var state = Host.State;
-        var items = new List<TrayMenuItem> { new(L.T("Chat"), () => ShowChat()), new(L.T("Open LLMTray"), ShowWindow), TrayMenuItem.Separator };
+        var items = new List<TrayMenuItem> { new(L.T("Chat"), () => ShowChat()), new(L.T("Open LLMTray"), ShowWindow), new(L.T("Set Up LLMTray…"), ShowSetup), TrayMenuItem.Separator };
         var models = Library.Rescan().Models;
         foreach (var model in models.Take(20))
         {
