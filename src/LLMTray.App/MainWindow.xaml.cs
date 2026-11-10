@@ -73,6 +73,7 @@ public sealed partial class MainWindow : Window
             if (page is "models" or "server" && HostKey(s) != renderedHostKey) RenderPageSoon();
         };
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
+        App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.ProfilesChanged += () =>
         {
             if (page is "profiles" or "models") RenderPageSoon();
@@ -158,7 +159,7 @@ public sealed partial class MainWindow : Window
     static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Message}";
 
     /// <summary>What the Tools tab shows of the servers (an open log follows its lines).</summary>
-    string ToolsKey() => string.Join("\n", App.Current.Mcp.Store.Load().Select(c =>
+    string ToolsKey() => FoldersKey() + "\n" + string.Join("\n", App.Current.Mcp.Store.Load().Select(c =>
     {
         var st = App.Current.Mcp.State(c);
         // Not listed and listed-empty differ; an open log changes with its last line even at its 200-line cap.

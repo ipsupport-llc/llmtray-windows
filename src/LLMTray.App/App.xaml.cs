@@ -56,6 +56,9 @@ public partial class App : Application
 
     /// <summary>The chat's tools (adr/0009); each profile switches them on.</summary>
     public LLMTray.Core.Tools.ToolBox Tools { get; private set; } = null!;
+    /// <summary>The chat's folder tools (adr/0016).</summary>
+    public LLMTray.Core.Folders.FolderTools Folders { get; private set; } = null!;
+    public event Action? FoldersChanged;
     public string DataFolder { get; private set; } = "";
 
     /// <summary>Why the API isn't served (port taken), or null.</summary>
@@ -145,6 +148,7 @@ public partial class App : Application
             return new LLMTray.Core.Tools.ToolContext(enabled, webFetch, zone, region.TwoLetterISORegionName, !region.IsMetric);
         });
 
+        Folders = MakeFolders();
         launcher = new JobObjectLauncher();
         var mcpStore = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(DataFolder, "mcp-servers.json"));
         Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, Web, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, JobObjectLauncher.Own);
@@ -386,6 +390,46 @@ public partial class App : Application
     public void SetDownloadSource(DownloadSource source)
     {
         if (Settings.DownloadSource != source) UpdateSettings(Settings with { DownloadSource = source });
+    }
+
+    /// <summary>
+    /// The folder tools: the user's usual folders by name; Windows, Program
+    /// Files, ProgramData, AppData and LLMTray's own files never granted.
+    /// </summary>
+    LLMTray.Core.Folders.FolderTools MakeFolders()
+    {
+        static string Special(Environment.SpecialFolder f) => Environment.GetFolderPath(f);
+        var home = Special(Environment.SpecialFolder.UserProfile);
+        var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Downloads"] = WindowsFolders.Downloads(),
+            ["Documents"] = Special(Environment.SpecialFolder.MyDocuments),
+            ["Desktop"] = Special(Environment.SpecialFolder.DesktopDirectory),
+            ["Pictures"] = Special(Environment.SpecialFolder.MyPictures),
+            ["Music"] = Special(Environment.SpecialFolder.MyMusic),
+            ["Videos"] = Special(Environment.SpecialFolder.MyVideos),
+        };
+        var denied = new[]
+        {
+            Special(Environment.SpecialFolder.Windows), Special(Environment.SpecialFolder.ProgramFiles), Special(Environment.SpecialFolder.ProgramFilesX86),
+            Special(Environment.SpecialFolder.CommonApplicationData), Special(Environment.SpecialFolder.ApplicationData),
+            Special(Environment.SpecialFolder.LocalApplicationData), DataFolder, AppContext.BaseDirectory,
+        }.Where(d => d.Length > 0).ToList();
+        var places = new LLMTray.Core.Folders.FolderPlaces(home, known, denied);
+        var platform = new WindowsFolders();
+        var grants = new LLMTray.Core.Folders.FolderGrants(Path.Combine(DataFolder, "folder-grants.json"), places);
+        var changes = new LLMTray.Core.Folders.FolderChanges(Path.Combine(DataFolder, "folder-journal"), places, platform);
+        grants.Changed += () => dispatcher?.TryEnqueue(() => FoldersChanged?.Invoke());
+        changes.Changed += () => dispatcher?.TryEnqueue(() => FoldersChanged?.Invoke());
+        var tools = new LLMTray.Core.Folders.FolderTools(places, grants, new LLMTray.Core.Folders.FolderReader(places, platform), changes, platform, () => Settings.FolderTools);
+        tools.Ran += () => dispatcher?.TryEnqueue(() => FoldersChanged?.Invoke());
+        return tools;
+    }
+
+    public void SetFolderTools(bool on)
+    {
+        if (Settings.FolderTools != on) UpdateSettings(Settings with { FolderTools = on });
+        FoldersChanged?.Invoke();
     }
 
     static HttpClient CreateWebClient()

@@ -28,6 +28,11 @@ sealed class Notices
     readonly TextBlock downloadText = new() { TextWrapping = TextWrapping.Wrap };
     readonly ProgressBar downloadProgress = new() { Maximum = 1000 };
     readonly Button downloadButton = new();
+    /// <summary>The chat's last folder change (adr/0016), with Undo.</summary>
+    readonly InfoBar folders = new() { IsClosable = true, IsOpen = false, Severity = InfoBarSeverity.Success };
+    readonly Button undo = new();
+    /// <summary>The plan whose notice is shown or was closed.</summary>
+    string? foldersShown;
     readonly bool updates;
     /// <summary>The version whose notice the user closed: it stays closed for that version.</summary>
     string? dismissed;
@@ -65,7 +70,26 @@ sealed class Notices
         grid.Children.Add(downloadButton);
         download.Child = grid;
 
-        if (updates) Panel.Children.Add(update);
+        undo.Content = L.T("Undo");
+        undo.Click += async (_, _) =>
+        {
+            if (foldersShown is not { } plan) return;
+            undo.IsEnabled = false;
+            var result = await app.Folders.Changes.UndoAsync(plan, p =>
+                app.Folders.Grants.Standing().Where(g => app.Folders.Places.Inside(p, g.Path)).Select(g => g.Path).FirstOrDefault()
+                ?? (Path.GetDirectoryName(p) is { } parent && app.Folders.Places.CanGrant(parent) ? parent : null));
+            folders.Severity = result.Failed > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Informational;
+            folders.Title = result.Failed > 0 ? L.F("Undone {0}; {1} couldn't be", result.Done, result.Failed) : L.F("Undone: {0} changes", result.Done);
+            folders.Message = result.Failed > 0 ? string.Join("\n", result.Lines.Where(l => l.StartsWith("Not undone", StringComparison.Ordinal)).Take(5)) : "";
+            folders.ActionButton = null;
+        };
+        folders.ActionButton = undo;
+        if (updates)
+        {
+            Panel.Children.Add(update);
+            Panel.Children.Add(folders);
+            app.FoldersChanged += RenderFolders;
+        }
         Panel.Children.Add(restart);
         Panel.Children.Add(download);
 
@@ -76,6 +100,20 @@ sealed class Notices
         RenderUpdate();
         RenderRestart();
         RenderDownload(app.Downloads.State);
+    }
+
+    /// <summary>A plan the chat just ran: what it did, and Undo.</summary>
+    void RenderFolders()
+    {
+        var result = App.Current.Folders.LastResult;
+        if (result is null || result.Done == 0 || result.PlanId == foldersShown) return;
+        foldersShown = result.PlanId;
+        folders.Severity = result.Failed > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success;
+        folders.Title = L.F("{0} changes made in your files", result.Done);
+        folders.Message = result.Failed > 0 ? L.T("It stopped at a failure; the rest weren't made.") : L.T("Moved items can go back; the Recycle Bin keeps what was removed.");
+        folders.ActionButton = undo;
+        undo.IsEnabled = true;
+        folders.IsOpen = true;
     }
 
     void RenderUpdate()

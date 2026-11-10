@@ -32,6 +32,9 @@ public sealed record AppSettings
     /// <summary>How much thinking models think in the chat (adr/0011): High is as long as they take.</summary>
     public Chat.ThinkingEffort ThinkingEffort { get; init; } = Chat.ThinkingEffort.High;
 
+    /// <summary>The chat may work in folders the user grants (adr/0016): off until switched on.</summary>
+    public bool FolderTools { get; init; }
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }

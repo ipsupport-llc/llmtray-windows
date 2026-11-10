@@ -20,6 +20,7 @@ public sealed partial class MainWindow
     {
         var app = App.Current;
         var servers = app.Mcp.Store.Load();
+        foreach (var part in FoldersSection()) yield return part;
         yield return Ui.Section(L.T("MCP servers"));
         var intro = Ui.Card(
             Ui.Row(L.T("Add a server"),
