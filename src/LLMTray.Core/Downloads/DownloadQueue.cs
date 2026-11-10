@@ -31,6 +31,9 @@ public sealed class DownloadQueue(ModelDownloader downloader)
     public event Action<DownloadState>? Changed;
     public event Action<DownloadJob>? Completed;
 
+    /// <summary>A job ended, however: null when it finished, otherwise why not.</summary>
+    public event Action<DownloadJob, string?>? Ended;
+
     public DownloadState State
     {
         get { lock (sync) return Snapshot(); }
@@ -131,16 +134,22 @@ public sealed class DownloadQueue(ModelDownloader downloader)
                     }
                 }
             }
-            if (ok)
+            string? why;
+            lock (sync) why = ok ? null : lastError ?? $"{job.Title} didn't finish";
+            // A subscriber's failure is not the download's.
+            try
             {
-                // A subscriber's failure is not the download's.
-                try
-                {
-                    Completed?.Invoke(job);
-                }
-                catch (Exception)
-                {
-                }
+                if (ok) Completed?.Invoke(job);
+            }
+            catch (Exception)
+            {
+            }
+            try
+            {
+                Ended?.Invoke(job, why);
+            }
+            catch (Exception)
+            {
             }
             Raise();
         }

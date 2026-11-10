@@ -105,6 +105,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the command line
+        shell: pwsh
+        run: dotnet publish src/LLMTray.Cli -c Release -r ${{ matrix.rid }} -o src/LLMTray.App/cli
       - id: mac
         name: The Mac app's translations (pinned in l10n/mac.json)
         shell: pwsh
@@ -192,6 +195,9 @@ jobs:
       - name: Fetch llama.cpp
         shell: pwsh
         run: scripts/fetch-llama.ps1 -Rid ${{ matrix.rid }}
+      - name: Build the command line
+        shell: pwsh
+        run: dotnet publish src/LLMTray.Cli -c Release -r ${{ matrix.rid }} -o src/LLMTray.App/cli
       - id: mac
         name: The Mac app's translations (pinned in l10n/mac.json)
         shell: pwsh
@@ -231,7 +237,22 @@ jobs:
           $bmp.Save("smoke/portable.png", [System.Drawing.Imaging.ImageFormat]::Png)
           if (-not $models) { throw 'the portable app did not serve the API' }
           Write-Host "portable API up; models: $($models.data.id -join ', ')"
+          # The command line (adr/0013), through the app's pipe.
+          $cli = Join-Path $env:RUNNER_TEMP 'portable/LLMTray/app/cli/llmtray.exe'
+          $status = & $cli status --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $status.api) {
+            Get-ChildItem $env:RUNNER_TEMP, $env:LOCALAPPDATA, $env:APPDATA -Recurse -Filter *.log -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -in 'control.log', 'app-errors.log' } | ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName -Tail 50 }
+            throw "llmtray status failed: $LASTEXITCODE"
+          }
+          $listed = & $cli models --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $listed.folder) { throw 'llmtray models failed' }
+          & $cli frobnicate 2>$null
+          if ($LASTEXITCODE -ne 2) { throw "a bad command exited $LASTEXITCODE, not 2" }
+          Write-Host "llmtray: $($status.text); $($listed.models.Count) models"
           Stop-Process -Name LLMTray -Force
+          # The bad command's exit code 2 is still in $LASTEXITCODE: the step itself passed.
+          exit 0
       # The installer (adr/0007): installed silently for this user, started, the API checked, uninstalled.
       - name: Install and start it
         shell: pwsh

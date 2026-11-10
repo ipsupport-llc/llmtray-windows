@@ -47,7 +47,7 @@ $appDir = Join-Path $folder 'app'
 $list = @(Get-ChildItem $appDir -Recurse -File | ForEach-Object { $_.FullName.Substring($appDir.Length + 1) }) + 'files.txt'
 [IO.File]::WriteAllLines((Join-Path $appDir 'files.txt'), [string[]]($list | Sort-Object -Unique), [Text.UTF8Encoding]::new($false))
 
-foreach ($required in 'LLMTray.exe', 'app\LLMTray.exe', 'app\runtime\llama\cpu\llama-server.exe', 'app\Assets\AppIcon.ico', 'app\NOTICE.md', 'app\Strings\de.json') {
+foreach ($required in 'LLMTray.exe', 'app\LLMTray.exe', 'app\cli\llmtray.exe', 'app\runtime\llama\cpu\llama-server.exe', 'app\Assets\AppIcon.ico', 'app\NOTICE.md', 'app\Strings\de.json') {
     if (-not (Test-Path (Join-Path $folder $required))) { throw "the build has no $required" }
 }
 New-Item -ItemType Directory -Force (Split-Path $Zip -Parent) | Out-Null

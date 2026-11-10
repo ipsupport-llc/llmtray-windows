@@ -19,6 +19,7 @@ public partial class App : Application
     TrayIcon? tray;
     JobObjectLauncher? launcher;
     ProxyServer? proxy;
+    LLMTray.Core.Control.ControlServer? control;
     SettingsStore? settingsStore;
     DispatcherQueue? dispatcher;
 
@@ -165,6 +166,21 @@ public partial class App : Application
         {
             ProxyError = L.F("Port {0} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.", AppInfo.ProxyPort);
         }
+
+        // llmtray's way in (adr/0013): this user's pipe, always on while the app runs.
+        var controlLog = Path.Combine(DataFolder, "logs", "control.log");
+        control = new LLMTray.Core.Control.ControlServer(new ControlCommands(this, dispatcher).HandleAsync, log: line =>
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(controlLog)!);
+                File.AppendAllText(controlLog, $"{DateTimeOffset.Now:O} {line}{Environment.NewLine}");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        });
+        control.Start();
 
         tray = new TrayIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"), "LLMTray");
         tray.Activated += () => (popover ??= new PopoverWindow()).Toggle();
@@ -417,6 +433,7 @@ public partial class App : Application
         {
             tray?.Dispose();
             Program.ShowEvent.Set();
+            if (control is not null) await control.DisposeAsync();
             if (proxy is not null) await proxy.DisposeAsync();
             await Host.DisposeAsync();
             // Servers are asked to end; the job ends whatever doesn't.

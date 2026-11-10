@@ -1,3 +1,5 @@
+using LLMTray.Core.Control;
+using Microsoft.Win32;
 using LLMTray.Core;
 using LLMTray.Core.Downloads;
 using LLMTray.Core.Models;
@@ -422,6 +424,9 @@ public sealed partial class MainWindow : Window
             Ui.Row(L.T("Load the last model when LLMTray starts"), L.T("So it's ready before the first request."), loadLast),
             Ui.Row(L.T("Set Up LLMTray…"), L.T("The first-run steps again: a model for this PC, web tools, apps, updates."), Ui.Button(L.T("Set Up LLMTray…"), app.ShowSetup)));
 
+        yield return Ui.Section(L.T("Command line"));
+        yield return Ui.Card(CommandLineRow());
+
         yield return Ui.Section(L.T("Language"));
         var language = new ComboBox { MinWidth = 200 };
         language.Items.Add(new ComboBoxItem { Content = L.T("Windows' language"), Tag = "" });
@@ -626,6 +631,61 @@ public sealed partial class MainWindow : Window
     }
 
     // MARK: Actions
+
+    /// <summary>
+    /// llmtray (adr/0013): the package's alias needs nothing; the portable
+    /// copy and the installer add the tool's folder to this user's PATH on request.
+    /// </summary>
+    UIElement CommandLineRow()
+    {
+        var folder = Path.Combine(AppContext.BaseDirectory, "cli");
+        var help = L.T("llmtray status, models, start, stop, pull, chat: LLMTray from a terminal or a script. llmtray help lists them.");
+        if (App.Current.Updater.Kind == InstallKind.Package)
+        {
+            return Ui.Row(L.T("Command line"), help, Ui.Value("llmtray", mono: true));
+        }
+        if (!File.Exists(Path.Combine(folder, "llmtray.exe"))) return Ui.Row(L.T("Command line"), help, Ui.Value("—"));
+        var onPath = CliOnPath(folder);
+        var button = Ui.Button(onPath ? L.T("Remove from PATH") : L.T("Add to PATH"), () =>
+        {
+            SetCliOnPath(folder, !CliOnPath(folder));
+            RenderPage();
+        });
+        return Ui.Row(L.T("Command line"), help + " " + (onPath ? L.T("It's on your PATH: open a new terminal to use it.") : L.F("Its folder: {0}", folder)), button);
+    }
+
+    static bool CliOnPath(string folder) => UserPath.Contains(RawUserPath().Value, folder);
+
+    /// <summary>HKCU\Environment\Path as stored (not expanded), and whether it's REG_EXPAND_SZ.</summary>
+    static (string Value, RegistryValueKind Kind) RawUserPath()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey("Environment");
+        if (key?.GetValue("Path", null, RegistryValueOptions.DoNotExpandEnvironmentNames) is not string value) return ("", RegistryValueKind.ExpandString);
+        return (value, key.GetValueKind("Path"));
+    }
+
+    /// <summary>
+    /// This user's PATH only (no administrator rights), edited as stored:
+    /// other entries keep their %VAR% references and the value its kind.
+    /// Running programs are told it changed.
+    /// </summary>
+    static void SetCliOnPath(string folder, bool on)
+    {
+        try
+        {
+            var (raw, kind) = RawUserPath();
+            if (UserPath.Edit(raw, folder, on) is not { } edited) return;
+            using (var key = Registry.CurrentUser.CreateSubKey("Environment"))
+            {
+                key.SetValue("Path", edited, kind is RegistryValueKind.String ? RegistryValueKind.String : RegistryValueKind.ExpandString);
+            }
+            Interop.EnvironmentBroadcast.Changed();
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or IOException or ArgumentException)
+        {
+            // Policy forbids it: the folder is shown instead.
+        }
+    }
 
     async Task SetSignInAsync(bool on)
     {

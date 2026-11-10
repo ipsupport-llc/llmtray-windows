@@ -21,6 +21,8 @@ public static class Program
         using var instance = new Mutex(initiallyOwned: true, InstanceMutexName, out var first);
         if (!first)
         {
+            // llmtray starts the app with --background: one already running stays as it is.
+            if (Environment.GetCommandLineArgs().Contains("--background")) return 0;
             if (EventWaitHandle.TryOpenExisting(ShowEventName, out var show))
             {
                 using (show) show.Set();

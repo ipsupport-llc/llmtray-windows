@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    llmtray, the command line (adr/0013): talks to the running app over its
+    control pipe and to the API for chat. Native AOT, nothing but the BCL:
+    the control protocol is shared with LLMTray.Core as source.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>llmtray</AssemblyName>
+    <RootNamespace>LLMTray.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <ApplicationIcon>..\LLMTray.App\Assets\AppIcon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\LLMTray.Core\Control\ControlProtocol.cs" Link="ControlProtocol.cs" />
+    <Compile Include="..\LLMTray.Core\Control\CliArguments.cs" Link="CliArguments.cs" />
+  </ItemGroup>
+</Project>

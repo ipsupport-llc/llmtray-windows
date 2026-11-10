@@ -38,6 +38,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 MinVersion=10.0.22621
 WizardStyle=modern
+; Uninstalling takes llmtray's folder off PATH (if the app put it there) and says so to running programs.
+ChangesEnvironment=yes
 WizardSizePercent=110
 SetupIconFile={#Source}\app\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\LLMTray.exe
@@ -134,4 +136,57 @@ begin
   finally
     Keep.Free;
   end;
+end;
+
+{ The app's "Add to PATH" (adr/0013) puts app\cli on this user's PATH;
+  uninstalling takes exactly that entry off (compared as the app compares:
+  quotes, slashes and a trailing backslash ignored) and leaves every other
+  entry as stored. Done before the uninstall proper, whose environment
+  broadcast (ChangesEnvironment) then carries the change. }
+function PlainEntry(const S: String): String;
+begin
+  Result := Trim(S);
+  StringChangeEx(Result, '"', '', True);
+  StringChangeEx(Result, '/', '\', True);
+  while (Length(Result) > 0) and (Result[Length(Result)] = '\') do
+    Delete(Result, Length(Result), 1);
+  Result := Lowercase(Result);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Raw, Rest, Part, Kept, Cli: String;
+  I: Integer;
+  Removed, First: Boolean;
+begin
+  if CurUninstallStep <> usUninstall then Exit;
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Raw) then Exit;
+  Cli := PlainEntry(ExpandConstant('{app}\app\cli'));
+  Rest := Raw;
+  Kept := '';
+  Removed := False;
+  First := True;
+  repeat
+    I := Pos(';', Rest);
+    if I = 0 then
+    begin
+      Part := Rest;
+      Rest := '';
+    end
+    else
+    begin
+      Part := Copy(Rest, 1, I - 1);
+      Delete(Rest, 1, I);
+    end;
+    if (Trim(Part) <> '') and (PlainEntry(Part) = Cli) then
+      Removed := True
+    else
+    begin
+      if not First then Kept := Kept + ';';
+      Kept := Kept + Part;
+      First := False;
+    end;
+  until I = 0;
+  { RegWriteStringValue keeps the value's kind (REG_EXPAND_SZ stays so). }
+  if Removed then RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Kept);
 end;
