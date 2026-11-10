@@ -211,15 +211,16 @@ public partial class App : Application
         setupWindow.Activate();
     }
 
-    internal void SetupClosed(SetupWindow closed)
+    internal void SetupClosed(SetupWindow closed, bool showWindow)
     {
         if (setupWindow == closed) setupWindow = null;
-        // Something stays open: the window with the models and settings.
-        ShowWindow();
+        // After a first run: the window with the models and settings.
+        if (showWindow) dispatcher?.TryEnqueue(ShowWindow);
     }
 
-    /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it.</summary>
-    public void LoadWhenDownloaded(LLMTray.Core.Downloads.DownloadJob job, string path) => loadAfterDownload = (job, path);
+    /// <summary>Loads the model at <paramref name="path"/> once <paramref name="job"/> has downloaded it; nulls forget it.</summary>
+    public void LoadWhenDownloaded(LLMTray.Core.Downloads.DownloadJob? job, string? path) =>
+        loadAfterDownload = job is null || path is null ? null : (job, path);
 
     /// <summary>The chat window; a new chat in it when asked.</summary>
     public void ShowChat(bool newChat = false)

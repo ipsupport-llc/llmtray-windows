@@ -57,8 +57,12 @@ try {
         } until ($setup -or (Get-Date) -gt $deadline)
         if (-not $setup) { throw 'the setup wizard did not open on a fresh install' }
         function Press([string]$label) {
-            $b = $setup.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-                (New-Object System.Windows.Automation.PropertyCondition($wname, $label)))
+            $until = (Get-Date).AddSeconds(15)
+            do {
+                $b = $setup.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                    (New-Object System.Windows.Automation.PropertyCondition($wname, $label)))
+                if (-not $b) { Start-Sleep -Milliseconds 500 }
+            } until ($b -or (Get-Date) -gt $until)
             if (-not $b) { throw "no '$label' button in the wizard" }
             $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
             Start-Sleep -Seconds 2
@@ -73,6 +77,13 @@ try {
         Press 'Finish'
         $settings = Get-Content (Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalState\settings.json") -Raw | ConvertFrom-Json
         if ($settings.setupCompleted -ne 1) { throw "setup didn't record that it finished: $($settings.setupCompleted)" }
+        $until = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 500
+            $main = $wauto::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,
+                (New-Object System.Windows.Automation.PropertyCondition($wname, 'LLMTray')))
+        } until ($main -or (Get-Date) -gt $until)
+        if (-not $main) { throw 'the main window did not open after Finish' }
         Write-Host 'setup wizard: 8 steps walked through, finished'
     }
     catch {

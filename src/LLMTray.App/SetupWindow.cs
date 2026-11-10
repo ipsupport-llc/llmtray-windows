@@ -39,7 +39,17 @@ sealed class SetupWindow : Window
     UpdateChannel channel = App.Current.Updater.Channel;
     string? pickedTitle;
     string? hardware;
+    long gpuMemory;
     bool finished;
+    readonly HashSet<string> requested = [];
+    readonly bool firstRun = SetupWizard.ShouldOpen(App.Current.Settings);
+    // How things were when it opened: Skip puts a step back to them.
+    readonly string openedFolder = App.Current.ModelsFolder;
+    readonly HashSet<string> openedTools = [];
+    readonly bool openedCheck = App.Current.Settings.CheckForUpdates;
+    readonly UpdateChannel openedChannel = App.Current.Updater.Channel;
+    bool? openedSignIn;
+    readonly Action<DownloadState> downloadsChanged;
 
     public SetupWindow()
     {
@@ -49,18 +59,57 @@ sealed class SetupWindow : Window
         Content = Layout();
         Resize(780, 640);
         back.Click += (_, _) => Go(step - 1);
-        skip.Click += (_, _) => Go(step + 1);
+        skip.Click += (_, _) =>
+        {
+            Revert(step);
+            Go(step + 1);
+        };
         next.Click += (_, _) =>
         {
             if (step == Step.Done) Finish();
             else Go(step + 1);
         };
         AppWindow.Closing += (_, _) => Close(applyChoices: false);
-        App.Current.DownloadsChanged += _ => { if (step is Step.ChatModel or Step.Done) Render(); };
+        downloadsChanged = _ => { if (!finished && step is Step.ChatModel or Step.Done) Render(); };
+        App.Current.DownloadsChanged += downloadsChanged;
+        Closed += (_, _) => App.Current.DownloadsChanged -= downloadsChanged;
         _ = LoadHardwareAsync();
         _ = LoadSignInAsync();
-        foreach (var on in App.Current.Profiles.ResolvedFor(null).EnabledTools) webTools.Add(on);
+        foreach (var on in App.Current.Profiles.ResolvedFor(null).EnabledTools)
+        {
+            webTools.Add(on);
+            openedTools.Add(on);
+        }
         Render();
+    }
+
+    /// <summary>Skip: the step as it was when setup opened.</summary>
+    void Revert(Step skipped)
+    {
+        var app = App.Current;
+        switch (skipped)
+        {
+            case Step.ModelsFolder when !app.Downloads.State.IsActive && requested.Count == 0
+                && !string.Equals(app.ModelsFolder, openedFolder, StringComparison.OrdinalIgnoreCase):
+                app.SetModelsFolder(openedFolder);
+                break;
+            case Step.ChatModel:
+                // The pick is undone: its download stops and nothing loads by itself.
+                if (app.Downloads.State.Current is { } job && requested.Contains(job.Title)) app.Downloads.CancelCurrent();
+                app.LoadWhenDownloaded(null, null);
+                pickedTitle = null;
+                break;
+            case Step.WebTools:
+                webTools.Clear();
+                webTools.UnionWith(openedTools);
+                webToolsTouched = false;
+                break;
+            case Step.Updates:
+                signIn = openedSignIn;
+                checkUpdates = openedCheck;
+                channel = openedChannel;
+                break;
+        }
     }
 
     void Resize(int width, int height)
@@ -180,13 +229,15 @@ sealed class SetupWindow : Window
             Ui.Row(L.T("Models folder"), found > 0 ? L.F("Models found: {0}", found) : L.T("No models in this folder yet. The next step offers some to download."),
                 Ui.Horizontal(Ui.Value(app.ModelsFolder, mono: true), Ui.Button(L.T("Choose Another Folder…"), ChooseFolder))),
         };
+        var downloading = app.Downloads.State.IsActive || requested.Count > 0;
         if (Directory.Exists(lmStudio) && !string.Equals(app.ModelsFolder, lmStudio, StringComparison.OrdinalIgnoreCase)
             && Directory.EnumerateFiles(lmStudio, "*.gguf", SearchOption.AllDirectories).Any())
         {
-            rows.Add(Ui.Row(L.F("{0} (LM Studio's, shared with it)", lmStudio), null,
-                Ui.Button(L.T("Use"), () => { app.SetModelsFolder(lmStudio); Render(); })));
+            var use = Ui.Button(L.T("Use"), () => { if (!app.Downloads.State.IsActive && requested.Count == 0) { app.SetModelsFolder(lmStudio); Render(); } });
+            use.IsEnabled = !downloading;
+            rows.Add(Ui.Row(L.F("{0} (LM Studio's, shared with it)", lmStudio), null, use));
         }
-        if (app.Downloads.State.IsActive)
+        if (downloading)
         {
             rows.Add(Ui.Row(L.T("The chat model is downloading into this folder. Change it in Settings after setup, or pick another chat model first."), null, null));
         }
@@ -195,7 +246,8 @@ sealed class SetupWindow : Window
 
     async void ChooseFolder()
     {
-        if (App.Current.Downloads.State.IsActive) return;
+        // A download goes into the folder it started in: no change meanwhile.
+        if (App.Current.Downloads.State.IsActive || requested.Count > 0) return;
         try
         {
             var picker = new Windows.Storage.Pickers.FolderPicker();
@@ -236,13 +288,15 @@ sealed class SetupWindow : Window
             body.Children.Add(Ui.Card(local.Take(8).Select(m => (UIElement)Ui.Row(m.Name, Ui.Size(m.SizeBytes),
                 Ui.Button(app.Settings.LastModel == m.Name ? L.T("Selected") : L.T("Use"), () =>
                 {
+                    // The latest pick wins: a download picked before doesn't load over it.
+                    app.LoadWhenDownloaded(null, null);
                     _ = app.LoadAsync(m);
                     pickedTitle = m.Name;
                     Render();
                 }))).ToArray()));
         }
 
-        var picks = SetupWizard.Picks(FeaturedModels.All, TotalMemory(), app.Settings.DownloadSource)
+        var picks = SetupWizard.Picks(FeaturedModels.All, MemoryForModels(), app.Settings.DownloadSource)
             .Where(p => !SetupWizard.IsDownloaded(p.Model, app.ModelsFolder)).ToList();
         body.Children.Add(Ui.Section(L.T("Download")));
         if (picks.Count == 0)
@@ -263,10 +317,19 @@ sealed class SetupWindow : Window
                     _ => L.T("Lighter than the recommended one: faster and leaves memory to other apps, but its answers are simpler."),
                 };
                 var busy = downloads.Current?.Title == p.Model.Title;
-                var action = busy
-                    ? (UIElement)Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"))
-                    : Ui.Button(pickedTitle == p.Model.Title ? L.T("Selected") : L.T("Download"), () => _ = DownloadAsync(p.Model),
+                UIElement action;
+                if (busy)
+                {
+                    action = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
+                }
+                else
+                {
+                    // Once asked for (queued, or its address being looked up), not again.
+                    var button = Ui.Button(requested.Contains(p.Model.Title) ? L.T("Selected") : L.T("Download"), () => _ = DownloadAsync(p.Model),
                         accent: p.Fit == SetupWizard.Fit.Recommended);
+                    button.IsEnabled = !requested.Contains(p.Model.Title);
+                    action = button;
+                }
                 var row = Ui.Row($"{p.Model.Title} · {Ui.Size(p.Model.TotalSize)}", $"{L.T(p.Model.Note)} {fit}", action);
                 return (UIElement)row;
             }).ToArray()));
@@ -278,17 +341,25 @@ sealed class SetupWindow : Window
     async Task DownloadAsync(FeaturedModel model)
     {
         var app = App.Current;
+        if (!requested.Add(model.Title)) return;
+        // One folder for the whole download: where it lands is where it's looked for.
+        var root = app.ModelsFolder;
+        Render();
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            var job = await model.JobAsync(app.Sources[app.Settings.DownloadSource], app.ModelsFolder, timeout.Token);
+            var job = await model.JobAsync(app.Sources[app.Settings.DownloadSource], root, timeout.Token);
+            if (finished) return;
             pickedTitle = model.Title;
             // Loaded as soon as it's here: the one thing needed to chat.
-            app.LoadWhenDownloaded(job, Path.Combine(app.ModelsFolder, model.Folder, model.File.Name));
+            app.LoadWhenDownloaded(job, FeaturedModel.Inside(root, Path.Combine(model.Folder, model.File.Name)));
             app.Downloads.Enqueue(job);
         }
         catch (Exception e)
         {
+            requested.Remove(model.Title);
+            if (finished) return;
+            Render();
             body.Children.Add(Ui.Caption(L.F("The download couldn't start: {0}", e.Message), Ui.Red));
             return;
         }
@@ -378,18 +449,20 @@ sealed class SetupWindow : Window
         if (checkUpdates != app.Settings.CheckForUpdates) app.UpdateSettings(app.Settings with { CheckForUpdates = checkUpdates });
         if (channel != app.Updater.Channel) app.Updater.SetChannel(channel);
         Close(applyChoices: true);
-        app.ShowWindow();
+        // Really closed, not hidden: nothing of it stays behind.
+        base.Close();
     }
 
     void Close(bool applyChoices)
     {
         if (finished) return;
         finished = true;
+        App.Current.DownloadsChanged -= downloadsChanged;
         // Done either way: it doesn't open by itself again.
         var app = App.Current;
         app.UpdateSettings(app.Settings with { SetupCompleted = SetupWizard.Version });
-        if (applyChoices) AppWindow.Hide();
-        app.SetupClosed(this);
+        // On a first run the main window comes next; opened again later, closing just closes.
+        app.SetupClosed(this, showWindow: firstRun || applyChoices);
     }
 
     async Task LoadSignInAsync()
@@ -397,6 +470,7 @@ sealed class SetupWindow : Window
         try
         {
             signIn = await SignInStartup.IsOnAsync();
+            openedSignIn = signIn;
         }
         catch (Exception)
         {
@@ -414,15 +488,41 @@ sealed class SetupWindow : Window
             hardware = devices is { Count: > 0 }
                 ? string.Join(", ", devices.Select(d => d.TotalMiB > 0 ? $"{d.Description} ({Ui.Size(d.TotalMiB << 20)})" : d.Description))
                 : L.T("None the runtime can use: models run on the CPU.");
+            gpuMemory = devices is { Count: > 0 } ? devices.Max(d => d.TotalMiB) << 20 : 0;
         }
         catch (Exception)
         {
             hardware = L.T("None the runtime can use: models run on the CPU.");
         }
-        DispatcherQueue.TryEnqueue(() => { if (step == Step.YourPc) Render(); });
+        DispatcherQueue.TryEnqueue(() => { if (!finished && step is Step.YourPc or Step.ChatModel) Render(); });
     }
 
-    static long TotalMemory() => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+    /// <summary>What a model may use: the larger of the PC's memory and its GPU's own.</summary>
+    long MemoryForModels() => Math.Max(TotalMemory(), gpuMemory);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct MemoryStatus
+    {
+        public uint Length;
+        public uint Load;
+        public ulong TotalPhys;
+        public ulong AvailPhys;
+        public ulong TotalPageFile;
+        public ulong AvailPageFile;
+        public ulong TotalVirtual;
+        public ulong AvailVirtual;
+        public ulong AvailExtendedVirtual;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+
+    /// <summary>The PC's physical memory (not the .NET heap's limit).</summary>
+    static long TotalMemory()
+    {
+        var status = new MemoryStatus { Length = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MemoryStatus>() };
+        return GlobalMemoryStatusEx(ref status) ? (long)status.TotalPhys : GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+    }
 
     static long? FreeSpace(string folder)
     {
