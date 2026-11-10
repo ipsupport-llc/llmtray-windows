@@ -236,6 +236,49 @@ public partial class App : Application
         if (newChat) chatWindow.NewChat();
     }
 
+    readonly Dictionary<string, (DateTime Written, LLMTray.Core.Chat.ThinkingStyle Style)> thinkingStyles = new(StringComparer.OrdinalIgnoreCase);
+
+    readonly HashSet<string> readingStyles = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Raised (on the UI thread) when a model's thinking style has been read.</summary>
+    public event Action? ThinkingStylesChanged;
+
+    /// <summary>
+    /// Whether a model thinks, from the chat template in its GGUF header,
+    /// cached until the file changes. Never reads on the caller's thread: a
+    /// model not read yet is None until <see cref="ThinkingStylesChanged"/>.
+    /// A file that couldn't be read isn't cached, so it's tried again.
+    /// </summary>
+    public LLMTray.Core.Chat.ThinkingStyle ThinkingStyleOf(ModelEntry model)
+    {
+        DateTime written;
+        try
+        {
+            written = File.GetLastWriteTimeUtc(model.FullPath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return LLMTray.Core.Chat.ThinkingStyle.None;
+        }
+        lock (thinkingStyles)
+        {
+            if (thinkingStyles.TryGetValue(model.FullPath, out var hit) && hit.Written == written) return hit.Style;
+            if (!readingStyles.Add(model.FullPath)) return LLMTray.Core.Chat.ThinkingStyle.None;
+        }
+        var path = model.FullPath;
+        _ = Task.Run(() =>
+        {
+            var read = LLMTray.Core.Licenses.GgufMetadata.TryReadStrings(path, ["tokenizer.chat_template"]);
+            lock (thinkingStyles)
+            {
+                readingStyles.Remove(path);
+                if (read is not null) thinkingStyles[path] = (written, LLMTray.Core.Chat.Thinking.Style(read.GetValueOrDefault("tokenizer.chat_template")));
+            }
+            if (read is not null) dispatcher?.TryEnqueue(() => ThinkingStylesChanged?.Invoke());
+        });
+        return LLMTray.Core.Chat.ThinkingStyle.None;
+    }
+
     public void ShowLog()
     {
         if (Quitting) return;

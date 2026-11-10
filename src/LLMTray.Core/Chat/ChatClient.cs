@@ -51,8 +51,9 @@ public sealed class ChatMessage
 /// <param name="Thinking">False turns a thinking model's reasoning off (enable_thinking).</param>
 /// <param name="Profile">The model's profile: its system prompt and sampling go with every request (adr/0008).</param>
 /// <param name="Tools">The chat's tools; the profile says which are on (adr/0009).</param>
+/// <param name="Effort">How much a thinking model may think (adr/0011), for a model whose template has <paramref name="Style"/>.</param>
 public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null,
-    Tools.ToolBox? Tools = null);
+    Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None);
 
 /// <summary>
 /// One chat: its messages, sending a turn to the local API and streaming
@@ -188,6 +189,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         lock (sync)
         {
             history = History(Messages, options);
+            // Low and Medium: the model is told its budget with this message only (never saved).
+            if (options.Thinking && Chat.Thinking.BudgetToTell(options.Style, options.Effort) is int budget) AddNote(history, Chat.Thinking.Note(budget));
             Messages.Add(answer);
             turn = new CancellationTokenSource();
             token = turn.Token;
@@ -550,6 +553,28 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         return history;
     }
 
+    /// <summary>Puts a line before the latest user message's text.</summary>
+    static void AddNote(JsonArray history, string note)
+    {
+        if (history.LastOrDefault(m => m?["role"]?.GetValue<string>() == "user") is not JsonObject last) return;
+        switch (last["content"])
+        {
+            case JsonValue v when v.TryGetValue<string>(out var text):
+                last["content"] = note + "\n\n" + text;
+                break;
+            case JsonArray parts:
+                if (parts.FirstOrDefault(p => p?["type"]?.GetValue<string>() == "text") is JsonObject textPart)
+                {
+                    textPart["text"] = note + "\n\n" + textPart["text"]?.GetValue<string>();
+                }
+                else
+                {
+                    parts.Insert(0, new JsonObject { ["type"] = "text", ["text"] = note });
+                }
+                break;
+        }
+    }
+
     static JsonObject Body(IEnumerable<ChatMessage> messages, ChatOptions options, bool stream) =>
         Body(History(messages, options), options, stream, null, false);
 
@@ -572,7 +597,23 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             if (toolChoiceNone) body["tool_choice"] = "none";
         }
         // Templates that think (Gemma 4, Qwen 3, LFM Thinking) read enable_thinking; others ignore it.
-        if (!options.Thinking) body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };
+        if (!options.Thinking)
+        {
+            // The app's own one-shot requests: as little thinking as the template allows.
+            body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };
+            if (options.Style == ThinkingStyle.Levels)
+            {
+                body["chat_template_kwargs"]!["reasoning_effort"] = "low";
+            }
+            else if (options.Style == ThinkingStyle.Budget)
+            {
+                body["thinking_budget_tokens"] = 0;
+            }
+        }
+        else
+        {
+            foreach (var (key, value) in Chat.Thinking.Fields(options.Style, options.Effort)) body[key] = value?.DeepClone();
+        }
         return body;
     }
 
