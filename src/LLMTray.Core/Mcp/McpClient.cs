@@ -32,10 +32,28 @@ public sealed class McpTimeoutException(string message) : Exception(message);
 /// answered with an error, <see cref="NotSent"/> when the message surely
 /// never left.
 /// </summary>
-public sealed class McpException(string message, bool fromServer = false, bool notSent = false) : Exception(message)
+public class McpException(string message, bool fromServer = false, bool notSent = false) : Exception(message)
 {
     public bool FromServer { get; } = fromServer;
     public bool NotSent { get; } = notSent;
+}
+
+/// <summary>
+/// The server refused the request for want of a sign-in (401) or of scopes
+/// (403 insufficient_scope): nothing was done. <see cref="Challenge"/> is its
+/// <c>WWW-Authenticate</c> header.
+/// </summary>
+public sealed class McpAuthException(string message, int status, string? challenge) : McpException(message, notSent: true)
+{
+    public int Status { get; } = status;
+    public string? Challenge { get; } = challenge;
+}
+
+/// <summary>A signed-in server's token for each request, and a refresh after a 401 (null: none to give).</summary>
+public interface IMcpBearer
+{
+    Task<string?> TokenAsync(CancellationToken cancellationToken);
+    Task<string?> RefreshAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -554,10 +572,11 @@ public sealed class McpStdioTransport(string executable, IReadOnlyList<string> a
 
 /// <summary>
 /// A URL server (Streamable HTTP): a POST per message, the reply plain
-/// JSON or an SSE stream; the session id kept. No OAuth in v1: a token goes
-/// in a header.
+/// JSON or an SSE stream; the session id kept. A token goes in a header the
+/// user gave, or comes from a sign-in (<see cref="IMcpBearer"/>).
 /// </summary>
-public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictionary<string, string> headers) : IMcpTransport
+/// <param name="bearer">A signed-in server's token (adr/0015); a 401 is refreshed once and sent again.</param>
+public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictionary<string, string> headers, IMcpBearer? bearer = null) : IMcpTransport
 {
     /// <summary>A reply (one JSON body, or one SSE event) longer than this ends the connection.</summary>
     const int MaxMessage = 8 << 20;
@@ -579,18 +598,43 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
         if (Volatile.Read(ref closed) == 1) throw new McpException("the connection is closed", notSent: true);
         using var both = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, closing.Token);
         var ct = both.Token;
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(message.ToJsonString(), Encoding.UTF8, "application/json"),
-        };
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-        foreach (var (k, v) in headers) request.Headers.TryAddWithoutValidation(k, v);
-        if (session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id", session);
-        if (ProtocolVersion is not null) request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", ProtocolVersion);
         try
         {
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            var token = bearer is null ? null : await bearer.TokenAsync(ct).ConfigureAwait(false);
+            var refreshed = false;
+            HttpResponseMessage response;
+            while (true)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = new StringContent(message.ToJsonString(), Encoding.UTF8, "application/json"),
+                };
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+                foreach (var (k, v) in headers) request.Headers.TryAddWithoutValidation(k, v);
+                if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                if (session is not null) request.Headers.TryAddWithoutValidation("Mcp-Session-Id", session);
+                if (ProtocolVersion is not null) request.Headers.TryAddWithoutValidation("MCP-Protocol-Version", ProtocolVersion);
+                response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                if ((int)response.StatusCode is 401 or 403)
+                {
+                    var challenge = response.Headers.WwwAuthenticate.Select(h => h.ToString()).FirstOrDefault(h => h.StartsWith("Bearer", StringComparison.OrdinalIgnoreCase));
+                    var status = (int)response.StatusCode;
+                    response.Dispose();
+                    // A token refused (expired early, revoked): refreshed once and the same message sent once more; it wasn't done.
+                    if (status == 401 && token is not null && bearer is not null && !refreshed)
+                    {
+                        refreshed = true;
+                        token = await bearer.RefreshAsync(ct).ConfigureAwait(false);
+                        if (token is not null) continue;
+                    }
+                    if (status == 401) throw new McpAuthException("the server needs you to sign in", 401, challenge);
+                    if (McpOAuth.ParseChallenge(challenge) is { Error: "insufficient_scope" }) throw new McpAuthException("the server needs more access than was granted", 403, challenge);
+                    throw new McpException("the server answered HTTP 403", notSent: true);
+                }
+                break;
+            }
+            using var answered = response;
             if (response.Headers.TryGetValues("Mcp-Session-Id", out var ids)) session = ids.FirstOrDefault() ?? session;
             if ((int)response.StatusCode == 404 && session is not null)
             {

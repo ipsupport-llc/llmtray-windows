@@ -28,6 +28,9 @@ public sealed record McpServerConfig
     /// <summary>Tools (by definition hash) the user lets run without asking.</summary>
     public HashSet<string> RunWithoutAsking { get; init; } = [];
 
+    /// <summary>A URL server signed in to with OAuth (adr/0015): where and as whom; the tokens are kept apart.</summary>
+    public McpOAuthState? OAuth { get; init; }
+
     [JsonIgnore]
     public bool IsCommand => Command is { Length: > 0 };
 
@@ -38,6 +41,7 @@ public sealed record McpServerConfig
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(List<McpServerConfig>))]
+[JsonSerializable(typeof(OAuthTokens))]
 internal sealed partial class McpJson : JsonSerializerContext;
 
 /// <summary>Reads and writes the servers file, whole and atomically.</summary>

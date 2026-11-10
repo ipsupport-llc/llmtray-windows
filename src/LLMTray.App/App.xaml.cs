@@ -53,6 +53,8 @@ public partial class App : Application
 
     /// <summary>The user's MCP servers (adr/0012).</summary>
     public LLMTray.Core.Mcp.McpHub Mcp { get; private set; } = null!;
+    /// <summary>Signing in to web MCP servers (adr/0015).</summary>
+    public LLMTray.Core.Mcp.McpSignIn McpSignIn { get; private set; } = null!;
 
     /// <summary>The chat's tools (adr/0009); each profile switches them on.</summary>
     public LLMTray.Core.Tools.ToolBox Tools { get; private set; } = null!;
@@ -147,8 +149,14 @@ public partial class App : Application
 
         launcher = new JobObjectLauncher();
         var mcpStore = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(DataFolder, "mcp-servers.json"));
-        Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, Web, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, JobObjectLauncher.Own);
+        // MCP requests and sign-ins follow no redirects (a token must not be carried elsewhere) and keep no cookies.
+        var mcpWeb = CreateWebClient(redirects: false);
+        McpSignIn = new LLMTray.Core.Mcp.McpSignIn(mcpStore, new ProtectedSecrets(Path.Combine(DataFolder, "secrets")),
+            new LLMTray.Core.Mcp.OAuthHttp(mcpWeb), url => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose());
+        Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, mcpWeb, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, JobObjectLauncher.Own,
+            signIn: McpSignIn);
         Mcp.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
+        McpSignIn.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         mcpStore.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         var runtimeRoot = RuntimeRoot;
         Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), m => Profiles.ResolvedFor(m.FullPath).ServerOptions,
@@ -388,10 +396,12 @@ public partial class App : Application
         if (Settings.DownloadSource != source) UpdateSettings(Settings with { DownloadSource = source });
     }
 
-    static HttpClient CreateWebClient()
+    static HttpClient CreateWebClient(bool redirects = true)
     {
         var handler = new SocketsHttpHandler
         {
+            AllowAutoRedirect = redirects,
+            UseCookies = redirects,
             UseProxy = true,
             DefaultProxyCredentials = CredentialCache.DefaultCredentials,
             AutomaticDecompression = DecompressionMethods.All,

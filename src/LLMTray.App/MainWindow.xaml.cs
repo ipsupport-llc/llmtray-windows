@@ -165,7 +165,8 @@ public sealed partial class MainWindow : Window
         var tools = st.Tools is null ? "?" : string.Join(",", st.Tools.Select(t => t.DefinitionHash));
         var log = mcpLogOpen.Contains(c.Key) ? $"{st.Log.Count}:{st.Log.LastOrDefault()}" : "";
         var reviewed = string.Join(",", c.Reviewed.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Key + "=" + kv.Value));
-        return $"{c.Key}|{c.Name}|{c.Enabled}|{st.Status}|{st.Running}|{tools}|{reviewed}|{string.Join(",", c.RunWithoutAsking.Order(StringComparer.Ordinal))}|{log}";
+        var signIn = $"{st.NeedsSignIn}|{c.OAuth?.IssuerHost}|{c.OAuth?.Scope}|{c.OAuth?.StepUpScope}|{App.Current.McpSignIn.IsSigningIn(c.Key)}";
+        return $"{c.Key}|{c.Name}|{c.Enabled}|{st.Status}|{st.Running}|{tools}|{reviewed}|{string.Join(",", c.RunWithoutAsking.Order(StringComparer.Ordinal))}|{log}|{signIn}";
     }));
 
     string UpdatesKey()
