@@ -55,11 +55,11 @@ Both check for updates at start and on **Check for updates** (stable or beta
 channel).
 
 With [Scoop](https://scoop.sh), the portable build installs and updates from
-this repository's bucket (adr/0005):
+IPSupport's bucket (adr/0005):
 
 ```
-scoop bucket add llmtray https://github.com/ipsupport-llc/llmtray-windows
-scoop install llmtray/llmtray
+scoop bucket add ipsupport https://github.com/ipsupport-llc/scoop-bucket
+scoop install ipsupport/llmtray
 scoop update llmtray        # quit LLMTray first
 ```
 

@@ -185,25 +185,28 @@ jobs:
           gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --verify-tag \
             --title "LLMTray for Windows ${TAG#v}" --notes-file notes.md "${flags[@]}"
 
-      # The Scoop bucket (adr/0005) follows the release by itself: the ZIPs'
-      # own SHA-256, committed to main by the Actions bot (it may bypass
-      # the main ruleset for this).
+      # The Scoop bucket (ipsupport-llc/scoop-bucket, adr/0005) follows the
+      # release by itself: the ZIPs' own SHA-256, pushed with that repo's
+      # deploy key (write access to the bucket only).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
           path: repo
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ipsupport-llc/scoop-bucket
+          ssh-key: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
+          path: bucket
       - name: Point the Scoop bucket at this release
         shell: pwsh
         env:
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
         run: |
-          repo/scripts/bump-scoop.ps1 -Version $env:DISPLAY_VERSION -Dist dist
-          Set-Location repo
+          repo/scripts/bump-scoop.ps1 -Version $env:DISPLAY_VERSION -Dist dist -Manifest bucket/bucket/llmtray.json
+          Set-Location bucket
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add bucket/llmtray.json
           git diff --cached --quiet
           if ($LASTEXITCODE -eq 0) { Write-Host 'already current'; exit 0 }
-          git commit -m "Scoop: llmtray $env:DISPLAY_VERSION"
+          git commit -m "llmtray $env:DISPLAY_VERSION"
           git push origin HEAD:main
-

@@ -36,8 +36,10 @@ The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
    ZIPs, and creates a GitHub pre-release with the packages, the ZIPs and
    `LLMTray-signing.cer`.
 
-4. The same run points the Scoop bucket (adr/0005) at the new ZIPs:
-   `scripts/bump-scoop.ps1` writes their SHA-256 into `bucket/llmtray.json`,
-   and the Actions bot commits it to `main`. Nothing to do by hand.
+4. The same run points the Scoop bucket
+   ([ipsupport-llc/scoop-bucket](https://github.com/ipsupport-llc/scoop-bucket),
+   adr/0005) at the new ZIPs: `scripts/bump-scoop.ps1` writes their SHA-256
+   into `bucket/llmtray.json` there, pushed with the bucket's deploy key
+   (secret `SCOOP_BUCKET_DEPLOY_KEY`). Nothing to do by hand.
 
 Stable tags fail until there is a public certificate.

@@ -4,13 +4,15 @@ Status: accepted (2026-11-10).
 
 ## Decision
 
-This repository is also a [Scoop](https://scoop.sh) bucket:
-`bucket/llmtray.json` installs the portable ZIP (ADR 0004) for x64 or
-ARM64.
+IPSupport's [Scoop](https://scoop.sh) bucket,
+[ipsupport-llc/scoop-bucket](https://github.com/ipsupport-llc/scoop-bucket),
+holds `bucket/llmtray.json`, which installs the portable ZIP (ADR 0004) for
+x64 or ARM64. (The bucket first lived in this repository; it moved so the
+release workflow can update it, see "The bump".)
 
-- **Install and update.** `scoop bucket add llmtray
-  https://github.com/ipsupport-llc/llmtray-windows`, then
-  `scoop install llmtray/llmtray`, and `scoop update llmtray` for each new
+- **Install and update.** `scoop bucket add ipsupport
+  https://github.com/ipsupport-llc/scoop-bucket`, then
+  `scoop install ipsupport/llmtray`, and `scoop update llmtray` for each new
   release. Like the portable ZIP, it needs no administrator rights.
 - **Integrity.** The manifest pins each ZIP's SHA-256, and Scoop checks it
   on download. `autoupdate` copies the hash from the `digest` GitHub's API
@@ -25,10 +27,12 @@ ARM64.
 - **Data.** Settings, logs and models live outside the app folder
   (ADR 0004), so the manifest persists nothing and an update keeps them.
 - **The bump** is automatic: after publishing a release, `release.yml`
-  writes the ZIPs' SHA-256 into the manifest (`scripts/bump-scoop.ps1`)
-  and the Actions bot commits it to `main`. The main ruleset lets the bot
-  past for this; `checkver`/`autoupdate` stay for running Scoop's tools
-  by hand.
+  writes the ZIPs' SHA-256 into the manifest (`scripts/bump-scoop.ps1`) and
+  pushes it to the bucket with a deploy key that can write to the bucket
+  only (secret `SCOOP_BUCKET_DEPLOY_KEY`). This repository's `main` takes
+  PRs only, and its ruleset can't let the Actions bot past, which is why
+  the bucket has a repository of its own. `checkver` and `autoupdate` stay,
+  for running Scoop's tools by hand.
 
 ## Costs
 
