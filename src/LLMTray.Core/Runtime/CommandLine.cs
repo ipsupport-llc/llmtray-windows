@@ -9,6 +9,39 @@ namespace LLMTray.Core.Runtime;
 /// </summary>
 public static class CommandLine
 {
+    /// <summary>
+    /// Splits what a user typed into arguments: spaces separate them, double
+    /// quotes keep spaces inside one (<c>--alias "my model"</c>).
+    /// </summary>
+    public static IReadOnlyList<string> Split(string? text)
+    {
+        var args = new List<string>();
+        if (string.IsNullOrWhiteSpace(text)) return args;
+        var current = new StringBuilder();
+        bool quoted = false, any = false;
+        foreach (var c in text)
+        {
+            if (c == '"')
+            {
+                quoted = !quoted;
+                any = true;
+            }
+            else if (char.IsWhiteSpace(c) && !quoted)
+            {
+                if (any) args.Add(current.ToString());
+                current.Clear();
+                any = false;
+            }
+            else
+            {
+                current.Append(c);
+                any = true;
+            }
+        }
+        if (any) args.Add(current.ToString());
+        return args;
+    }
+
     public static string Join(string executable, IEnumerable<string> arguments)
     {
         var sb = new StringBuilder();

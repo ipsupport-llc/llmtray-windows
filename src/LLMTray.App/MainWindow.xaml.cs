@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
         foreach (var item in Tabs.MenuItems.OfType<NavigationViewItem>()) item.Content = L.T((string)item.Content);
         ChatButtonText.Text = L.T("Chat");
         InstallUpdateButton.Content = L.T("Install and restart");
+        RestartButton.Content = L.T("Restart Server");
         DownloadCancel.Content = L.T("Cancel");
         ToolTipService.SetToolTip(StopButton, L.T("Unload the model"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(StopButton, L.T("Unload the model"));
@@ -76,6 +77,11 @@ public sealed partial class MainWindow : Window
             if (page is "models" or "server") RenderPageSoon();
         };
         App.Current.DownloadsChanged += RenderDownloads;
+        App.Current.ProfilesChanged += () =>
+        {
+            RenderRestartBar();
+            if (page is "profiles" or "models") RenderPageSoon();
+        };
         App.Current.Updater.Changed += () =>
         {
             RenderUpdateBar();
@@ -106,7 +112,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>The tab names, for translation (MainWindow.xaml holds them in English).</summary>
-    internal static readonly string[] TabNames = [L.T("Models"), L.T("Server"), L.T("General"), L.T("Updates"), L.T("About")];
+    internal static readonly string[] TabNames = [L.T("Models"), L.T("Profiles"), L.T("Server"), L.T("General"), L.T("Updates"), L.T("About")];
 
     /// <summary>Opens a tab ("models", "server", "general", "updates").</summary>
     public void ShowPage(string tag)
@@ -139,7 +145,27 @@ public sealed partial class MainWindow : Window
         ErrorText.Foreground = Ui.Red;
         ErrorText.Visibility = errors.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         StopButton.IsEnabled = state.Status is HostStatus.Running or HostStatus.Loading;
+        RenderRestartBar();
     }
+
+    /// <summary>The loaded model's profile changed a launch setting: a restart applies it (never automatic).</summary>
+    void RenderRestartBar()
+    {
+        var app = App.Current;
+        if (app.RestartNeeded && state.Model is { } model)
+        {
+            RestartBar.Title = L.T("Restart Server");
+            RestartBar.Message = L.F("{0} runs with the launch settings it started with. Restart it to use its profile's new ones; requests in progress are cut off.", model.Name);
+            RestartButton.IsEnabled = !state.IsBusy;
+            RestartBar.IsOpen = true;
+        }
+        else
+        {
+            RestartBar.IsOpen = false;
+        }
+    }
+
+    void Restart_Click(object sender, RoutedEventArgs e) => _ = App.Current.RestartAsync();
 
     void RenderUpdateBar()
     {
@@ -271,6 +297,7 @@ public sealed partial class MainWindow : Window
         var parts = page switch
         {
             "server" => ServerPage(),
+            "profiles" => ProfilesPage(),
             "general" => GeneralPage(),
             "updates" => UpdatesPage(),
             "about" => AboutPage(),
@@ -337,7 +364,7 @@ public sealed partial class MainWindow : Window
             ? Ui.Button(L.T("Unload"), () => _ = App.Current.StopAsync())
             : Ui.Button(L.T("Load"), () => _ = App.Current.LoadAsync(model));
         var delete = Ui.IconButton("", L.T("Delete the model's files"), () => _ = DeleteAsync(model));
-        var right = Ui.Horizontal(action, delete);
+        var right = Ui.Horizontal(ProfilePicker(model.FullPath), action, delete);
         Grid.SetColumn(right, 1);
         grid.Children.Add(right);
         grid.DoubleTapped += (_, _) => { if (!running) _ = App.Current.LoadAsync(model); };
@@ -368,24 +395,9 @@ public sealed partial class MainWindow : Window
             Ui.Row(L.T("Port"), app.ProxyError ?? L.T("Only this PC can connect."), Ui.Value(AppInfo.ProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture))));
 
         yield return Ui.Section(L.T("Model"));
-        var context = new NumberBox
-        {
-            Minimum = 0,
-            Maximum = 1_048_576,
-            SmallChange = 4096,
-            LargeChange = 16384,
-            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
-            PlaceholderText = L.T("Automatic"),
-            Value = app.Settings.ContextSize > 0 ? app.Settings.ContextSize : double.NaN,
-            Width = 160,
-        };
-        context.ValueChanged += (_, e) =>
-        {
-            var value = double.IsNaN(e.NewValue) ? 0 : (int)Math.Round(e.NewValue);
-            if (value != app.Settings.ContextSize) app.UpdateSettings(app.Settings with { ContextSize = value });
-        };
         yield return Ui.Card(
-            Ui.Row(L.T("Context size"), L.T("Tokens a request can hold. Empty: the model's own, cut to fit the memory. Takes effect at the next load."), context),
+            Ui.Row(L.T("Launch settings"), L.T("Context size, KV cache and concurrent requests are part of each model's profile."),
+                Ui.Button(L.T("Profiles"), () => ShowPage("profiles"))),
             Ui.Row(L.T("Runs on"), L.T("Vulkan when this PC has a GPU it can use, otherwise the CPU."),
                 Ui.Value(Status.Device(state) ?? "—")));
 

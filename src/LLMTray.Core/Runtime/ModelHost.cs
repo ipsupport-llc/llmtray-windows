@@ -31,7 +31,7 @@ public sealed class ModelHost : IAsyncDisposable
 {
     readonly IProcessLauncher launcher;
     readonly Func<IReadOnlyList<LlamaBackend>> backends;
-    readonly Func<ServerOptions> options;
+    readonly Func<ModelEntry, ServerOptions> options;
     readonly string logDirectory;
     readonly Func<LlamaBackend, Task<IReadOnlyList<GpuDevice>?>> probeDevices;
     readonly Dictionary<string, IReadOnlyList<GpuDevice>?> probed = [];
@@ -55,10 +55,10 @@ public sealed class ModelHost : IAsyncDisposable
 
     /// <param name="Lifetime">Cancelled when this server stops or dies: requests to it end with it.</param>
     sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
-        CancellationTokenSource Lifetime);
+        CancellationTokenSource Lifetime, ServerOptions Options);
 
     /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
-    public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ServerOptions> options, string logDirectory,
+    public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ModelEntry, ServerOptions> options, string logDirectory,
         Func<LlamaBackend, Task<IReadOnlyList<GpuDevice>?>>? probeDevices = null)
     {
         this.launcher = launcher;
@@ -80,6 +80,46 @@ public sealed class ModelHost : IAsyncDisposable
     public HostState State
     {
         get { lock (sync) return Snapshot(); }
+    }
+
+    /// <summary>What the running server was started with, or null: compared with the profile for "Restart to apply".</summary>
+    public ServerOptions? RunningOptions
+    {
+        get { lock (sync) return running?.Options; }
+    }
+
+    /// <summary>
+    /// Starts <paramref name="model"/> again with its profile as it is now,
+    /// if it's still the one running: in turn with switches, so a newer
+    /// switch is never undone. Requests to it finish first.
+    /// </summary>
+    public async Task RestartAsync(ModelEntry model, CancellationToken cancellationToken = default)
+    {
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Task drained;
+            lock (sync)
+            {
+                if (running is not { } r || r.Model.FullPath != model.FullPath) return;
+                switching = true;
+                drained = active == 0 ? Task.CompletedTask : (idle ??= NewSignal()).Task;
+            }
+            try
+            {
+                await drained.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await StopRunningAsync().ConfigureAwait(false);
+                await StartAsync(model).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (sync) switching = false;
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>
@@ -173,6 +213,8 @@ public sealed class ModelHost : IAsyncDisposable
             throw new ModelLoadException(message!);
         }
         Directory.CreateDirectory(logDirectory);
+        // Read once per load: the model's profile at this moment.
+        var launched = options(model);
         string? lastError = null;
         foreach (var backend in ordered)
         {
@@ -207,7 +249,7 @@ public sealed class ModelHost : IAsyncDisposable
             var port = FreePort();
             var key = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
             RotateLog();
-            var plan = LlamaServerLaunch.Build(backend.ServerPath, model, port, key, LogFile, options());
+            var plan = LlamaServerLaunch.Build(backend.ServerPath, model, port, key, LogFile, launched);
             IChildProcess process;
             try
             {
@@ -232,7 +274,7 @@ public sealed class ModelHost : IAsyncDisposable
             }
             if (error is null)
             {
-                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource());
+                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched);
                 lock (sync)
                 {
                     if (disposed)

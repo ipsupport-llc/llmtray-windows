@@ -27,7 +27,8 @@ public sealed class ChatMessage
 /// <summary>What a turn is sent with.</summary>
 /// <param name="Model">The model's name, or null for whichever is loaded.</param>
 /// <param name="Thinking">False turns a thinking model's reasoning off (enable_thinking).</param>
-public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null);
+/// <param name="Profile">The model's profile: its system prompt and sampling go with every request (adr/0008).</param>
+public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null);
 
 /// <summary>
 /// One chat: its messages, sending a turn to the local API and streaming
@@ -342,6 +343,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     static JsonObject Body(IEnumerable<ChatMessage> messages, ChatOptions options, bool stream)
     {
         var history = new JsonArray();
+        if (options.Profile is { SystemPrompt: { } prompt } && !string.IsNullOrWhiteSpace(prompt))
+        {
+            history.Add(new JsonObject { ["role"] = "system", ["content"] = prompt });
+        }
         foreach (var m in messages.Where(m => m.Content.Length > 0 && m.Role is "user" or "assistant"))
         {
             history.Add(new JsonObject { ["role"] = m.Role, ["content"] = m.Content });
@@ -349,6 +354,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var body = new JsonObject { ["messages"] = history, ["stream"] = stream };
         if (stream) body["stream_options"] = new JsonObject { ["include_usage"] = true };
         if (options.Model is not null) body["model"] = options.Model;
+        if (options.Profile is { } p)
+        {
+            body["temperature"] = p.Temperature;
+            body["top_p"] = p.TopP;
+            body["top_k"] = p.TopK;
+            body["max_tokens"] = p.MaxTokens;
+        }
         if (options.Temperature is double t) body["temperature"] = t;
         // Templates that think (Gemma 4, Qwen 3, LFM Thinking) read enable_thinking; others ignore it.
         if (!options.Thinking) body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };

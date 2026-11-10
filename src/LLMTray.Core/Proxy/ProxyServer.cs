@@ -64,6 +64,12 @@ public sealed class ProxyServer : IAsyncDisposable
 
     public int Port { get; }
 
+    /// <summary>
+    /// The profile of a model, whose sampling settings fill what a client's
+    /// chat or completion request leaves out (adr/0008). Null: none.
+    /// </summary>
+    public Func<ModelEntry, Profiles.ResolvedProfile>? ProfileOf { get; set; }
+
     /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
     public const long MaxBodyBytes = 256L * 1024 * 1024;
 
@@ -191,6 +197,11 @@ public sealed class ProxyServer : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lease.ServerGone);
         var cancellation = linked.Token;
         using var message = new HttpRequestMessage(new HttpMethod(request.Method), target);
+        if (body.Count > 0 && ProfileOf is { } profileOf && Profiles.RequestDefaults.AppliesTo(request.Path.Value ?? "")
+            && Profiles.RequestDefaults.Fill(body, profileOf(lease.Model)) is { } filled)
+        {
+            body = filled;
+        }
         if (body.Count > 0)
         {
             message.Content = new ByteArrayContent(body.Array!, body.Offset, body.Count);

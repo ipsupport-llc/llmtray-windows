@@ -153,7 +153,10 @@ sealed class ChatWindow : Window
     ChatOptions Options()
     {
         var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
-        return new ChatOptions(picked, Thinking: thinking.IsChecked == true);
+        var app = App.Current;
+        // The model the answer comes from: the picked one, or whichever is loaded.
+        var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
+        return new ChatOptions(picked, Thinking: thinking.IsChecked == true, Profile: app.Profiles.ResolvedFor(entry?.FullPath));
     }
 
     void SendOrStop()
