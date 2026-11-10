@@ -212,7 +212,9 @@ public static class LenientJson
                             sb.Append((char)code);
                             Position += 4;
                             break;
-                        default: sb.Append(e); break;
+                        case '"' or '\'' or '\\' or '/': sb.Append(e); break;
+                        // Not an escape ("C:\Windows"): the backslash stays, nothing is guessed away.
+                        default: sb.Append('\\').Append(e); break;
                     }
                     continue;
                 }

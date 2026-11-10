@@ -58,6 +58,12 @@ public sealed class ToolTests
         Assert.False(ToolArguments.Parse("""{"arguments": {"city": "A"}, "params": {"city": "B"}}""", Weather).IsValid);
         Assert.False(ToolArguments.Parse("""{"days": 99999999999999999999}""", Weather).IsValid);
         Assert.False(ToolArguments.Parse("not json at all", Weather).IsValid);
+        // A wrapper holding a string beside a field, and two names with different values.
+        Assert.False(ToolArguments.Parse("""{"city": "Paris", "arguments": "{\"city\": \"Rome\"}"}""", Weather).IsValid);
+        Assert.False(ToolArguments.Parse("""{"city": "Paris", "location": "Rome"}""", Weather).IsValid);
+        Assert.True(ToolArguments.Parse("""{"city": "Paris", "location": "Paris"}""", Weather).IsValid);
+        // Not an escape: the backslash stays.
+        Assert.Equal(@"C:\Windows", ToolArguments.Parse("""{"city": "C:\Windows"}""", Weather).String("city"));
     }
 
     [Fact]

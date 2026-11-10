@@ -80,7 +80,8 @@ public abstract class SelectableTool(string name, IReadOnlyList<string>? entries
 
     static JsonNode? Sorted(JsonNode? node) => node switch
     {
-        JsonObject o => new JsonObject(o.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => KeyValuePair.Create(kv.Key, Sorted(kv.Value)))),
+        JsonObject o => new JsonObject(o.Where(kv => kv.Value is not null).OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => KeyValuePair.Create(kv.Key, Sorted(kv.Value)))),
         JsonArray a => new JsonArray(a.Select(Sorted).ToArray()),
         JsonValue v => JsonNode.Parse(v.ToJsonString()),
         _ => null,

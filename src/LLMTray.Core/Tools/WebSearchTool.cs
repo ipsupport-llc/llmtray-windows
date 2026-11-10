@@ -333,24 +333,56 @@ public static class WebPageReader
         ConnectCallback = async (context, ct) =>
         {
             var addresses = await System.Net.Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, ct).ConfigureAwait(false);
-            var allowed = addresses.Where(a => IpAddress.Parse(a.ToString()) is { IsLocal: false }).ToList();
+            // This PC's own addresses too, public ones included (a global IPv6 reaches its services).
+            var own = OwnAddresses();
+            var allowed = addresses.Where(a => IpAddress.Parse(a.ToString()) is { IsLocal: false } && !own.Contains(a)).ToList();
             if (allowed.Count == 0 || allowed.Count != addresses.Length) throw new ReadException("addresses on this PC or the local network aren't read");
-            var socket = new System.Net.Sockets.Socket(System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
-            try
+            Exception? last = null;
+            // Each checked address in turn, as a normal connection would.
+            foreach (var address in allowed)
             {
-                await socket.ConnectAsync(allowed[0], context.DnsEndPoint.Port, ct).ConfigureAwait(false);
-                return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+                var socket = new System.Net.Sockets.Socket(address.AddressFamily, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    await socket.ConnectAsync(address, context.DnsEndPoint.Port, ct).ConfigureAwait(false);
+                    return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+                }
+                catch (System.Net.Sockets.SocketException e)
+                {
+                    socket.Dispose();
+                    last = e;
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
             }
-            catch
-            {
-                socket.Dispose();
-                throw;
-            }
+            throw last ?? new ReadException("no address to connect to");
         },
     })
     {
         Timeout = TimeSpan.FromSeconds(20),
     };
+
+    static HashSet<System.Net.IPAddress> OwnAddresses()
+    {
+        var own = new HashSet<System.Net.IPAddress>();
+        try
+        {
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                foreach (var unicast in nic.GetIPProperties().UnicastAddresses) own.Add(unicast.Address);
+            }
+        }
+        catch (System.Net.NetworkInformation.NetworkInformationException)
+        {
+        }
+        return own;
+    }
+
+    /// <summary>The whole read, body included: a site that sends headers and then stalls is given up on.</summary>
+    static readonly TimeSpan ReadDeadline = TimeSpan.FromSeconds(30);
 
     public static async Task<Page> ReadAsync(WebFetch web, string address, CancellationToken ct)
     {
@@ -365,7 +397,18 @@ public static class WebPageReader
         await Turn.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var (html, final) = await FetchAsync(web, url, ct).ConfigureAwait(false);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(ReadDeadline);
+            (string html, Uri final) fetched;
+            try
+            {
+                fetched = await FetchAsync(web, url, deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new ReadException("the site didn't send the page in time");
+            }
+            var (html, final) = fetched;
             var title = WebPageText.Title(html);
             var pages = WebPageText.Pages(WebPageText.MainText(html));
             var page = new Page(final.AbsoluteUri, title, pages, DateTimeOffset.UtcNow);

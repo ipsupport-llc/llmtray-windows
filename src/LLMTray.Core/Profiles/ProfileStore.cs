@@ -81,6 +81,7 @@ public sealed class ProfileStore(string directory)
         // "request": null in a hand edit reads as an empty group.
         if (profile.Request is null) profile.Request = new();
         if (profile.Launch is null) profile.Launch = new();
+        if (profile.Tools is null) profile.Tools = new();
         if (profile.Name is null) profile.Name = "Unnamed";
         return profile;
     }

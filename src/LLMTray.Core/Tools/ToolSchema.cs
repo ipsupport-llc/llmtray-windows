@@ -143,7 +143,13 @@ public sealed class ToolArguments
             var beside = obj.Select(kv => kv.Key).Where(k => !wrappers.Contains(k) && !DescribesCall(k)).ToList();
             if (beside.Count > 0)
             {
-                var holding = wrappers.FirstOrDefault(w => obj[w] is JsonObject { Count: > 0 });
+                var holding = wrappers.FirstOrDefault(w => obj[w] switch
+                {
+                    JsonObject { Count: > 0 } => true,
+                    // A wrapper holding the arguments as a JSON string counts too.
+                    JsonValue v when v.TryGetValue<string>(out var t) && t.TrimStart().StartsWith('{') => IsObjectText(t),
+                    _ => false,
+                });
                 if (holding is null) return obj;
                 result.Problems.Add($"arguments aren't a JSON object (\"{holding}\" beside other fields ({string.Join(", ", beside.Select(b => $"\"{b}\""))}))");
                 return null;
@@ -176,6 +182,18 @@ public sealed class ToolArguments
         return obj;
     }
 
+    static bool IsObjectText(string text)
+    {
+        try
+        {
+            return LenientJson.Parse(text) is JsonObject { Count: > 0 };
+        }
+        catch (LenientJson.Failure)
+        {
+            return false;
+        }
+    }
+
     static void Normalize(JsonObject obj, ToolSchema schema, ToolArguments result)
     {
         var byParam = new Dictionary<string, List<(string Key, JsonNode? Value, bool Exact)>>();
@@ -205,7 +223,8 @@ public sealed class ToolArguments
                 continue;
             }
             sent = sent.OrderByDescending(s => s.Exact).ToList();
-            if (sent.Count > 1 && !sent[0].Exact && sent.Skip(1).Any(s => !JsonNode.DeepEquals(s.Value, sent[0].Value)))
+            // Two names for one field with different values: not guessed, whichever is declared.
+            if (sent.Count > 1 && sent.Skip(1).Any(s => !JsonNode.DeepEquals(s.Value, sent[0].Value)))
             {
                 result.Problems.Add($"\"{param.Name}\" was given twice under different names with different values");
                 continue;

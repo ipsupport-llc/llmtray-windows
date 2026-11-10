@@ -93,8 +93,9 @@ public sealed partial class CountryInfoTool() : SelectableTool("get_country_info
             ["name"] = WikidataClaims.Label(entity) ?? country,
             ["code"] = claims.Strings("P297").FirstOrDefault() ?? "",
             ["capital"] = string.Join(", ", capitals),
-            ["population"] = (long)(claims.LatestQuantity("P1082") ?? 0),
-            ["area_km2"] = (long)Math.Round(claims.AreaKm2() ?? 0),
+            // Unknown is left out, never 0.
+            ["population"] = claims.LatestQuantity("P1082") is double people ? (long)people : null,
+            ["area_km2"] = claims.AreaKm2() is double area ? (long)Math.Round(area) : null,
             ["continent"] = string.Join(", ", claims.Items("P30").Select(Label).OfType<string>()),
             ["currencies"] = new JsonArray(currencies.Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()),
             ["languages"] = new JsonArray(claims.Items("P37").Select(Label).OfType<string>().Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()),
@@ -111,6 +112,11 @@ public sealed partial class CountryInfoTool() : SelectableTool("get_country_info
     public static async Task<(string Id, JsonNode Entity)?> FindCountryAsync(WebFetch web, string query, CancellationToken ct)
     {
         var candidates = new List<string>();
+        // An ISO code, in any case ("ua"); "UK" and other non-codes fall through to the name search.
+        if (query.Length is 2 or 3 && query.All(char.IsAsciiLetter))
+        {
+            query = query.ToUpperInvariant();
+        }
         if (query.Length is 2 or 3 && query.All(char.IsAsciiLetterUpper))
         {
             var search = await web.JsonAsync(Api, ct,
@@ -182,7 +188,8 @@ public sealed partial class CountryInfoTool() : SelectableTool("get_country_info
             }
             code = alpha2;
         }
-        var y = year ?? context.Now.Year;
+        // This year where the user is, not in UTC.
+        var y = year ?? (CurrentTimeTool.Zone(context.HomeZone) is { } home ? TimeZoneInfo.ConvertTime(context.Now, home).Year : context.Now.Year);
         if (y is < 1900 or > 2200) return Error("year must be 1900-2200");
         try
         {

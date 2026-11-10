@@ -112,12 +112,11 @@ public sealed class SseDecoder
             }
             if (delta.TryGetProperty("tool_calls", out var calls) && calls.ValueKind == JsonValueKind.Array)
             {
-                var position = 0;
                 foreach (var call in calls.EnumerateArray())
                 {
                     if (call.ValueKind != JsonValueKind.Object) continue;
-                    var index = Int(call, "index") ?? position;
-                    position++;
+                    // -1: the server sent no index (the chat decides which call it belongs to).
+                    var index = Int(call, "index") ?? -1;
                     string? Text(JsonElement o, string name) =>
                         o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                     var function = call.TryGetProperty("function", out var f) ? f : default;

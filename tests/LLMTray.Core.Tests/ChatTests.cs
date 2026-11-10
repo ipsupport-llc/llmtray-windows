@@ -215,6 +215,8 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.Equal("assistant", messages[^2]!["role"]!.GetValue<string>());
         Assert.Equal("Calculate", messages[^2]!["tool_calls"]![0]!["function"]!["name"]!.GetValue<string>());
         Assert.Equal("c1", messages[^1]!["tool_call_id"]!.GetValue<string>());
+        // Replayed as plain JSON, not as the model wrote it.
+        Assert.Equal("""{"expr":"6*7"}""", messages[^2]!["tool_calls"]![0]!["function"]!["arguments"]!.GetValue<string>());
         // Only the switched-on modes are declared.
         var names = second["tools"]!.AsArray().Select(t => t!["function"]!["name"]!.GetValue<string>()).ToList();
         Assert.Equal(["get_current_time", "calculate"], names);

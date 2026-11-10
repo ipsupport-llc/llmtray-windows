@@ -286,6 +286,7 @@ public sealed class HtmlTextTests
     [Fact]
     public void Structure()
     {
+        // Raw literals take the checkout's line ends (CRLF on Windows): compared as \n.
         const string html = """
             <html><head><title>Договор &laquo;A&raquo;</title><style>p { color: red }</style>
             <script>var x = "<p>not text</p>";</script></head>
@@ -296,7 +297,7 @@ public sealed class HtmlTextTests
             <pre>  keep
               this</pre><!-- a comment --><p>end</p></body></html>
             """;
-        Assert.Equal("""
+        Assert.Equal(("""
             Договор «A»
 
             Heading
@@ -315,7 +316,7 @@ public sealed class HtmlTextTests
               this
 
             end
-            """, HtmlText.Text(html));
+            """).ReplaceLineEndings("\n"), (HtmlText.Text(html)).ReplaceLineEndings("\n"));
     }
 
     [Fact]

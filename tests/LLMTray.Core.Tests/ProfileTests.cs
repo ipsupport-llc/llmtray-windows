@@ -122,7 +122,7 @@ public sealed class ProfileTests : IDisposable
     public void NullGroupsCaseAndOddFileNamesAreHandled()
     {
         Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null}""");
+        File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null, "tools": null}""");
         File.WriteAllText(Path.Combine(root, "my profile.json"), """{"name": "Mine"}""");
         File.WriteAllText(Path.Combine(root, "assignments.json"), """{"C:\\a.gguf": "hot", "c:\\a.gguf": "default", "C:\\b.gguf": "HOT"}""");
         File.WriteAllText(Path.Combine(root, "Hot.json"), """{"name": "Hot"}""");

@@ -106,6 +106,10 @@ public readonly record struct IpAddress
             // address the network translates to: as local as it is.
             if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b.Skip(4).Take(8).All(x => x == 0)) return V4(Tail(12)).IsLocal;
             if (b[0] == 0x20 && b[1] == 0x02) return V4(Tail(2)).IsLocal;
+            // Local-use NAT64 (64:ff9b:1::/48) and Teredo (2001::/32) reach
+            // IPv4 addresses that can't be checked here: refused.
+            if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b[4] == 0x00 && b[5] == 0x01) return true;
+            if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00) return true;
             // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d).
             if (b.Take(10).All(x => x == 0) && ((b[10] == 0xff && b[11] == 0xff) || (b[10] == 0 && b[11] == 0))) return V4(Tail(12)).IsLocal;
             return false;

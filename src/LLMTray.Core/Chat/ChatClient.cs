@@ -195,8 +195,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 if (calls.Count == 0 || answer.Error is not null) break;
                 if (definitions is null || last)
                 {
-                    // Calls when none may run: the turn ends with what it has.
-                    if (answer.Content.Length == 0) answer.Error = "The model kept calling tools and didn't answer.";
+                    // Calls when none may run: the turn ends; this request's own text is the answer, if any.
+                    if (content.Trim().Length == 0) answer.Error = "The model kept calling tools and didn't answer.";
                     break;
                 }
                 var assistant = new JsonObject { ["role"] = "assistant", ["content"] = content };
@@ -204,6 +204,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 foreach (var call in calls.Take(MaxCallsPerRound))
                 {
                     if (call.Id.Length == 0) call.Id = "call_" + Guid.NewGuid().ToString("N")[..12];
+                    // Replayed as valid JSON: the next request's template reads it as an object.
+                    call.Arguments = Canonical(call.Arguments);
                     callArray.Add(new JsonObject
                     {
                         ["id"] = call.Id,
@@ -216,7 +218,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 foreach (var call in calls.Take(MaxCallsPerRound))
                 {
                     // The same call twice in one message never runs twice.
-                    var key = call.Name + "\0" + call.Arguments.Trim();
+                    var key = call.Name + "\0" + call.Arguments;
+                    if (token.IsCancellationRequested)
+                    {
+                        // Stopped: the rest aren't run, but each still gets a result.
+                        history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = "Cancelled by the user." });
+                        continue;
+                    }
                     if (ran.TryGetValue(key, out var earlier))
                     {
                         history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = earlier });
@@ -291,6 +299,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         if (Title.Length == 0 && answer.Content.Length > 0 && answer.Error is null) await NameAsync(options, mine).ConfigureAwait(false);
     }
 
+    /// <summary>A call's arguments as plain JSON (lenient text read once); "{}" for none or for what can't be read.</summary>
+    static string Canonical(string arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments)) return "{}";
+        try
+        {
+            return Tools.LenientJson.Parse(arguments) is JsonObject o ? o.ToJsonString() : "{}";
+        }
+        catch (Tools.LenientJson.Failure)
+        {
+            // Kept as sent inside a string, so the model can see what it wrote.
+            return new JsonObject { ["unparsed"] = arguments }.ToJsonString();
+        }
+    }
+
     /// <summary>Calls one response may make; more are dropped.</summary>
     const int MaxCallsPerRound = 8;
 
@@ -326,7 +349,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 {
                     first ??= DateTimeOffset.UtcNow;
                     last = DateTimeOffset.UtcNow;
-                    if (!calls.TryGetValue(piece.Index, out var call)) calls[piece.Index] = call = new Tools.ToolCall();
+                    // A piece without an index: a new call when it brings an id or a name, else more of the last.
+                    var index = piece.Index >= 0 ? piece.Index
+                        : (piece.Id is { Length: > 0 } || piece.Name is { Length: > 0 }) || calls.Count == 0 ? (calls.Count == 0 ? 0 : calls.Keys.Max() + 1)
+                        : calls.Keys.Max();
+                    if (!calls.TryGetValue(index, out var call)) calls[index] = call = new Tools.ToolCall();
                     if (piece.Id is { Length: > 0 } id) call.Id = id;
                     if (piece.Name is { Length: > 0 } name) call.Name += name;
                     call.Arguments += piece.Arguments;
