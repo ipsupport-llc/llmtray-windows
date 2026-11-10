@@ -79,6 +79,7 @@ public sealed partial class MainWindow : Window
             if (page is "models" or "server") RenderPageSoon();
         };
         App.Current.DownloadsChanged += RenderDownloads;
+        App.Current.McpChanged += () => { if (page == "tools") RenderPageSoon(); };
         App.Current.ProfilesChanged += () =>
         {
             RenderRestartBar();
@@ -114,7 +115,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>The tab names, for translation (MainWindow.xaml holds them in English).</summary>
-    internal static readonly string[] TabNames = [L.T("Models"), L.T("Profiles"), L.T("Server"), L.T("General"), L.T("Updates"), L.T("About")];
+    internal static readonly string[] TabNames = [L.T("Models"), L.T("Profiles"), L.T("Tools"), L.T("Server"), L.T("General"), L.T("Updates"), L.T("About")];
 
     /// <summary>Opens a tab ("models", "server", "general", "updates").</summary>
     public void ShowPage(string tag)
@@ -300,6 +301,7 @@ public sealed partial class MainWindow : Window
         {
             "server" => ServerPage(),
             "profiles" => ProfilesPage(),
+            "tools" => ToolsPage(),
             "general" => GeneralPage(),
             "updates" => UpdatesPage(),
             "about" => AboutPage(),

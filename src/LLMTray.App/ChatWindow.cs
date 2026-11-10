@@ -204,7 +204,76 @@ sealed partial class ChatWindow : Window
         // The model the answer comes from: the picked one, or whichever is loaded.
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
         return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
-            Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry));
+            Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry),
+            Mcp: app.Mcp, Approve: AskAsync);
+    }
+
+    /// <summary>
+    /// Before an MCP call (adr/0012): the server, the tool and its arguments
+    /// in full; Allow, Allow for This Chat (not after outside text) or Deny.
+    /// No default button: Enter mustn't approve.
+    /// </summary>
+    Task<McpApproval> AskAsync(McpApprovalRequest request, CancellationToken stopped)
+    {
+        var done = new TaskCompletionSource<McpApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                if (stopped.IsCancellationRequested)
+                {
+                    done.TrySetResult(McpApproval.Deny);
+                    return;
+                }
+                Activate();
+                var body = new StackPanel { Spacing = 8, MaxWidth = 520 };
+                body.Children.Add(new TextBlock { Text = L.F("{0} wants to use {1}.", request.Server, request.Tool), TextWrapping = TextWrapping.Wrap });
+                body.Children.Add(new TextBox
+                {
+                    Text = request.Arguments,
+                    IsReadOnly = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    AcceptsReturn = true,
+                    FontFamily = Ui.Mono,
+                    MaxHeight = 220,
+                });
+                if (request.ReadOnly == true) body.Children.Add(Ui.Caption(L.T("The server says this tool only reads.")));
+                body.Children.Add(Ui.Caption(L.T("The server may do more than these arguments show.")));
+                if (request.AfterOutsideText)
+                {
+                    body.Children.Add(Ui.Caption(L.T("Proposed right after reading outside text: check it."), Ui.Orange));
+                }
+                var dialog = new ContentDialog
+                {
+                    XamlRoot = Content.XamlRoot,
+                    Title = L.T("Allow this tool call?"),
+                    Content = new ScrollViewer { Content = body },
+                    PrimaryButtonText = L.T("Allow"),
+                    SecondaryButtonText = request.AfterOutsideText ? "" : L.T("Allow for This Chat"),
+                    CloseButtonText = L.T("Deny"),
+                    DefaultButton = ContentDialogButton.None,
+                };
+                // Stop closes the question with the turn: no dialog is left behind to block the next one.
+                using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(dialog.Hide));
+                var result = await dialog.ShowAsync();
+                done.TrySetResult(result switch
+                {
+                    ContentDialogResult.Primary => McpApproval.Allow,
+                    ContentDialogResult.Secondary => McpApproval.AllowForThisChat,
+                    _ => McpApproval.Deny,
+                });
+            }
+            catch (Exception)
+            {
+                // Can't ask (another dialog open): not allowed.
+                done.TrySetResult(McpApproval.Deny);
+            }
+        }))
+        {
+            // The window is closing: nobody to ask, so not allowed.
+            done.TrySetResult(McpApproval.Deny);
+        }
+        return done.Task;
     }
 
     /// <summary>Compacts the chat; with <paramref name="retry"/>, the question that didn't fit is asked again after.</summary>
@@ -523,6 +592,30 @@ sealed partial class ChatWindow : Window
             }
         }
 
+        if (message.McpCalls.Count > 0)
+        {
+            // What each MCP call did, as approved: saved with the answer.
+            var calls = new StackPanel { Spacing = 2 };
+            foreach (var call in message.McpCalls)
+            {
+                var outcome = call.Outcome switch
+                {
+                    "done" => L.T("done"),
+                    "failed" => L.T("failed"),
+                    "denied" => L.T("denied"),
+                    "unknown" => L.T("outcome unknown"),
+                    _ => L.T("not sent"),
+                };
+                var line = Ui.Caption($"{call.Server} · {call.Tool} {call.Arguments} — {outcome}",
+                    call.Outcome is "done" ? null : call.Outcome == "denied" ? Ui.Gray : Ui.Orange);
+                line.IsTextSelectionEnabled = true;
+                line.MaxLines = 3;
+                line.TextTrimming = TextTrimming.CharacterEllipsis;
+                calls.Children.Add(line);
+            }
+            stack.Children.Add(calls);
+        }
+
         if (!message.Streaming && message.Sources.Count > 0)
         {
             // Where the tools' facts came from, with the credit their services ask for.
@@ -557,6 +650,8 @@ sealed partial class ChatWindow : Window
     /// <summary>What the answer shows while a tool runs.</summary>
     static string Activity(string tool) => tool.ToLowerInvariant() switch
     {
+        "mcp" => L.T("Starting MCP servers…"),
+        "approval" => L.T("Waiting for your answer…"),
         "web_search" => L.T("Searching…"),
         "get_weather" => L.T("Checking the weather…"),
         "calculate" => L.T("Calculating…"),
