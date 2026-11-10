@@ -41,13 +41,30 @@ hold unless written otherwise here.
   tick. A Recycle Bin item proposed right after the turn read files or
   the web, or named like a copy ("x (1).zip", "x - Copy.pdf"), starts
   unticked. There's no default button. Nothing changes before Approve.
+  The grant question's preselected answer is "Only this time", which
+  covers the whole `change_files` call it was asked for.
   Unlike the Mac, the review comes during the `change_files` call (the
   call waits, as an MCP approval does), and the model gets the result.
-- **Checked again where it runs:**
+- **Paths are taken as they really are.** Before any check, each name
+  is the one the folder holds: a short 8.3 alias becomes its long name,
+  and the case is the folder's own. Each link on the way (a junction or
+  a symbolic link) is replaced by where it leads, so a junction to
+  AppData is AppData. Paths compare exactly after that, since a
+  case-sensitive folder can hold "Public" and "public".
+  - Refused outright: streams (`a.txt:s`), device names (`NUL`,
+    `CON.txt`), trailing dots and spaces, wildcards, `\\?\` and network
+    paths.
+  - A rename's new name is one plain name. The whole destination is made
+    real again before it is checked.
+- **Checked again where it runs, on the item itself:**
   - the grant at both ends;
-  - the item's identity (volume and file id), which must be the one
-    proposed;
-  - the folders from the grant's root to each end are held open without
+  - each action goes through a handle of the item, opened without
+    following a link and checked by file id (volume and file id, the
+    one proposed). A move or rename is done by that handle
+    (`FileRenameInfo`, never replacing), a new folder is removed by its
+    own handle (Windows refuses a folder that isn't empty), and a file
+    is read from the handle that was checked (not a link, one name only);
+  - every folder from the drive's root to each end is held open without
     delete sharing while the item runs, so none can be renamed, removed
     or swapped for a junction meanwhile, and one that is a link is
     refused;
@@ -55,15 +72,21 @@ hold unless written otherwise here.
   - moves never overwrite: a taken name gets "name (2).ext";
   - moves to another drive are refused (they'd be copies);
   - a plan stops at its first failure.
-- **Trash is the Recycle Bin**, through the shell, which asks before
-  anything would be deleted for good (too big for the bin). Only fixed
-  local drives qualify: removable and network drives may have none, so
-  nothing is deleted there.
+- **Trash is the Recycle Bin.** The item first goes by its own handle
+  into a folder of LLMTray's own beside it, then the shell recycles it
+  from there. The shell takes a path, so the item it gets is the very
+  one checked, from a place nobody else names. The shell runs without
+  "no confirmation", so it asks the user before anything would be
+  deleted for good (too big for the bin), as Explorer does. Only fixed
+  local drives qualify: removable and network drives may have no bin,
+  so nothing is deleted there. A key or secret file can be moved but
+  keeps a name that says so (no renaming `.env` to `notes.txt` to read it).
 - **Journal and Undo.** Every item is written to `folder-journal\` and
   flushed before it runs, and again with its result. **Undo** takes the
-  last plan back, last change first:
+  last plan back, last change first, item by item. An item that can't
+  be undone yet (its old place is taken) stays offered for another try:
   - a move goes back if the item there is still the one moved;
-  - a new folder is removed if empty;
+  - a new folder is removed if it is still the one made and empty;
   - a trashed item is put back from the Recycle Bin (found there by its
     file id).
   - What can't be undone is listed.
@@ -73,12 +96,21 @@ hold unless written otherwise here.
   reach the internet and MCP calls are refused until the user's next
   message. Names and file text are data, and the listings say so.
 
+Files inside a `.git` folder aren't read.
+
+**Where the Windows side lives.** `WindowsFolderPlatform` (handles, file
+ids, the Recycle Bin) is in Core, not the app, against the "Windows APIs
+in the app" rule of CLAUDE.md. That way the Windows CI runners test it.
+It is marked Windows-only, and only the app creates it.
+
 ## Not yet (the Mac has them)
 
 - `view` (an image to a model that sees) and `add_to_project`: no
   projects or vision here yet.
 - The plan checks that compare a copy-named item with its original by
   hash: such items start unticked instead.
-- Reads of subfolders below the one listed aren't held. A listing checks
-  each entry's link flag, but a subfolder swapped for a junction between
-  that check and its walk could be read. Changes are held.
+- Walks below the folder listed (recursive listings, sizes, duplicates)
+  aren't held folder by folder. Each entry's link flag is checked and
+  links aren't entered, but a subfolder swapped for a junction between
+  that check and its walk could be listed. File contents are read only
+  through the checked handle, and changes are held.
