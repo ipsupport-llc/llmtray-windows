@@ -20,6 +20,7 @@ public static class RequestDefaults
     public static byte[]? Fill(ReadOnlySpan<byte> body, ResolvedProfile profile)
     {
         var present = new HashSet<string>(StringComparer.Ordinal);
+        var nulls = new HashSet<string>(StringComparer.Ordinal);
         int open;
         try
         {
@@ -29,8 +30,10 @@ public static class RequestDefaults
             while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
             {
                 if (reader.TokenType != JsonTokenType.PropertyName) return null;
-                present.Add(reader.GetString()!);
+                var key = reader.GetString()!;
+                present.Add(key);
                 reader.Read();
+                if (reader.TokenType == JsonTokenType.Null) nulls.Add(key);
                 reader.TrySkip();
             }
         }
@@ -39,6 +42,8 @@ public static class RequestDefaults
             return null;
         }
 
+        // A client that writes unset fields as null: those are filled too.
+        if (nulls.Overlaps(["temperature", "top_p", "top_k", "max_tokens", "max_completion_tokens"])) return Rewrite(body, profile, nulls);
         var add = new List<string>();
         void Put(string key, string value)
         {
@@ -61,5 +66,32 @@ public static class RequestDefaults
         return result;
     }
 
-    static string Number(double value) => value.ToString("0.0###", CultureInfo.InvariantCulture);
+    /// <summary>Always with a fraction (a float field), never rounded.</summary>
+    static string Number(double value) =>
+        value == Math.Floor(value) && Math.Abs(value) < 1e15 ? value.ToString("0.0", CultureInfo.InvariantCulture) : value.ToString("R", CultureInfo.InvariantCulture);
+
+    /// <summary>Null fields replaced: re-serialized, which keeps every other value's text.</summary>
+    static byte[]? Rewrite(ReadOnlySpan<byte> body, ResolvedProfile profile, HashSet<string> nulls)
+    {
+        System.Text.Json.Nodes.JsonObject obj;
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(body.ToArray()) is not System.Text.Json.Nodes.JsonObject parsed) return null;
+            obj = parsed;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        foreach (var key in nulls.Intersect(["temperature", "top_p", "top_k", "max_tokens", "max_completion_tokens"])) obj.Remove(key);
+        void Put(string key, System.Text.Json.Nodes.JsonNode value)
+        {
+            if (!obj.ContainsKey(key)) obj[key] = value;
+        }
+        Put("temperature", System.Text.Json.Nodes.JsonValue.Create(profile.Temperature));
+        Put("top_p", System.Text.Json.Nodes.JsonValue.Create(profile.TopP));
+        Put("top_k", System.Text.Json.Nodes.JsonValue.Create(profile.TopK));
+        if (!obj.ContainsKey("max_completion_tokens")) Put("max_tokens", System.Text.Json.Nodes.JsonValue.Create(profile.MaxTokens));
+        return Encoding.UTF8.GetBytes(obj.ToJsonString());
+    }
 }

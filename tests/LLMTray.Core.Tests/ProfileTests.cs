@@ -95,6 +95,44 @@ public sealed class ProfileTests : IDisposable
     }
 
     [Fact]
+    public void ADefaultBrokenAfterLoadingIsNotWrittenOver()
+    {
+        var m = Manager();
+        var file = Path.Combine(root, "default.json");
+        File.WriteAllText(file, "{ broken");
+        Assert.False(m.Update(Profile.DefaultId, p => p.Request.Temperature = 1));
+        Assert.Equal("{ broken", File.ReadAllText(file));
+        Assert.False(m.IsEditable(Profile.DefaultId));
+        Assert.NotEmpty(m.LoadErrors);
+    }
+
+    [Fact]
+    public void AnEditKeepsAHandEditMadeMeanwhile()
+    {
+        var m = Manager();
+        var p = m.Create("Mine");
+        File.WriteAllText(Path.Combine(root, p.Id + ".json"), """{"name": "Mine", "request": {"topK": 40}}""");
+        m.Update(p.Id, x => x.Request.TopP = 0.5);
+        var r = m.Resolved(p.Id);
+        Assert.Equal(40, r.TopK);
+        Assert.Equal(0.5, r.TopP);
+    }
+
+    [Fact]
+    public void NullGroupsCaseAndOddFileNamesAreHandled()
+    {
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "Default.json"), """{"name": "Default", "request": null, "launch": null}""");
+        File.WriteAllText(Path.Combine(root, "my profile.json"), """{"name": "Mine"}""");
+        File.WriteAllText(Path.Combine(root, "assignments.json"), """{"C:\a.gguf": "x", "c:\a.gguf": "y"}""");
+        var m = Manager();
+        Assert.Single(m.Profiles, p => p.IsDefault);
+        Assert.Equal(0.6, m.ResolvedFor(null).Temperature);
+        Assert.Contains(m.LoadErrors, e => e.Contains("my profile.json"));
+        Assert.Equal(Profile.DefaultId, m.ProfileIdFor(@"C:\A.gguf"));
+    }
+
+    [Fact]
     public void BrokenAssignmentsAreMovedAsideAndMissingProfilesFallBack()
     {
         Directory.CreateDirectory(root);
@@ -134,6 +172,18 @@ public sealed class ProfileTests : IDisposable
     }
 
     static ResolvedProfile Sample => new("default", "Default", 0.7, 0.9, 0, 2048, "", 0, "f16", 0, "");
+
+    [Fact]
+    public void NullSamplingFieldsAreFilledAndPrecisionKept()
+    {
+        var precise = Sample with { Temperature = 0.00001 };
+        var filled = Encoding.UTF8.GetString(RequestDefaults.Fill("""{"temperature":null,"max_completion_tokens":null,"x":null}"""u8, precise)!);
+        Assert.Contains("\"temperature\":1E-05", filled);
+        Assert.Contains("\"max_tokens\":2048", filled);
+        Assert.Contains("\"x\":null", filled);
+        Assert.DoesNotContain("max_completion_tokens", filled);
+        Assert.Contains("\"temperature\":1.0", Encoding.UTF8.GetString(RequestDefaults.Fill("{}"u8, Sample with { Temperature = 1 })!));
+    }
 
     [Fact]
     public void MissingSamplingFieldsAreFilledAndTheRestKeptAsSent()

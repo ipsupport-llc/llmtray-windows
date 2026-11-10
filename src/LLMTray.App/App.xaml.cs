@@ -204,9 +204,10 @@ public partial class App : Application
 
     public async Task RestartAsync()
     {
+        if (Host.State is not { Status: HostStatus.Running, Model: { } model }) return;
         try
         {
-            await Host.RestartAsync();
+            await Host.RestartAsync(model);
         }
         catch (ModelLoadException)
         {

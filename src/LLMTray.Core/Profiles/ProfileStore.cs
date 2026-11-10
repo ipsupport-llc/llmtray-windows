@@ -20,7 +20,8 @@ public sealed class ProfileStore(string directory)
 
     /// <summary>A profile id that names a file in the folder and nothing else.</summary>
     public static bool IsValidId(string id) =>
-        id.Length is > 0 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') && id != "assignments";
+        id.Length is > 0 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')
+        && !id.Equals("assignments", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// All profiles, Default first, then by name. An unreadable file is
@@ -33,12 +34,18 @@ public sealed class ProfileStore(string directory)
         foreach (var file in System.IO.Directory.EnumerateFiles(Directory, "*.json"))
         {
             var id = Path.GetFileNameWithoutExtension(file);
-            if (id == "assignments" || id.Contains(".corrupt-", StringComparison.Ordinal) || !IsValidId(id)) continue;
+            if (id.Equals("assignments", StringComparison.OrdinalIgnoreCase) || id.Contains(".corrupt-", StringComparison.Ordinal)) continue;
+            if (!IsValidId(id))
+            {
+                onError?.Invoke(file, new InvalidDataException("a profile's file name may hold only letters, digits, - and _"));
+                continue;
+            }
             try
             {
                 var profile = Read(file);
                 // The file name is the id: a copied file keeps working.
-                profile.Id = id;
+                // "Default.json" is Default (Windows' file names ignore case).
+                profile.Id = id.Equals(Profile.DefaultId, StringComparison.OrdinalIgnoreCase) ? Profile.DefaultId : id;
                 profiles.Add(profile);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
@@ -55,7 +62,25 @@ public sealed class ProfileStore(string directory)
     static Profile Read(string file)
     {
         using var stream = File.OpenRead(file);
-        return JsonSerializer.Deserialize(stream, ProfileJson.Default.Profile) ?? throw new JsonException("empty file");
+        var profile = JsonSerializer.Deserialize(stream, ProfileJson.Default.Profile) ?? throw new JsonException("empty file");
+        // "request": null in a hand edit reads as an empty group.
+        if (profile.Request is null) profile.Request = new();
+        if (profile.Launch is null) profile.Launch = new();
+        if (profile.Name is null) profile.Name = "Unnamed";
+        return profile;
+    }
+
+    /// <summary>
+    /// The profile as it is on disk now: null when there's no file. Throws
+    /// when the file doesn't read, so a broken hand edit is never written over.
+    /// </summary>
+    public Profile? ReadCurrent(string id)
+    {
+        var file = FileOf(id);
+        if (!File.Exists(file)) return null;
+        var profile = Read(file);
+        profile.Id = id;
+        return profile;
     }
 
     public void Save(Profile profile)
@@ -67,7 +92,7 @@ public sealed class ProfileStore(string directory)
     /// <summary>Deletes a profile; its models go back to Default. Default itself stays.</summary>
     public void Delete(string id)
     {
-        if (id == Profile.DefaultId || !IsValidId(id)) return;
+        if (id.Equals(Profile.DefaultId, StringComparison.OrdinalIgnoreCase) || !IsValidId(id)) return;
         File.Delete(FileOf(id));
         var assignments = LoadAssignments();
         foreach (var model in assignments.Where(a => a.Value == id).Select(a => a.Key).ToList()) assignments.Remove(model);
@@ -88,7 +113,10 @@ public sealed class ProfileStore(string directory)
         try
         {
             var read = JsonSerializer.Deserialize(text, ProfileJson.Default.SortedDictionaryStringString);
-            return new Dictionary<string, string>(read ?? [], StringComparer.OrdinalIgnoreCase);
+            // Paths differing only in case are one file on Windows: the last wins.
+            var assignments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (model, profile) in read ?? []) assignments[model] = profile;
+            return assignments;
         }
         catch (JsonException)
         {

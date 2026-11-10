@@ -27,7 +27,7 @@ public sealed class Profile
     public Dictionary<string, JsonElement>? Other { get; set; }
 
     [JsonIgnore]
-    public bool IsDefault => Id == DefaultId;
+    public bool IsDefault => string.Equals(Id, DefaultId, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Settings sent with each chat request. Changing them never needs a restart.</summary>
     public sealed class RequestSettings
@@ -164,13 +164,13 @@ public static class ProfileResolver
             overlay?.Name ?? @base.Name,
             Math.Clamp(Value(p => p.Request.Temperature, overlay, @base), 0, 2),
             Math.Clamp(Value(p => p.Request.TopP, overlay, @base), 0, 1),
-            Math.Max(0, Value(p => p.Request.TopK, overlay, @base)),
-            Math.Max(1, Value(p => p.Request.MaxTokens, overlay, @base)),
+            Math.Clamp(Value(p => p.Request.TopK, overlay, @base), 0, 1000),
+            Math.Clamp(Value(p => p.Request.MaxTokens, overlay, @base), 1, 1_048_576),
             Value(p => p.Request.SystemPrompt, overlay, @base),
             Math.Clamp(Value(p => p.Launch.ContextSize, overlay, @base), 0, 4_194_304),
             Profile.KvCacheTypes.Contains(kv) ? kv : "f16",
             Math.Clamp(Value(p => p.Launch.Parallel, overlay, @base), 0, 64),
-            Value(p => p.Launch.LlamaServerArgs, overlay, @base));
+            Value(p => p.Launch.LlamaServerArgs, overlay, @base).Trim());
     }
 }
 

@@ -88,14 +88,38 @@ public sealed class ModelHost : IAsyncDisposable
         get { lock (sync) return running?.Options; }
     }
 
-    /// <summary>Starts the loaded model again, with its profile as it is now.</summary>
-    public async Task RestartAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Starts <paramref name="model"/> again with its profile as it is now,
+    /// if it's still the one running: in turn with switches, so a newer
+    /// switch is never undone. Requests to it finish first.
+    /// </summary>
+    public async Task RestartAsync(ModelEntry model, CancellationToken cancellationToken = default)
     {
-        ModelEntry? model;
-        lock (sync) model = running?.Model;
-        if (model is null) return;
-        await StopAsync().ConfigureAwait(false);
-        await LoadAsync(model, cancellationToken).ConfigureAwait(false);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Task drained;
+            lock (sync)
+            {
+                if (running is not { } r || r.Model.FullPath != model.FullPath) return;
+                switching = true;
+                drained = active == 0 ? Task.CompletedTask : (idle ??= NewSignal()).Task;
+            }
+            try
+            {
+                await drained.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await StopRunningAsync().ConfigureAwait(false);
+                await StartAsync(model).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (sync) switching = false;
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>

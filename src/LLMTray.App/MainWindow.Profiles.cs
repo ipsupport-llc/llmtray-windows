@@ -24,8 +24,11 @@ public sealed partial class MainWindow
         var profiles = App.Current.Profiles;
         if (profiles.Get(profileId) is null) profileId = Profile.DefaultId;
         var selected = profiles.Get(profileId)!;
+        // The profile these controls belong to: a late commit (a field
+        // losing focus after another profile was picked) still goes here.
+        var id = selected.Id;
         var isDefault = selected.IsDefault;
-        var editable = profiles.IsEditable(profileId);
+        var editable = profiles.IsEditable(selected.Id);
 
         yield return Ui.Section(L.T("Profile"));
         var picker = new ComboBox { MinWidth = 220 };
@@ -36,13 +39,13 @@ public sealed partial class MainWindow
         picker.SelectedItem = picker.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == profileId);
         picker.SelectionChanged += (_, _) =>
         {
-            if (picker.SelectedItem is ComboBoxItem { Tag: string id } && id != profileId)
+            if (picker.SelectedItem is ComboBoxItem { Tag: string picked } && picked != id)
             {
-                profileId = id;
+                profileId = picked;
                 DispatcherQueue.TryEnqueue(RenderPage);
             }
         };
-        var users = profiles.ModelsAssignedTo(profileId).Select(path => Path.GetFileNameWithoutExtension(path)).ToList();
+        var users = profiles.ModelsAssignedTo(id).Select(path => Path.GetFileNameWithoutExtension(path)).ToList();
         var subtitle = isDefault
             ? L.T("The base profile: every other profile inherits from it.")
             : L.F("{0} overridden, rest from Default · {1}", selected.OverrideCount,
@@ -61,7 +64,7 @@ public sealed partial class MainWindow
                 [
                     Ui.IconButton("", L.T("New profile (inherits everything from Default)"), () => ShowProfile(profiles.Create(L.T("New profile")).Id)),
                     Ui.IconButton("", L.T("Duplicate this profile"),
-                        () => ShowProfile(profiles.Create($"{selected.Name} {L.T("copy")}", isDefault ? null : selected).Id)),
+                        () => ShowProfile(profiles.Create($"{selected.Name} {L.T("copy")}", selected).Id)),
                     rename,
                     delete,
                 ],
@@ -76,17 +79,17 @@ public sealed partial class MainWindow
             yield return Ui.Card(rows.ToArray());
         }
 
-        var resolved = profiles.Resolved(profileId);
+        var resolved = profiles.Resolved(id);
 
         UIElement? Field(ProfileField field, string title, string help, Func<FrameworkElement> control)
         {
-            var overridden = !isDefault && profiles.Source(field, profileId) == ProfileSource.Overlay;
+            var overridden = !isDefault && profiles.Source(field, id) == ProfileSource.Overlay;
             if (onlyOverrides && !isDefault && !overridden) return null;
             var c = control();
             c.IsHitTestVisible = editable;
             if (c is Control enabled) enabled.IsEnabled = editable;
             var right = overridden
-                ? Ui.Horizontal(c, Ui.IconButton("", L.T("Reset: inherit this setting from Default"), () => profiles.Reset(field, profileId)))
+                ? Ui.Horizontal(c, Ui.IconButton("", L.T("Reset: inherit this setting from Default"), () => profiles.Reset(field, id)))
                 : (UIElement)c;
             var row = Ui.Row(title, help, right);
             if (overridden && row.Children[0] is StackPanel left && left.Children[0] is TextBlock name)
@@ -97,7 +100,7 @@ public sealed partial class MainWindow
             return row;
         }
 
-        void Set(Action<Profile> change) => profiles.Update(profileId, change);
+        void Set(Action<Profile> change) => profiles.Update(id, change);
 
         var sampling = new[]
         {
@@ -136,7 +139,7 @@ public sealed partial class MainWindow
         kv.SelectedItem = kv.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == resolved.KvCacheType);
         kv.SelectionChanged += (_, _) =>
         {
-            if (kv.SelectedItem is ComboBoxItem { Tag: string type } && type != profiles.Resolved(profileId).KvCacheType) Set(p => p.Launch.KvCacheType = type);
+            if (kv.SelectedItem is ComboBoxItem { Tag: string type } && type != profiles.Resolved(id).KvCacheType) Set(p => p.Launch.KvCacheType = type);
         };
         var performance = new[]
         {
@@ -188,7 +191,8 @@ public sealed partial class MainWindow
         box.ValueChanged += (_, e) =>
         {
             var v = double.IsNaN(e.NewValue) ? (automatic ? 0 : e.OldValue) : e.NewValue;
-            if (double.IsNaN(v) || v == value) return;
+            // The box rounding or clamping what it was given is no edit.
+            if (double.IsNaN(v) || Math.Abs(v - value) < step / 1000) return;
             value = v;
             changed(v);
         };

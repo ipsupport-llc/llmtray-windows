@@ -81,7 +81,7 @@ public sealed class ProfileManager
 
     public Profile? Get(string id)
     {
-        lock (sync) return profiles.FirstOrDefault(p => p.Id == id);
+        lock (sync) return profiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
     }
 
     public bool IsEditable(string id)
@@ -94,8 +94,8 @@ public sealed class ProfileManager
     {
         lock (sync)
         {
-            return modelPath is not null && assignments.TryGetValue(modelPath, out var id) && profiles.Any(p => p.Id == id)
-                ? id
+            return modelPath is not null && assignments.TryGetValue(modelPath, out var id) && Get(id) is { } p
+                ? p.Id
                 : Profile.DefaultId;
         }
     }
@@ -112,7 +112,7 @@ public sealed class ProfileManager
         lock (sync) return ProfileResolver.Source(field, Overlay(profileId), Default);
     }
 
-    Profile? Overlay(string profileId) => profileId == Profile.DefaultId ? null : Get(profileId);
+    Profile? Overlay(string profileId) => string.Equals(profileId, Profile.DefaultId, StringComparison.OrdinalIgnoreCase) ? null : Get(profileId);
 
     public IReadOnlyList<string> ModelsAssignedTo(string profileId)
     {
@@ -124,17 +124,38 @@ public sealed class ProfileManager
         }
     }
 
-    /// <summary>Changes a profile and saves it. False when it can't be edited (Default unreadable).</summary>
+    /// <summary>
+    /// Changes a profile and saves it. The change is made to the file as it
+    /// is now, so a hand edit made meanwhile stays; a file that no longer
+    /// reads is never written over. False when it can't be edited.
+    /// </summary>
     public bool Update(string id, Action<Profile> change)
     {
+        string? error = null;
         lock (sync)
         {
             if (!IsEditable(id) || Get(id) is not { } profile) return false;
-            change(profile);
-            store.Save(profile);
+            Profile current;
+            try
+            {
+                current = store.ReadCurrent(profile.Id) ?? profile;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                error = $"{profile.Id}.json can't be read ({e.Message}): it isn't changed until it's fixed or deleted.";
+                if (profile.IsDefault) defaultBroken = true;
+                loadErrors = [.. loadErrors.Where(x => x != error), error];
+                current = profile;
+            }
+            if (error is null)
+            {
+                change(current);
+                store.Save(current);
+                profiles[profiles.IndexOf(profile)] = current;
+            }
         }
         Changed?.Invoke();
-        return true;
+        return error is null;
     }
 
     public void Reset(ProfileField field, string id) => Update(id, field.Clear);
@@ -165,12 +186,12 @@ public sealed class ProfileManager
 
     public void Delete(string id)
     {
-        if (id == Profile.DefaultId) return;
+        if (string.Equals(id, Profile.DefaultId, StringComparison.OrdinalIgnoreCase)) return;
         lock (sync)
         {
             store.Delete(id);
-            profiles.RemoveAll(p => p.Id == id);
-            foreach (var model in assignments.Where(a => a.Value == id).Select(a => a.Key).ToList()) assignments.Remove(model);
+            profiles.RemoveAll(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+            assignments = store.LoadAssignments();
         }
         Changed?.Invoke();
     }
@@ -180,9 +201,12 @@ public sealed class ProfileManager
     {
         lock (sync)
         {
-            if (profileId == Profile.DefaultId) assignments.Remove(modelPath);
-            else assignments[modelPath] = profileId;
-            store.SaveAssignments(assignments);
+            // The file as it is now: a hand edit made meanwhile stays.
+            var current = store.LoadAssignments();
+            if (string.Equals(profileId, Profile.DefaultId, StringComparison.OrdinalIgnoreCase)) current.Remove(modelPath);
+            else current[modelPath] = profileId;
+            store.SaveAssignments(current);
+            assignments = current;
         }
         Changed?.Invoke();
     }
