@@ -176,15 +176,20 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             busy = Busy;
             turn?.Cancel();
+            compaction?.Cancel();
             foreach (var m in Messages.Where(m => m.Streaming)) m.Streaming = false;
         }
         if (busy) Save();
     }
 
-    /// <summary>Ends the answer being written; what came so far stays.</summary>
+    /// <summary>Ends the answer being written (or a compaction); what came so far stays.</summary>
     public void Stop()
     {
-        lock (sync) turn?.Cancel();
+        lock (sync)
+        {
+            turn?.Cancel();
+            compaction?.Cancel();
+        }
     }
 
     async Task AnswerAsync(ChatOptions options)
@@ -506,6 +511,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         Changed?.Invoke();
     }
 
+    CancellationTokenSource? compaction;
+
     /// <summary>True while a compaction runs.</summary>
     public bool Compacting { get; private set; }
 
@@ -549,17 +556,28 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// </summary>
     public async Task<string?> CompactAsync(ChatOptions options, int keepStart = 4, int keepEnd = 6)
     {
+        var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         int mine;
         (int Start, int End) range;
         List<ChatMessage> middle;
         lock (sync)
         {
-            if (Busy || Compacting) return "The chat is busy.";
-            if (CompactionRange(Messages, keepStart, keepEnd) is not { } found) return "There's nothing to compact yet.";
+            if (Busy || Compacting)
+            {
+                cancel.Dispose();
+                return "The chat is busy.";
+            }
+            if (CompactionRange(Messages, keepStart, keepEnd) is not { } found)
+            {
+                cancel.Dispose();
+                return "There's nothing to compact yet.";
+            }
             range = found;
             middle = Messages.GetRange(range.Start, range.End - range.Start);
             mine = epoch;
             Compacting = true;
+            // Stopped by Stop, another chat, or five minutes without an answer.
+            compaction = cancel;
         }
         Changed?.Invoke();
         try
@@ -578,33 +596,49 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             };
             if (options.Model is not null) body["model"] = options.Model;
             using var response = await http.PostAsync(new Uri(apiBase, "v1/chat/completions"),
-                new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return await ErrorOf(response, CancellationToken.None).ConfigureAwait(false);
-            var json = JsonNode.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+                new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), cancel.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return await ErrorOf(response, cancel.Token).ConfigureAwait(false);
+            var json = JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel.Token).ConfigureAwait(false));
             var choice = json?["choices"]?[0];
             var summary = choice?["message"]?["content"]?.GetValue<string>()?.Trim() ?? "";
             // A thinking model can spend it all reasoning: an empty or cut-off summary isn't saved.
             if (summary.Length == 0 || choice?["finish_reason"]?.GetValue<string>() == "length") return "The model's summary came back empty or cut off.";
-            lock (sync)
+            // The splice and its save are one step: another chat opened in
+            // between can't leave the compacted one unsaved.
+            lock (saving)
             {
-                // Another chat meanwhile, or this one changed: the range is stale.
-                if (mine != epoch || Busy || range.End > Messages.Count || !Messages.GetRange(range.Start, range.End - range.Start).SequenceEqual(middle))
+                ChatSessionFile? file;
+                lock (sync)
                 {
-                    return "The chat changed while it was being compacted.";
+                    // Another chat meanwhile, or this one changed: the range is stale.
+                    if (mine != epoch || Busy || range.End > Messages.Count || !Messages.GetRange(range.Start, range.End - range.Start).SequenceEqual(middle))
+                    {
+                        return "The chat changed while it was being compacted.";
+                    }
+                    Messages.RemoveRange(range.Start, range.End - range.Start);
+                    Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow });
+                    file = SnapshotLocked();
                 }
-                Messages.RemoveRange(range.Start, range.End - range.Start);
-                Messages.Insert(range.Start, new ChatMessage { Role = "assistant", Content = summary, IsSummary = true, SentAt = DateTimeOffset.UtcNow });
+                if (file is not null) Write(file);
             }
-            Save();
             return null;
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or InvalidOperationException or TaskCanceledException)
+        catch (OperationCanceledException)
+        {
+            return "Compaction was stopped.";
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or System.Text.Json.JsonException or InvalidOperationException)
         {
             return $"Compaction failed: {e.Message}";
         }
         finally
         {
-            lock (sync) Compacting = false;
+            lock (sync)
+            {
+                Compacting = false;
+                compaction = null;
+            }
+            cancel.Dispose();
             Changed?.Invoke();
         }
     }
@@ -769,10 +803,17 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
 
     void SaveNow()
     {
+        ChatSessionFile? file;
+        lock (sync) file = SnapshotLocked();
+        if (file is not null) Write(file);
+    }
+
+    /// <summary>The chat as a file, taken under <c>sync</c>; null for a chat that isn't saved.</summary>
+    ChatSessionFile? SnapshotLocked()
+    {
         ChatSessionFile file;
-        lock (sync)
         {
-            if (Temporary || Messages.Count == 0) return;
+            if (Temporary || Messages.Count == 0) return null;
             Id ??= Guid.NewGuid();
             // Pictures not on disk yet: written beside the chat first. One
             // that fails (a full disk) stays unsaved and the next save tries again.
@@ -822,6 +863,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             };
             loaded = file;
         }
+        return file;
+    }
+
+    void Write(ChatSessionFile file)
+    {
         try
         {
             store.Save(file);

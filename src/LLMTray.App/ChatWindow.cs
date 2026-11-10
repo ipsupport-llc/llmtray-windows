@@ -211,18 +211,19 @@ sealed partial class ChatWindow : Window
     async Task CompactAsync(bool retry)
     {
         var options = Options();
-        if (retry && chat.Messages.LastOrDefault() is { Role: "assistant", ContextFull: true })
-        {
-            // The failed answer goes first: the summary is made of what came before the question.
-            chat.DropFailedAnswer();
-        }
+        // The chat and question this is for: the retry happens only if they're still on screen.
+        var epoch = chat.Epoch;
+        var question = chat.Messages.LastOrDefault(m => m.Role == "user");
         var problem = await chat.CompactAsync(options);
         if (problem is not null)
         {
             DispatcherQueue.TryEnqueue(() => stats.Text = L.T(problem));
             return;
         }
-        if (retry) await chat.RegenerateAsync(options);
+        if (!retry || chat.Epoch != epoch || chat.Messages.LastOrDefault(m => m.Role == "user") != question) return;
+        // Only now, with the summary in: the failed answer goes and the question is asked again.
+        if (chat.Messages.LastOrDefault() is { Role: "assistant", ContextFull: true }) chat.DropFailedAnswer();
+        await chat.RegenerateAsync(options);
     }
 
     void SendOrStop()
@@ -232,6 +233,8 @@ sealed partial class ChatWindow : Window
             chat.Stop();
             return;
         }
+        // While the chat is being compacted nothing is sent: the draft stays.
+        if (chat.Compacting) return;
         var text = input.Text;
         if (string.IsNullOrWhiteSpace(text) && pending.Count == 0) return;
         input.Text = "";
@@ -514,7 +517,7 @@ sealed partial class ChatWindow : Window
         {
             stack.Children.Add(Ui.Caption(error, Ui.Red));
             // The chat outgrew the model's context: a summary of its middle makes room.
-            if (message.ContextFull && isLast && !chat.Busy && ChatClient.CompactionRange(chat.Messages.Take(chat.Messages.Count - 2).ToList()) is not null)
+            if (message.ContextFull && isLast && !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null)
             {
                 stack.Children.Add(Ui.Button(L.T("Compact the chat and try again"), () => _ = CompactAsync(retry: true), accent: true));
             }
