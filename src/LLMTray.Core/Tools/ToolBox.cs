@@ -47,6 +47,20 @@ public sealed class ToolBox(IReadOnlyList<SelectableTool> tools, Func<IReadOnlyS
         return defs.Length == 0 ? null : new JsonArray(defs);
     }
 
+    /// <summary>
+    /// The call stays on this PC: the calculator, or the time here. Anything
+    /// else (a city's time, the web tools) reaches the internet.
+    /// </summary>
+    public bool IsLocal(ToolCall call)
+    {
+        var name = ToolNameResolver.Resolve(call.Name, tools.Select(t => t.Name).ToList(), Former)?.Name;
+        if (name == "calculate") return true;
+        if (name != "get_current_time") return false;
+        var tool = tools.First(t => t.Name == name);
+        var arguments = ToolArguments.Parse(call.Arguments, tool.FullSchema);
+        return tool.Entry(arguments) == CurrentTimeTool.LocalEntry;
+    }
+
     /// <summary>Runs a call; never throws (but for cancellation).</summary>
     public async Task<ToolOutcome> RunAsync(ToolCall call, IReadOnlySet<string> enabled, CancellationToken cancellationToken)
     {

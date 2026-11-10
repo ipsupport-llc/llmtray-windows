@@ -115,6 +115,13 @@ public sealed class ChatClientTests : IAsyncDisposable
             }
             context.Response.ContentType = "text/event-stream";
             var lastRole = body["messages"]!.AsArray()[^1]!["role"]!.GetValue<string>();
+            if (body["tools"] is JsonArray offered && lastRole == "user" && body["tool_choice"] is null
+                && offered.Any(t => t!["function"]!["name"]!.GetValue<string>() == "fake_echo"))
+            {
+                await context.Response.WriteAsync("data: " + """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"m1","type":"function","function":{"name":"fake_echo","arguments":"{\"text\":\"hi\"}"}}]}}]}""" + "\n\n");
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
             if (body["tools"] is not null && lastRole == "user" && body["tool_choice"] is null)
             {
                 // A tool call, streamed in pieces as llama-server does.
@@ -268,6 +275,31 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.Equal(512, last["thinking_budget_tokens"]!.GetValue<int>());
         // Saved as the user wrote it.
         Assert.Equal("second", chat.Messages[^2].Content);
+    }
+
+    [Theory]
+    [InlineData(McpApproval.Allow, "done")]
+    [InlineData(McpApproval.Deny, "denied")]
+    public async Task McpCallsAreAskedRunAndRecorded(McpApproval decision, string outcome)
+    {
+        var store = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(root, "mcp.json"));
+        await using var hub = new LLMTray.Core.Mcp.McpHub(store, new HttpClient(), "test", root, transport: _ => new FakeMcpServer());
+        await hub.ReviewAndEnableAsync(store.Add(new LLMTray.Core.Mcp.McpServerConfig { Name = "Fake", Command = "fake" }), default);
+        var asked = new List<McpApprovalRequest>();
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: r => { asked.Add(r); return Task.FromResult(decision); }));
+        var answer = chat.Messages[^1];
+        var request = Assert.Single(asked);
+        Assert.Equal("Fake", request.Server);
+        Assert.Equal("""{"text":"hi"}""", request.Arguments);
+        Assert.Equal(outcome, Assert.Single(answer.McpCalls).Outcome);
+        Assert.Contains(decision == McpApproval.Allow ? "echo: hi" : "didn't allow", answer.Content);
+
+        // A temporary chat offers no MCP tools.
+        var temporary = new ChatClient(http, api, new ChatStore(root));
+        temporary.New(temporary: true);
+        await temporary.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: r => throw new InvalidOperationException("asked")));
+        Assert.Empty(temporary.Messages[^1].McpCalls);
     }
 
     [Fact]

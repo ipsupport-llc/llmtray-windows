@@ -48,6 +48,9 @@ public sealed class ChatMessage
     /// <summary>The chat no longer fits the model's context: compacting it lets the next answer through.</summary>
     public bool ContextFull => Error?.Contains("exceeds the available context size", StringComparison.Ordinal) == true;
 
+    /// <summary>The MCP calls this answer made or was refused, as approved.</summary>
+    public List<McpCallRecord> McpCalls { get; init; } = [];
+
     /// <summary>What the Mac app wrote and this app doesn't show yet: saved back as it was.</summary>
     public PersistedMessage? Original { get; init; }
 }
@@ -59,7 +62,17 @@ public sealed class ChatMessage
 /// <param name="Tools">The chat's tools; the profile says which are on (adr/0009).</param>
 /// <param name="Effort">How much a thinking model may think (adr/0011), for a model whose template has <paramref name="Style"/>.</param>
 public sealed record ChatOptions(string? Model, bool Thinking = true, double? Temperature = null, Profiles.ResolvedProfile? Profile = null,
-    Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None);
+    Tools.ToolBox? Tools = null, ThinkingEffort Effort = ThinkingEffort.High, ThinkingStyle Style = ThinkingStyle.None,
+    Mcp.McpHub? Mcp = null, Func<McpApprovalRequest, Task<McpApproval>>? Approve = null);
+
+/// <summary>What the user is asked before an MCP call (adr/0012).</summary>
+/// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
+public sealed record McpApprovalRequest(string Server, string Tool, string Arguments, bool AfterOutsideText, bool? ReadOnly);
+
+public enum McpApproval { Deny, Allow, AllowForThisChat }
+
+/// <summary>An MCP call, kept under the answer and saved with it (the Mac's mcpCalls).</summary>
+public sealed record McpCallRecord(string Server, string Tool, string? Action, string Arguments, string Outcome, DateTimeOffset Date);
 
 /// <summary>
 /// One chat: its messages, sending a turn to the local API and streaming
@@ -92,6 +105,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         lock (sync)
         {
             epoch++;
+            chatAllowed.Clear();
             Id = null;
             loaded = null;
             Title = "";
@@ -109,6 +123,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         lock (sync)
         {
             epoch++;
+            chatAllowed.Clear();
             Id = file.Id;
             loaded = file;
             Title = file.Title;
@@ -129,6 +144,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     SentAt = m.SentAt,
                     Model = m.Model,
                     Sources = [.. m.Sources],
+                    McpCalls = [.. m.McpCalls],
                     Images = images,
                     ImageFilenames = names,
                     IsSummary = m.IsSummary,
@@ -216,6 +232,35 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // The tools this turn may use (Mac adr/0007): the profile's switches.
         var enabled = (options.Profile?.EnabledTools ?? []).ToHashSet();
         var definitions = options.Tools?.Definitions(enabled);
+        // The user's MCP servers (adr/0012): never in a temporary chat, never without someone to ask.
+        IReadOnlyList<Mcp.McpDeclared> mcpTools = [];
+        if (options.Mcp is not null && options.Approve is not null && !Temporary)
+        {
+            var taken = new HashSet<string>((definitions ?? []).Select(d => d?["function"]?["name"]?.GetValue<string>() ?? ""), StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                answer.Activity = "mcp";
+                if (mine == epoch) Changed?.Invoke();
+                mcpTools = await options.Mcp.DeclaredAsync(taken, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+            }
+            catch (Exception e) when (e is Mcp.McpException or IOException or HttpRequestException)
+            {
+            }
+            answer.Activity = null;
+            if (mcpTools.Count > 0)
+            {
+                definitions ??= [];
+                foreach (var t in mcpTools) definitions.Add(t.Tool.Definition(t.ModelName));
+            }
+        }
+        // Outside text read this turn (a web page, search results, an MCP result): every MCP call is asked.
+        var outsideText = false;
+        // An MCP result read this turn: tools that reach the internet wait for the user's next message.
+        var mcpText = false;
+        var deniedThisTurn = new HashSet<string>(StringComparer.Ordinal);
         var rounds = options.Profile?.ToolRounds ?? 10;
         var ran = new Dictionary<string, string>(StringComparer.Ordinal);
         try
@@ -270,9 +315,28 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     answer.Activity = call.Name;
                     if (mine == epoch) Changed?.Invoke();
                     Tools.ToolOutcome outcome;
+                    var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        outcome = await options.Tools!.RunAsync(call, enabled, token).ConfigureAwait(false);
+                        if (mcp is not null)
+                        {
+                            outcome = await RunMcpAsync(mcp, call, options, answer, outsideText, deniedThisTurn, token).ConfigureAwait(false);
+                            outsideText = mcpText = true;
+                        }
+                        else if (mcpText && options.Tools is { } box && !box.IsLocal(call))
+                        {
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(
+                                "refused: this turn has text from an MCP server; tools that reach the internet wait for the user's next message"), null, true);
+                        }
+                        else if (options.Tools is null)
+                        {
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error($"no tool called {call.Name} is available"), null, true);
+                        }
+                        else
+                        {
+                            outcome = await options.Tools.RunAsync(call, enabled, token).ConfigureAwait(false);
+                            if (!options.Tools.IsLocal(call)) outsideText = true;
+                        }
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested)
                     {
@@ -350,6 +414,77 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             return new JsonObject { ["unparsed"] = arguments }.ToJsonString();
         }
     }
+
+    /// <summary>
+    /// An MCP call (Mac adr/0027): asked unless the user let this tool run
+    /// without asking (or for this chat) and the turn read no outside text;
+    /// a deny refuses the tool for the rest of the turn; the outcome is
+    /// recorded under the answer. Nothing is retried.
+    /// </summary>
+    async Task<Tools.ToolOutcome> RunMcpAsync(Mcp.McpDeclared mcp, Tools.ToolCall call, ChatOptions options, ChatMessage answer, bool outsideText,
+        HashSet<string> deniedThisTurn, CancellationToken token)
+    {
+        var hash = mcp.Tool.DefinitionHash;
+        JsonObject arguments;
+        try
+        {
+            arguments = string.IsNullOrWhiteSpace(call.Arguments) ? [] : Tools.LenientJson.Parse(call.Arguments) as JsonObject
+                ?? throw new Tools.LenientJson.Failure("not a JSON object");
+        }
+        catch (Tools.LenientJson.Failure e)
+        {
+            return new Tools.ToolOutcome(Tools.SelectableTool.Error($"{call.Name}: arguments aren't a JSON object ({e.Message})"), null, true);
+        }
+        var shown = arguments.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        void Record(string outcome)
+        {
+            lock (sync) answer.McpCalls.Add(new McpCallRecord(mcp.Server.Name, mcp.Tool.Name, null, shown.Length > 2000 ? shown[..2000] : shown, outcome, DateTimeOffset.UtcNow));
+        }
+        if (deniedThisTurn.Contains(hash))
+        {
+            Record("denied");
+            return new Tools.ToolOutcome("The user didn't allow this tool in this message. Don't call it again unless the user asks.", null, true);
+        }
+        var standing = mcp.Server.RunWithoutAsking.Contains(hash) || chatAllowed.Contains(hash);
+        // After outside text, a standing allowance holds only for a read-only tool of a command server; anything else is asked.
+        var holds = standing && (!outsideText || (mcp.Server.IsCommand && mcp.Tool.ReadOnlyHint == true));
+        if (!holds)
+        {
+            answer.Activity = "approval";
+            Changed?.Invoke();
+            var decision = await options.Approve!(new McpApprovalRequest(mcp.Server.Name, mcp.Tool.Title ?? mcp.Tool.Name, shown, outsideText, mcp.Tool.ReadOnlyHint))
+                .WaitAsync(token).ConfigureAwait(false);
+            answer.Activity = call.Name;
+            Changed?.Invoke();
+            if (decision == McpApproval.Deny)
+            {
+                deniedThisTurn.Add(hash);
+                Record("denied");
+                return new Tools.ToolOutcome("The user didn't allow this call. Don't ask again unless the user does.", null, true);
+            }
+            if (decision == McpApproval.AllowForThisChat && !outsideText) chatAllowed.Add(hash);
+        }
+        try
+        {
+            var (text, isError) = await options.Mcp!.CallAsync(mcp, arguments, token).ConfigureAwait(false);
+            Record(isError ? "failed" : "done");
+            return new Tools.ToolOutcome(isError ? Tools.SelectableTool.Error(text) : text, null, isError);
+        }
+        catch (Mcp.McpTimeoutException e)
+        {
+            Record("unknown");
+            return new Tools.ToolOutcome(Tools.SelectableTool.Error(
+                $"{e.Message}: it may have happened; check before trying again, and don't repeat it without asking the user"), null, true);
+        }
+        catch (Exception e) when (e is Mcp.McpException or IOException or HttpRequestException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Record("notSent");
+            return new Tools.ToolOutcome(Tools.SelectableTool.Error(e.Message), null, true);
+        }
+    }
+
+    /// <summary>MCP tools (by definition hash) the user allowed for this chat; forgotten with it.</summary>
+    readonly HashSet<string> chatAllowed = [];
 
     /// <summary>Calls one response may make; more are dropped.</summary>
     const int MaxCallsPerRound = 8;
@@ -678,8 +813,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     {
         var history = new JsonArray();
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
-        if (options.Tools is not null && options.Profile is { EnabledTools.Count: > 0, ToolUsePolicy: { Length: > 0 } policy }
-            && options.Tools.Definitions(options.Profile.EnabledTools.ToHashSet()) is not null)
+        var anyMcp = options.Mcp is not null && options.Approve is not null && options.Mcp.Store.Load().Any(s => s.Enabled);
+        if (options.Profile is { ToolUsePolicy: { Length: > 0 } policy }
+            && ((options.Tools is not null && options.Tools.Definitions(options.Profile.EnabledTools.ToHashSet()) is not null) || anyMcp))
         {
             system = system.Length == 0 ? policy.Trim() : system + "\n\n" + policy.Trim();
         }
@@ -846,6 +982,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     SentAt = m.SentAt,
                     Model = m.Model,
                     Sources = [.. m.Sources],
+                    McpCalls = [.. m.McpCalls],
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],

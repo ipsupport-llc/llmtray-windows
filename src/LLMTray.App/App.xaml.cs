@@ -50,6 +50,9 @@ public partial class App : Application
     /// <summary>Per-model settings (adr/0008): profiles\ in the data folder.</summary>
     public LLMTray.Core.Profiles.ProfileManager Profiles { get; private set; } = null!;
 
+    /// <summary>The user's MCP servers (adr/0012).</summary>
+    public LLMTray.Core.Mcp.McpHub Mcp { get; private set; } = null!;
+
     /// <summary>The chat's tools (adr/0009); each profile switches them on.</summary>
     public LLMTray.Core.Tools.ToolBox Tools { get; private set; } = null!;
     public string DataFolder { get; private set; } = "";
@@ -80,6 +83,7 @@ public partial class App : Application
     public event Action<DownloadState>? DownloadsChanged;
     public event Action<HostState>? HostChanged;
     public event Action? ProfilesChanged;
+    public event Action? McpChanged;
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -141,6 +145,10 @@ public partial class App : Application
         });
 
         launcher = new JobObjectLauncher();
+        var mcpStore = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(DataFolder, "mcp-servers.json"));
+        Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, Web, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, launcher.Adopt);
+        Mcp.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
+        mcpStore.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         var runtimeRoot = RuntimeRoot;
         Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), m => Profiles.ResolvedFor(m.FullPath).ServerOptions,
             Path.Combine(DataFolder, "logs"));
@@ -411,6 +419,17 @@ public partial class App : Application
             Program.ShowEvent.Set();
             if (proxy is not null) await proxy.DisposeAsync();
             await Host.DisposeAsync();
+            // Servers are asked to end; the job ends whatever doesn't.
+            if (Mcp is not null)
+            {
+                try
+                {
+                    await Mcp.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
         }
         finally
         {

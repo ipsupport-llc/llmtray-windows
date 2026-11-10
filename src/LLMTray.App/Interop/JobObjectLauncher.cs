@@ -69,6 +69,22 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
         return new Child(process, info.dwProcessId);
     }
 
+    /// <summary>
+    /// Puts a process started elsewhere (an MCP server) in the job, so it
+    /// ends with the app too. Processes it starts after this go with it.
+    /// </summary>
+    public void Adopt(System.Diagnostics.Process process)
+    {
+        try
+        {
+            Native.AssignProcessToJobObject(job, process.SafeHandle);
+        }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception)
+        {
+            // Already gone: nothing to tie.
+        }
+    }
+
     /// <summary>The app's environment plus the plan's, sorted as CreateProcess wants it.</summary>
     static string EnvironmentBlock(IReadOnlyDictionary<string, string> extra)
     {
