@@ -3,38 +3,37 @@
 Releases are built by `.github/workflows/release.yml` on a `v*` tag
 (adr/0002). Tags are admin-only.
 
-## One-time setup: the beta signing certificate
+## Signing (adr/0017)
 
-Until the company has a public code-signing certificate, betas are signed
-with a self-signed one (`CN=IPSupport LLC`). Make it once and keep the key
-only in the repository secrets:
+Releases are signed with Azure Artifact Signing. The setup lives in Azure
+and in the repository's `release` environment:
 
-```bash
-umask 077
-openssl req -x509 -newkey rsa:3072 -sha256 -days 730 -nodes \
-  -keyout key.pem -out cert.pem -subj "/CN=IPSupport LLC" \
-  -addext "basicConstraints=critical,CA:FALSE" \
-  -addext "keyUsage=critical,digitalSignature" \
-  -addext "extendedKeyUsage=codeSigning"
-PASSWORD=$(openssl rand -base64 24)
-openssl pkcs12 -export -inkey key.pem -in cert.pem -out sign.pfx -passout pass:"$PASSWORD"
-base64 -i sign.pfx | gh secret set MSIX_CERT_PFX_BASE64 -R ipsupport-llc/llmtray-windows
-printf %s "$PASSWORD" | gh secret set MSIX_CERT_PASSWORD -R ipsupport-llc/llmtray-windows
-rm -P key.pem sign.pfx   # macOS; use shred on Linux
-```
+- **Azure:** an Artifact Signing account and a certificate profile, and an
+  Entra app with a federated credential for this repository's `release`
+  environment and the *Artifact Signing Certificate Profile Signer* role on
+  the account.
+- **`release` environment variables:** `AZURE_TENANT_ID`,
+  `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`, `SIGNING_ENDPOINT`,
+  `SIGNING_ACCOUNT`, `SIGNING_PROFILE`.
+- **`release` environment secret:** `MSIX_PUBLISHER`, the profile's
+  certificate subject, exactly as Azure shows it. It becomes the MSIX
+  `Publisher`.
 
-The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
-`Publisher`, and the release workflow checks that. A new certificate
-(another key) means testers trust the new `.cer` once.
+Changing the profile to another identity changes the MSIX publisher, and
+so the package identity (see adr/0017 for what that costs testers).
+
+Before tagging a release that changes the build, run the workflow by hand
+from `main` (Actions › Release › Run workflow, with the tag name): it
+builds and signs everything and publishes nothing.
 
 ## A beta
 
 1. Merge to `main` through PRs (every check read as *pass*).
 2. Tag `vX.Y.Z-beta.N` on `main` and push it.
 3. `release.yml` tests Core, builds x64 and ARM64 MSIX packages with the
-   pinned llama.cpp inside, signs them, builds the x64 and ARM64 portable
+   pinned llama.cpp inside, signs them (adr/0017), builds the x64 and ARM64 portable
    ZIPs and installers (adr/0007), and creates a GitHub pre-release with the
-   packages, the ZIPs, the `-setup.exe` files and `LLMTray-signing.cer`.
+   packages, the ZIPs and the `-setup.exe` files, all signed.
 
 4. The same run points the Scoop bucket
    ([ipsupport-llc/scoop-bucket](https://github.com/ipsupport-llc/scoop-bucket),

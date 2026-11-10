@@ -604,12 +604,16 @@ public partial class App : Application
     }
 
     /// <summary>The package's local folder; a plain AppData folder when run unpackaged (development).</summary>
+    /// <summary>The earlier package (another publisher) whose data this one took over, while it's still installed (adr/0017).</summary>
+    public string? OldPackage { get; private set; }
+
     static string FindDataFolder()
     {
         string folder;
         try
         {
             folder = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
+            Current.OldPackage = CarryOver(folder);
         }
         catch (Exception e) when (e is InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
@@ -617,5 +621,119 @@ public partial class App : Application
         }
         Directory.CreateDirectory(folder);
         return folder;
+    }
+
+    /// <summary>
+    /// Moves what was copied into place. This folder is new, so a name already
+    /// there is one an interrupted run moved before: the copy left in staging goes.
+    /// </summary>
+    static void Commit(string staging, string folder)
+    {
+        if (!Directory.Exists(staging)) return;
+        foreach (var entry in Directory.EnumerateFileSystemEntries(staging))
+        {
+            var target = Path.Combine(folder, Path.GetFileName(entry));
+            if (File.Exists(target) || Directory.Exists(target)) continue;
+            if (Directory.Exists(entry)) Directory.Move(entry, target);
+            else File.Move(entry, target);
+        }
+        Directory.Delete(staging, recursive: true);
+    }
+
+    /// <summary>Why the earlier package's data couldn't be copied, when it couldn't: the chat says not to remove it yet.</summary>
+    public string? CarryOverFailed { get; private set; }
+
+    /// <summary>
+    /// A package signed by another publisher is another app to Windows, with
+    /// its own data folder (adr/0017). On this package's first start (no
+    /// settings yet), the data of the older LLMTray package used most
+    /// recently (settings, chats, MCP servers, grants) is copied in: into a
+    /// staging folder first, moved into place only once all of it copied.
+    /// Nothing of the old one is changed. Returns that package's folder name
+    /// while it's still installed, so the chat can say to remove it.
+    /// </summary>
+    static string? CarryOver(string folder)
+    {
+        string? from = null;
+        try
+        {
+            var id = Windows.ApplicationModel.Package.Current.Id;
+            var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
+            var marker = Path.Combine(folder, "carried-over.txt");
+            var staging = Path.Combine(folder, ".carrying-over");
+            if (File.Exists(marker) && File.ReadAllText(marker).Trim() is { } pending && pending.StartsWith('>'))
+            {
+                // Interrupted while moving into place: everything was copied, the rest is moved now.
+                from = pending[1..];
+                Commit(staging, folder);
+                File.WriteAllText(marker, from);
+                return Directory.Exists(Path.Combine(packages, from)) ? from : null;
+            }
+            if (File.Exists(marker))
+            {
+                // "!name": copying from it failed once; the chat keeps saying not to remove it.
+                var was = File.ReadAllText(marker).Trim();
+                if (was.StartsWith('!'))
+                {
+                    was = was[1..];
+                    Current.CarryOverFailed = "an earlier start couldn't copy them";
+                }
+                return was.Length > 0 && Directory.Exists(Path.Combine(packages, was)) ? was : null;
+            }
+            if (File.Exists(Path.Combine(folder, "settings.json"))) return null;
+            static DateTime Newest(string dir)
+            {
+                try
+                {
+                    return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Take(20_000).Select(File.GetLastWriteTimeUtc).DefaultIfEmpty().Max();
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // Partly unreadable: ranked by its settings alone; the copy then says what failed.
+                    return File.GetLastWriteTimeUtc(Path.Combine(dir, "settings.json"));
+                }
+            }
+            var old = Directory.EnumerateDirectories(packages, id.Name + "_*")
+                .Where(d => !string.Equals(Path.GetFileName(d), id.FamilyName, StringComparison.OrdinalIgnoreCase))
+                .Select(d => Path.Combine(d, "LocalState"))
+                .Where(d => File.Exists(Path.Combine(d, "settings.json")))
+                .OrderByDescending(Newest)
+                .FirstOrDefault();
+            if (old is null) return null;
+            from = Path.GetFileName(Path.GetDirectoryName(old))!;
+            Directory.CreateDirectory(folder);
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+            foreach (var file in Directory.EnumerateFiles(old, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(old, file);
+                // Not its own bookkeeping: what it carried over once, its restart script, its logs.
+                var top = relative.Split(Path.DirectorySeparatorChar)[0];
+                if (top is "carried-over.txt" or "restart.cmd" or "logs" or ".carrying-over") continue;
+                var target = Path.Combine(staging, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+            // All of it copied: noted first (">name": a restart finishes the moves), then into place, then done.
+            File.WriteAllText(marker, ">" + from);
+            Commit(staging, folder);
+            File.WriteAllText(marker, from);
+            return from;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // Not carried over: the app starts fresh, and while the old package is there the chat says to keep it.
+            if (from is not null)
+            {
+                Current.CarryOverFailed = e.Message;
+                try
+                {
+                    File.WriteAllText(Path.Combine(folder, "carried-over.txt"), "!" + from);
+                }
+                catch (Exception again) when (again is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+            return from;
+        }
     }
 }

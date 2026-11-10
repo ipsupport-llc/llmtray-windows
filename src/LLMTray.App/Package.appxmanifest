@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Version is set by CI from the release tag (adr/0002). Publisher must match the signing certificate's subject. -->
+<!-- Version is set by CI from the release tag (adr/0002). Releases set Publisher to the signing certificate's subject from the release environment (adr/0017). -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"

@@ -1,17 +1,27 @@
 name: Release
 
-# Every v* tag (admin-only): build signed MSIX packages for x64 and ARM64 and
-# publish them on GitHub Releases. Betas (vX.Y.Z-beta.N) are pre-releases.
-# See adr/0002.
+# Every v* tag (admin-only): build MSIX packages, portable ZIPs and installers
+# for x64 and ARM64, sign them with Azure Artifact Signing, and publish them on
+# GitHub Releases. Betas (vX.Y.Z-beta.N) are pre-releases. See adr/0002 and
+# adr/0017. Signing runs in the `release` environment: its variables name the
+# Azure tenant, app, account and profile (signed in with OIDC, no secret), and
+# its secret MSIX_PUBLISHER is the certificate's subject (the manifest's
+# Publisher), kept out of the repository.
 on:
   push:
     tags: ['v*']
+  # A dry run from main: everything built and signed, nothing published.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The version to build as (vX.Y.Z-beta.N); nothing is published
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -28,17 +38,21 @@ jobs:
           global-json-file: global.json
       - id: v
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: dotnet run --project tools/LLMTray.Version -- "$TAG" | tee -a "$GITHUB_OUTPUT"
-      - name: No stable release with the self-signed certificate (adr/0002)
+      - name: Betas only for now (a stable release is the maintainer's call)
         if: steps.v.outputs.prerelease != 'true'
         run: |
-          echo "::error::Stable releases wait for a public signing certificate. Tag a beta (vX.Y.Z-beta.N)."
+          echo "::error::Only betas (vX.Y.Z-beta.N) are released so far; a stable release waits for the maintainer's OK and a PR lifting this check."
           exit 1
 
+  # Built on each platform's own runner, unsigned: the signing action runs on
+  # x64 Windows only, so the sign job below signs everything in one place.
   package:
     needs: version
     name: package (${{ matrix.platform }})
+    # For MSIX_PUBLISHER only: no Azure sign-in here.
+    environment: release
     strategy:
       matrix:
         include:
@@ -75,53 +89,25 @@ jobs:
       - name: Collect the licenses
         shell: pwsh
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
-      - name: Stamp the package version
+      - name: Stamp the package version and Publisher
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
+          PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
         run: |
+          if (-not $env:PUBLISHER) { throw 'the release environment has no MSIX_PUBLISHER secret' }
           $path = 'src/LLMTray.App/Package.appxmanifest'
           [xml]$m = Get-Content $path
           $m.Package.Identity.Version = $env:PACKAGE_VERSION
+          $m.Package.Identity.Publisher = $env:PUBLISHER
           $m.Save((Resolve-Path $path))
-      - name: Import the signing certificate
-        id: cert
-        shell: pwsh
-        env:
-          PFX_BASE64: ${{ secrets.MSIX_CERT_PFX_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.MSIX_CERT_PASSWORD }}
-        run: |
-          if (-not $env:PFX_BASE64 -or -not $env:PFX_PASSWORD) { throw 'MSIX_CERT_PFX_BASE64 or MSIX_CERT_PASSWORD is not set' }
-          $pfx = "$env:RUNNER_TEMP\sign.pfx"
-          try {
-            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
-            $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
-            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          } finally {
-            Remove-Item $pfx -ErrorAction SilentlyContinue
-          }
-          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
-          [xml]$m = Get-Content src/LLMTray.App/Package.appxmanifest
-          if ($cert.Subject -ne $m.Package.Identity.Publisher) {
-            throw "certificate subject '$($cert.Subject)' differs from the manifest Publisher '$($m.Package.Identity.Publisher)'"
-          }
-          New-Item -ItemType Directory dist | Out-Null
-          # The public part, once per release (both jobs hold the same certificate).
-          if ('${{ matrix.platform }}' -eq 'x64') {
-            Export-Certificate -Cert $cert -FilePath dist/LLMTray-signing.cer -Type CERT | Out-Null
-          }
-      - name: Build a signed MSIX
+      - name: Build the MSIX (unsigned)
         run: >
           dotnet build src/LLMTray.App -c Release
           -r ${{ matrix.rid }} -p:Platform=${{ matrix.platform }}
           -p:GenerateAppxPackageOnBuild=true
-          -p:AppxPackageSigningEnabled=true
-          -p:PackageCertificateThumbprint=${{ steps.cert.outputs.thumbprint }}
+          -p:AppxPackageSigningEnabled=false
           -p:AppxPackageDir=${{ github.workspace }}\out\
-      - name: Remove the signing certificate
-        if: always() && steps.cert.outputs.thumbprint != ''
-        shell: pwsh
-        run: Remove-Item "Cert:\CurrentUser\My\${{ steps.cert.outputs.thumbprint }}"
       - name: Collect
         shell: pwsh
         env:
@@ -129,11 +115,12 @@ jobs:
         run: |
           $msix = @(Get-ChildItem out -Recurse -Filter *.msix)
           if ($msix.Count -ne 1) { throw "expected one .msix, found $($msix.Count)" }
-          Copy-Item $msix[0].FullName "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}.msix"
+          New-Item -ItemType Directory -Force unsigned | Out-Null
+          Copy-Item $msix[0].FullName "unsigned/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}.msix"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: msix-${{ matrix.platform }}
-          path: dist/*
+          name: unsigned-msix-${{ matrix.platform }}
+          path: unsigned/*.msix
           if-no-files-found: error
 
   portable:
@@ -173,30 +160,149 @@ jobs:
       - name: Collect the licenses
         shell: pwsh
         run: scripts/generate-licenses.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }}
-      - name: Build the portable ZIP
+      - name: Lay out the portable app
         shell: pwsh
         env:
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
-        run: scripts/build-portable.ps1 -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release $env:DISPLAY_VERSION -Zip "dist/LLMTray-$env:DISPLAY_VERSION-${{ matrix.platform }}-portable.zip" -Setup dist
+        run: scripts/build-portable.ps1 -Step build -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release $env:DISPLAY_VERSION -Folder layout/LLMTray
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: msix-portable-${{ matrix.platform }}
+          name: layout-${{ matrix.platform }}
+          path: layout
+          if-no-files-found: error
+
+  # Everything signed on x64 (adr/0017): both MSIX packages; the portable
+  # app's own programs, then its ZIP and installer made, the installers
+  # signed last. Each signature is checked, and the MSIX signer must be the
+  # package's Publisher. A dry run (workflow_dispatch) signs only from main.
+  sign:
+    needs: [version, package, portable]
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: unsigned-msix-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: layout-x64
+          path: layout-x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: layout-ARM64
+          path: layout-ARM64
+      - id: files
+        name: What to sign
+        shell: pwsh
+        run: |
+          $msix = (Get-ChildItem dist -Filter *.msix | ForEach-Object FullName) -join ','
+          $programs = foreach ($p in 'x64', 'ARM64') {
+            foreach ($f in 'LLMTray.exe', 'app\LLMTray.exe', 'app\cli\llmtray.exe') { (Resolve-Path "layout-$p\LLMTray\$f").Path }
+          }
+          "msix=$msix" >> $env:GITHUB_OUTPUT
+          "programs=$($programs -join ',')" >> $env:GITHUB_OUTPUT
+      - name: Sign in to Azure (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign the MSIX packages and the programs
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ steps.files.outputs.msix }},${{ steps.files.outputs.programs }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Build the portable ZIPs and the installers
+        shell: pwsh
+        env:
+          DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
+        run: |
+          foreach ($p in @(@{ Platform = 'x64'; Rid = 'win-x64' }, @{ Platform = 'ARM64'; Rid = 'win-arm64' })) {
+            scripts/build-portable.ps1 -Step pack -Rid $p.Rid -Platform $p.Platform -Release $env:DISPLAY_VERSION -Folder "layout-$($p.Platform)/LLMTray" `
+              -Zip "dist/LLMTray-$env:DISPLAY_VERSION-$($p.Platform)-portable.zip" -Setup dist
+          }
+      - id: setups
+        name: The installers
+        shell: pwsh
+        run: '"files=" + ((Get-ChildItem dist -Filter *-setup.exe | ForEach-Object FullName) -join ",") >> $env:GITHUB_OUTPUT'
+      - name: Sign the installers
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_PROFILE }}
+          files: ${{ steps.setups.outputs.files }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Check every signature
+        shell: pwsh
+        env:
+          FILES: ${{ steps.files.outputs.msix }},${{ steps.files.outputs.programs }},${{ steps.setups.outputs.files }}
+          PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
+        run: |
+          # Nothing about the signer is printed: its subject names a person.
+          foreach ($f in $env:FILES.Split(',')) {
+            $sig = Get-AuthenticodeSignature $f
+            if ($sig.Status -ne 'Valid') { throw "$(Split-Path $f -Leaf) is not validly signed ($($sig.Status))" }
+            if ($sig.SignerCertificate.Subject -ne $env:PUBLISHER) { throw "$(Split-Path $f -Leaf): the signer isn't MSIX_PUBLISHER" }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($f in (Get-ChildItem dist -Filter *.msix)) {
+            if ((Get-AuthenticodeSignature $f.FullName).SignerCertificate.Subject -ne $env:PUBLISHER) { throw "$($f.Name): the signer isn't MSIX_PUBLISHER" }
+            $zip = [IO.Compression.ZipFile]::OpenRead($f.FullName)
+            try {
+              $reader = [IO.StreamReader]::new($zip.GetEntry('AppxManifest.xml').Open())
+              [xml]$m = $reader.ReadToEnd()
+              $reader.Dispose()
+            } finally { $zip.Dispose() }
+            if ($m.Package.Identity.Publisher -ne $env:PUBLISHER) { throw "$($f.Name): the manifest's Publisher isn't the signer" }
+          }
+          Write-Host 'every file is signed, and each MSIX by its Publisher'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed
           path: |
+            dist/*.msix
             dist/*.zip
             dist/*-setup.exe
           if-no-files-found: error
 
   publish:
-    needs: [version, package, portable]
+    needs: [version, sign]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: msix-*
+          name: signed
           path: dist
-          merge-multiple: true
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -208,11 +314,9 @@ jobs:
 
           **Setup (`-setup.exe`).** Installs LLMTray for your user only, without administrator rights, with a Start menu shortcut and an uninstaller in **Settings › Apps**. If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
 
-          **Package (`.msix`).** Signed with a self-signed certificate until the app gets a public one, so the first install needs administrator rights:
+          **Package (`.msix`).** Open the `.msix` for your PC and choose **Install**: no certificate to install and no administrator rights. Coming from an MSIX of 0.1.0-beta.11 or earlier (signed by "IPSupport LLC" with a self-signed certificate)? Windows sees this one as another app: quit the old LLMTray, install this one and start it (it copies your settings and chats over), then remove the old one in **Settings › Apps**.
 
-          1. Download `LLMTray-signing.cer`, open it, and choose **Install Certificate**.
-          2. Pick **Local Machine**, then **Place all certificates in the following store**, **Trusted People**.
-          3. Open the `.msix` for your PC and choose **Install**.
+          The packages, the installers and LLMTray's own programs are signed with Azure Artifact Signing.
 
           **Portable (`-portable.zip`).** No installation and no administrator rights: unpack it anywhere you can write to and run `LLMTray\LLMTray.exe` (the `app` folder beside it holds the rest). If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
 
@@ -236,9 +340,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: msix-*
+          name: signed
           path: dist
-          merge-multiple: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: repo
