@@ -197,8 +197,11 @@ sealed partial class ChatWindow : Window
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
         var style = entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry);
         thinking.Visibility = style == ThinkingStyle.None ? Visibility.Collapsed : Visibility.Visible;
+        // Short on the button (a lightbulb and the level, Mac: the brain and the level); whole for screen readers.
         var label = L.F("Thinking effort: {0}", EffortName(app.Settings.ThinkingEffort));
-        thinking.Content = label;
+        var shown = Ui.Horizontal(new FontIcon { Glyph = "\uEA80", FontSize = 13 }, new TextBlock { Text = EffortName(app.Settings.ThinkingEffort), FontSize = 12 });
+        shown.Spacing = 6;
+        thinking.Content = shown;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(thinking, label);
     }
 
@@ -417,7 +420,8 @@ sealed partial class ChatWindow : Window
         };
 
         // Above the composer: Regenerate and the numbers.
-        var bar = new Grid { Padding = new Thickness(20, 4, 20, 0) };
+        // Above the composer: Regenerate and Compact (the numbers are under each answer).
+        var bar = new Grid { Padding = new Thickness(24, 2, 24, 0), MaxWidth = 860 };
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         regenerate.Style = Ui.Resource<Style>("SubtleButtonStyle", regenerate.Style);
@@ -427,27 +431,58 @@ sealed partial class ChatWindow : Window
         Grid.SetColumn(stats, 1);
         bar.Children.Add(stats);
 
-        var composer = new Grid { Padding = new Thickness(16, 6, 16, 14), ColumnSpacing = 8 };
-        composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        composer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // The composer (Mac ChatComposer): one card, the message on top, under it the
+        // attach button on the left and thinking and Send on the right, all on one line.
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(input, L.T("Message"));
-        composer.Children.Add(attach);
-        // Pictures waiting to be sent sit above the message box.
-        var box = new StackPanel { Spacing = 6 };
-        box.Children.Add(attachments);
-        box.Children.Add(attachNote);
-        box.Children.Add(input);
-        Grid.SetColumn(box, 1);
-        composer.Children.Add(box);
-        thinking.VerticalAlignment = VerticalAlignment.Bottom;
-        Grid.SetColumn(thinking, 2);
-        composer.Children.Add(thinking);
-        send.VerticalAlignment = VerticalAlignment.Bottom;
+        input.BorderThickness = new Thickness(0);
+        input.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        input.Padding = new Thickness(4, 6, 4, 6);
+        input.MinHeight = 0;
+        foreach (var key in new[] { "TextControlBackgroundFocused", "TextControlBackgroundPointerOver", "TextControlBackground" })
+        {
+            input.Resources[key] = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        }
+        foreach (var key in new[] { "TextControlBorderThemeThicknessFocused", "TextControlBorderThemeThickness" })
+        {
+            input.Resources[key] = new Thickness(0);
+        }
+        var subtle = Ui.Resource<Style>("SubtleButtonStyle", attach.Style);
+        attach.Style = subtle;
+        attach.VerticalAlignment = VerticalAlignment.Center;
+        thinking.VerticalAlignment = VerticalAlignment.Center;
+        thinking.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        thinking.BorderThickness = new Thickness(0);
+        thinking.FontSize = 12;
         send.Style = Ui.Resource<Style>("AccentButtonStyle", send.Style);
-        Grid.SetColumn(send, 3);
-        composer.Children.Add(send);
+        send.VerticalAlignment = VerticalAlignment.Center;
+        send.Width = 34;
+        send.Height = 34;
+        send.Padding = new Thickness(0);
+        send.CornerRadius = new CornerRadius(17);
+        var tools = new Grid();
+        tools.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        tools.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        tools.Children.Add(attach);
+        var right = Ui.Horizontal(thinking, send);
+        right.Spacing = 6;
+        Grid.SetColumn(right, 1);
+        tools.Children.Add(right);
+        // Pictures waiting to be sent sit above the message.
+        var card = new StackPanel { Spacing = 4 };
+        card.Children.Add(attachments);
+        card.Children.Add(attachNote);
+        card.Children.Add(input);
+        card.Children.Add(tools);
+        var frame = new Border
+        {
+            Child = card,
+            Background = Ui.CardBackground,
+            BorderBrush = Ui.Stroke,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(10, 6, 8, 6),
+        };
+        var composer = new Border { Child = frame, Padding = new Thickness(24, 6, 24, 16), MaxWidth = 860 };
 
         var main = new Grid();
         main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -551,9 +586,8 @@ sealed partial class ChatWindow : Window
         compact.Visibility = !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null ? Visibility.Visible : Visibility.Collapsed;
         compact.IsEnabled = !chat.Compacting;
         compact.Content = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
-        stats.Text = last is { Role: "assistant", Stats: { } s } && !last.Streaming && s.TokensPerSecond is double tps
-            ? string.Create(System.Globalization.CultureInfo.CurrentCulture, $"{tps:0.0} tok/s")
-            : "";
+        // The numbers are under the answer itself; the bar keeps only a compaction's problem.
+        if (!chat.Compacting && last is { Role: "assistant" }) stats.Text = "";
         send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? L.T("Stop") : L.T("Send"));
         ToolTipService.SetToolTip(send, chat.Busy ? L.T("Stop") : L.T("Send (Enter)"));

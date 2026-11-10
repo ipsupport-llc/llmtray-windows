@@ -83,6 +83,27 @@ static class Ui
         return grid;
     }
 
+    /// <summary>A path or address in full, selectable, in the code font.</summary>
+    public static TextBlock PathText(string text) => new()
+    {
+        Text = text,
+        FontFamily = Mono,
+        FontSize = 13,
+        IsTextSelectionEnabled = true,
+        TextWrapping = TextWrapping.Wrap,
+    };
+
+    /// <summary>"Title / help" with a wide control under them, the card's full width (a prompt, a long path).</summary>
+    public static Grid StackedRow(string title, string? help, FrameworkElement below, UIElement? right = null)
+    {
+        var grid = Row(title, help, right);
+        var left = (StackPanel)grid.Children[0];
+        below.Margin = new Thickness(0, 6, 0, 0);
+        below.HorizontalAlignment = HorizontalAlignment.Stretch;
+        left.Children.Add(below);
+        return grid;
+    }
+
     /// <summary>A row of buttons: some on the left, some on the right.</summary>
     public static Grid ButtonRow(UIElement[] left, UIElement[] right)
     {
