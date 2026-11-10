@@ -238,7 +238,9 @@ try {
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'LLMTray Settings')))
         if (-not $win) { throw 'Settings did not open from the chat' }
         foreach ($tab in 'General', 'Models', 'Profiles', 'Tools', 'Server', 'Updates') {
-            $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)))
+            $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($nameProp, $tab)),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))))
             $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
             Start-Sleep -Seconds 2
             Save-Screenshot "tab-$($tab.ToLower())"

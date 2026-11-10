@@ -58,9 +58,11 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
-            // Settings closes to nothing: the chat (or the tray) is where the app is.
+            // Settings closes to the chat (or the tray), where the app is; with no tray icon
+            // and no chat on screen, the chat comes back rather than leave nothing.
             args.Cancel = true;
             sender.Hide();
+            if (!App.Current.HasTrayIcon && App.Current.Chat?.AppWindow.IsVisible != true) App.Current.ShowChat();
         };
 
         App.Current.ModelsChanged += () => { if (page == "models") RenderPageSoon(); };

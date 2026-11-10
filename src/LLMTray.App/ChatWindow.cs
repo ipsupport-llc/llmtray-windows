@@ -152,7 +152,12 @@ sealed partial class ChatWindow : Window
         {
             foreground = e.WindowActivationState != WindowActivationState.Deactivated;
             if (foreground) input.Focus(FocusState.Programmatic);
-            else deactivatedAt = DateTime.UtcNow;
+            else
+            {
+                deactivatedAt = DateTime.UtcNow;
+                // Lost to the taskbar (the tray icon's click), not to another app.
+                deactivatedToTaskbar = ForegroundIsTaskbar();
+            }
         };
         if (Content is FrameworkElement root)
         {
@@ -1035,8 +1040,23 @@ sealed partial class ChatWindow : Window
         if (sideFrame is not null) sideFrame.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    /// <summary>In front now, or was until the click on the tray icon took the front from it.</summary>
-    public bool IsForeground => foreground || DateTime.UtcNow - deactivatedAt < TimeSpan.FromMilliseconds(400);
+    /// <summary>In front now, or was until the click on the tray icon (the taskbar) took the front from it.</summary>
+    public bool IsForeground => foreground || (deactivatedToTaskbar && DateTime.UtcNow - deactivatedAt < TimeSpan.FromSeconds(2));
+
+    bool deactivatedToTaskbar;
+
+    static bool ForegroundIsTaskbar()
+    {
+        var name = new System.Text.StringBuilder(64);
+        return GetClassNameW(GetForegroundWindow(), name, name.Capacity) > 0
+            && name.ToString() is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow" or "TopLevelWindowForOverflowXamlIsland";
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int capacity);
 
     /// <summary>Get models (Mac: the header's download button): the download window over the chat.</summary>
     public async Task GetModelsAsync()
@@ -1074,6 +1094,8 @@ sealed partial class ChatWindow : Window
         {
             rendering = false;
         }
+        // Load follows the picker as it is now.
+        RenderStatus();
     }
 
     void RenderChats()

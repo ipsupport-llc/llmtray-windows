@@ -200,6 +200,8 @@ public partial class App : Application
         var commandLine = Environment.GetCommandLineArgs();
         if (commandLine.Contains("--show-log")) ShowLog();
         if (commandLine.Contains("--show-settings")) ShowSettings();
+        // The tray panel became the chat (adr/0014): an old shortcut still shows something.
+        if (commandLine.Contains("--show-popover")) ShowChat();
         if (Array.IndexOf(commandLine, "--screenshots") is var at and >= 0 && at + 1 < commandLine.Length)
         {
             _ = Screenshots.TakeAsync(commandLine[at + 1]);

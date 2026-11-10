@@ -11,6 +11,8 @@ namespace LLMTray.App;
 /// </summary>
 sealed class AboutWindow : Window
 {
+    bool closed;
+
     public AboutWindow()
     {
         Title = L.T("About LLMTray");
@@ -20,6 +22,7 @@ sealed class AboutWindow : Window
         foreach (var part in AboutPage()) column.Children.Add(part);
         Content = new ScrollViewer { Content = column };
         Ui.Center(this, 820, 700, 520, 420);
+        Closed += (_, _) => closed = true;
     }
 
     IEnumerable<UIElement> AboutPage()
@@ -128,7 +131,10 @@ sealed class AboutWindow : Window
             {
                 var all = groups.ToList();
                 if (t.IsCompletedSuccessfully && t.Result.Count > 0) all.Add(new Core.Licenses.LicenseGroup("models", L.T("Downloaded models"), t.Result));
-                DispatcherQueue.TryEnqueue(() => Fill(all, scanning: false));
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!closed) Fill(all, scanning: false);
+                });
             }, TaskScheduler.Default);
 
         var right = new Grid { RowSpacing = 6, Padding = new Thickness(12) };
