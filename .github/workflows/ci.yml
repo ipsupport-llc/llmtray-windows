@@ -237,9 +237,14 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem out -Filter *-setup.exe | Select-Object -First 1
-          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait -PassThru
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
           $dir = Join-Path $env:LOCALAPPDATA 'Programs/LLMTray'
+          # Again over itself, as an update does: a file the build doesn't list goes.
+          'stale' | Set-Content (Join-Path $dir 'app/stale.dll')
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the second setup exited with $($p.ExitCode)" }
+          if (Test-Path (Join-Path $dir 'app/stale.dll')) { throw 'the update left a file of an older version' }
           foreach ($f in 'LLMTray.exe', 'README.txt', 'unins000.exe', 'app/LLMTray.exe') {
             if (-not (Test-Path (Join-Path $dir $f))) { throw "the install has no $f" }
           }

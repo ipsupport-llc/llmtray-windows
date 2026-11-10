@@ -7,6 +7,9 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+#ifndef NumVersion
+  #define NumVersion "0.0.0.0"
+#endif
 #ifndef Arch
   #define Arch "x64"
 #endif
@@ -26,7 +29,6 @@ DefaultGroupName=LLMTray
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 #if Arch == "ARM64"
 ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64
@@ -44,11 +46,12 @@ OutputDir={#Output}
 OutputBaseFilename=LLMTray-{#AppVersion}-{#Arch}-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
-; The running app (and its llama-server) is closed for an update and started again.
-AppMutex=Local\LLMTray.Windows.Instance
+; A running LLMTray (and its llama-server) is closed through Restart Manager;
+; the app's own updater runs setup only after it has exited.
 CloseApplications=yes
+CloseApplicationsFilter=*.exe,*.dll
 RestartApplications=no
-VersionInfoVersion=0.0.0.0
+VersionInfoVersion={#NumVersion}
 VersionInfoCompany=IPSupport LLC
 VersionInfoProductName=LLMTray
 
@@ -72,9 +75,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#Source}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[InstallDelete]
-; An update replaces the app folder whole: no files of an older version stay.
-Type: filesandordirs; Name: "{app}\app"
 
 [Icons]
 Name: "{autoprograms}\LLMTray"; Filename: "{app}\LLMTray.exe"
@@ -82,3 +82,52 @@ Name: "{autodesktop}\LLMTray"; Filename: "{app}\LLMTray.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\LLMTray.exe"; Description: "{cm:LaunchProgram,LLMTray}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+{ After a successful install, app\ keeps only the files this version lists in
+  app\files.txt: an update leaves nothing of an older version behind, and a
+  failed one never deleted anything. }
+var
+  Keep: TStringList;
+
+procedure Prune(const Dir, Rel: String);
+var
+  R: TFindRec;
+  Path, Sub: String;
+begin
+  if FindFirst(Dir + '\*', R) then
+  try
+    repeat
+      if (R.Name <> '.') and (R.Name <> '..') then
+      begin
+        Path := Dir + '\' + R.Name;
+        if Rel = '' then Sub := R.Name else Sub := Rel + '\' + R.Name;
+        if (R.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          Prune(Path, Sub);
+          RemoveDir(Path);
+        end
+        else if Keep.IndexOf(Sub) < 0 then
+          DeleteFile(Path);
+      end;
+    until not FindNext(R);
+  finally
+    FindClose(R);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Root: String;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  Root := ExpandConstant('{app}\app');
+  if not FileExists(Root + '\files.txt') then Exit;
+  Keep := TStringList.Create;
+  try
+    Keep.LoadFromFile(Root + '\files.txt');
+    Prune(Root, '');
+  finally
+    Keep.Free;
+  end;
+end;

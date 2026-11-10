@@ -41,6 +41,12 @@ Models:            %USERPROFILE%\.llmtray\models
 https://github.com/ipsupport-llc/llmtray-windows
 "@ | Set-Content (Join-Path $folder 'README.txt') -Encoding utf8
 
+# What the build put in app\: the installer and the updater remove the rest
+# (adr/0007). Relative paths, one per line.
+$appDir = Join-Path $folder 'app'
+$list = @(Get-ChildItem $appDir -Recurse -File | ForEach-Object { $_.FullName.Substring($appDir.Length + 1) }) + 'files.txt'
+[IO.File]::WriteAllLines((Join-Path $appDir 'files.txt'), [string[]]($list | Sort-Object -Unique), [Text.UTF8Encoding]::new($false))
+
 foreach ($required in 'LLMTray.exe', 'app\LLMTray.exe', 'app\runtime\llama\cpu\llama-server.exe', 'app\Assets\AppIcon.ico', 'app\NOTICE.md', 'app\Strings\de.json') {
     if (-not (Test-Path (Join-Path $folder $required))) { throw "the build has no $required" }
 }
@@ -56,7 +62,15 @@ if ($Setup) {
         $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
     }
     New-Item -ItemType Directory -Force $Setup | Out-Null
-    & $iscc /Q "/DAppVersion=$Release" "/DArch=$Platform" "/DSource=$folder" "/DOutput=$((Resolve-Path $Setup).Path)" (Join-Path $root 'installer/llmtray.iss')
+    # The file version, as for the MSIX (adr/0002): X.Y.(Z*1000+N).0, 999 for a stable release.
+    if ($Release -notmatch '^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$') { throw "not a release version: $Release" }
+    $n = if ($Matches[4]) { [int]$Matches[4] } else { 999 }
+    $numeric = "$($Matches[1]).$($Matches[2]).$([int]$Matches[3] * 1000 + $n).0"
+    $out = (Resolve-Path $Setup).Path
+    $exe = Join-Path $out "LLMTray-$Release-$Platform-setup.exe"
+    if (Test-Path $exe) { Remove-Item $exe }
+    & $iscc /Q "/DAppVersion=$Release" "/DNumVersion=$numeric" "/DArch=$Platform" "/DSource=$folder" "/DOutput=$out" (Join-Path $root 'installer/llmtray.iss')
     if ($LASTEXITCODE -ne 0) { throw 'the installer did not build' }
-    Get-ChildItem $Setup -Filter *-setup.exe | ForEach-Object { Write-Host "$($_.FullName) $([math]::Round($_.Length / 1MB)) MB" }
+    if (-not (Test-Path $exe)) { throw "the installer build made no $exe" }
+    Write-Host "$exe $([math]::Round((Get-Item $exe).Length / 1MB)) MB"
 }

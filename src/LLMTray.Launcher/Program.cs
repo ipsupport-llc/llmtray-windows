@@ -12,7 +12,15 @@ if (!File.Exists(app))
 }
 var info = new ProcessStartInfo(app) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(app)! };
 foreach (var arg in Environment.GetCommandLineArgs().Skip(1)) info.ArgumentList.Add(arg);
-Process.Start(info);
+try
+{
+    Process.Start(info);
+}
+catch (Exception e)
+{
+    Native.MessageBoxW(IntPtr.Zero, $"LLMTray couldn't start:\n{app}\n\n{e.Message}\n\nUnpack or install LLMTray again.", "LLMTray", 0x10);
+    return 3;
+}
 return 0;
 
 static partial class Native
