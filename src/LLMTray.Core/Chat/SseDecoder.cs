@@ -9,7 +9,9 @@ public abstract record SseEvent
     public sealed record Usage(int CompletionTokens, int? PromptTokens, int? CachedTokens, int? ReasoningTokens) : SseEvent;
     public sealed record Error(string Message) : SseEvent;
     /// <summary>A piece of a tool call: the first piece of each has its id and name, the rest more of its arguments.</summary>
-    public sealed record ToolCall(int Index, string? Id, string? Name, string Arguments) : SseEvent;
+    /// <param name="Index">The call's index, or -1 when the server sent none.</param>
+    /// <param name="Position">Its place in this event's tool_calls array.</param>
+    public sealed record ToolCall(int Index, string? Id, string? Name, string Arguments, int Position = 0) : SseEvent;
 }
 
 /// <summary>
@@ -112,15 +114,17 @@ public sealed class SseDecoder
             }
             if (delta.TryGetProperty("tool_calls", out var calls) && calls.ValueKind == JsonValueKind.Array)
             {
+                var position = -1;
                 foreach (var call in calls.EnumerateArray())
                 {
+                    position++;
                     if (call.ValueKind != JsonValueKind.Object) continue;
                     // -1: the server sent no index (the chat decides which call it belongs to).
                     var index = Int(call, "index") ?? -1;
                     string? Text(JsonElement o, string name) =>
                         o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                     var function = call.TryGetProperty("function", out var f) ? f : default;
-                    events.Add(new SseEvent.ToolCall(index, Text(call, "id"), Text(function, "name"), Text(function, "arguments") ?? ""));
+                    events.Add(new SseEvent.ToolCall(index, Text(call, "id"), Text(function, "name"), Text(function, "arguments") ?? "", position));
                 }
             }
             if (delta.TryGetProperty("content", out var content))

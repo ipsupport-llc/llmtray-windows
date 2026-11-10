@@ -329,7 +329,7 @@ public static class WebPageReader
         AllowAutoRedirect = false,
         UseCookies = false,
         AutomaticDecompression = System.Net.DecompressionMethods.All,
-        ConnectTimeout = TimeSpan.FromSeconds(10),
+        ConnectTimeout = TimeSpan.FromSeconds(30),
         ConnectCallback = async (context, ct) =>
         {
             var addresses = await System.Net.Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, ct).ConfigureAwait(false);
@@ -342,15 +342,18 @@ public static class WebPageReader
             foreach (var address in allowed)
             {
                 var socket = new System.Net.Sockets.Socket(address.AddressFamily, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
+                // Each address gets its own few seconds: a blackholed IPv6 doesn't use up the IPv4's turn.
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                attempt.CancelAfter(TimeSpan.FromSeconds(6));
                 try
                 {
-                    await socket.ConnectAsync(address, context.DnsEndPoint.Port, ct).ConfigureAwait(false);
+                    await socket.ConnectAsync(address, context.DnsEndPoint.Port, attempt.Token).ConfigureAwait(false);
                     return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
                 }
-                catch (System.Net.Sockets.SocketException e)
+                catch (Exception e) when (e is System.Net.Sockets.SocketException || (e is OperationCanceledException && !ct.IsCancellationRequested))
                 {
                     socket.Dispose();
-                    last = e;
+                    last = e is OperationCanceledException ? new TimeoutException($"{address} didn't answer") : e;
                 }
                 catch
                 {
@@ -384,9 +387,35 @@ public static class WebPageReader
     /// <summary>The whole read, body included: a site that sends headers and then stalls is given up on.</summary>
     static readonly TimeSpan ReadDeadline = TimeSpan.FromSeconds(30);
 
+    /// <summary>The address check (it resolves the name) given up on with the read: a stalled resolver doesn't hold Stop.</summary>
+    static async Task<(Uri? Url, WebPageText.AddressProblem? Problem)> CheckAsync(string address, CancellationToken ct)
+    {
+        try
+        {
+            return await Task.Run(() => WebPageText.Address(address), CancellationToken.None).WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw;
+        }
+    }
+
     public static async Task<Page> ReadAsync(WebFetch web, string address, CancellationToken ct)
     {
-        var (url, problem) = await Task.Run(() => WebPageText.Address(address), ct).ConfigureAwait(false);
+        (Uri? url, WebPageText.AddressProblem? problem) checkedAddress;
+        using (var dns = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            dns.CancelAfter(TimeSpan.FromSeconds(15));
+            try
+            {
+                checkedAddress = await CheckAsync(address, dns.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new ReadException("the site's name didn't resolve in time");
+            }
+        }
+        var (url, problem) = checkedAddress;
         if (url is null) throw new ReadException(Problem(problem));
         var key = url.AbsoluteUri;
         lock (Cache)
@@ -454,7 +483,7 @@ public static class WebPageReader
                 if (status is >= 300 and < 400 && response.Headers.Location is { } location)
                 {
                     var next = location.IsAbsoluteUri ? location : new Uri(url, location);
-                    var (checkedUrl, problem) = WebPageText.Address(next.AbsoluteUri);
+                    var (checkedUrl, problem) = await CheckAsync(next.AbsoluteUri, ct).ConfigureAwait(false);
                     url = checkedUrl ?? throw new ReadException(Problem(problem));
                     continue;
                 }

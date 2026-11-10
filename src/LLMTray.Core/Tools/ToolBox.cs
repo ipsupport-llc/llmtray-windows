@@ -8,6 +8,9 @@ public sealed class ToolCall
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Arguments { get; set; } = "";
+
+    /// <summary>The arguments as plain JSON, for sending the call back to the model; <see cref="Arguments"/> is what runs.</summary>
+    public string Replay { get; set; } = "";
 }
 
 /// <summary>A call's outcome: the text the model reads, and the source to show under the answer.</summary>

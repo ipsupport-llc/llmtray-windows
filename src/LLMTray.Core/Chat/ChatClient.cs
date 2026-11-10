@@ -205,12 +205,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 {
                     if (call.Id.Length == 0) call.Id = "call_" + Guid.NewGuid().ToString("N")[..12];
                     // Replayed as valid JSON: the next request's template reads it as an object.
-                    call.Arguments = Canonical(call.Arguments);
+                    // What runs (and is checked) is what the model sent.
+                    call.Replay = Canonical(call.Arguments);
                     callArray.Add(new JsonObject
                     {
                         ["id"] = call.Id,
                         ["type"] = "function",
-                        ["function"] = new JsonObject { ["name"] = call.Name, ["arguments"] = call.Arguments },
+                        ["function"] = new JsonObject { ["name"] = call.Name, ["arguments"] = call.Replay },
                     });
                 }
                 assistant["tool_calls"] = callArray;
@@ -218,7 +219,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 foreach (var call in calls.Take(MaxCallsPerRound))
                 {
                     // The same call twice in one message never runs twice.
-                    var key = call.Name + "\0" + call.Arguments;
+                    var key = call.Name + "\0" + call.Arguments.Trim();
                     if (token.IsCancellationRequested)
                     {
                         // Stopped: the rest aren't run, but each still gets a result.
@@ -325,6 +326,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         DateTimeOffset? first = null, last = null;
         AnswerStats.Request request = new();
         var calls = new SortedDictionary<int, Tools.ToolCall>();
+        var batch = new List<int>();
         var before = answer.Content.Length;
         using (var message = new HttpRequestMessage(HttpMethod.Post, new Uri(apiBase, "v1/chat/completions"))
         {
@@ -349,10 +351,23 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 {
                     first ??= DateTimeOffset.UtcNow;
                     last = DateTimeOffset.UtcNow;
-                    // A piece without an index: a new call when it brings an id or a name, else more of the last.
-                    var index = piece.Index >= 0 ? piece.Index
-                        : (piece.Id is { Length: > 0 } || piece.Name is { Length: > 0 }) || calls.Count == 0 ? (calls.Count == 0 ? 0 : calls.Keys.Max() + 1)
-                        : calls.Keys.Max();
+                    // A piece without an index: a new call when it brings an id or a name; otherwise
+                    // more of the call at its place in the latest calls introduced together.
+                    int index;
+                    if (piece.Index >= 0)
+                    {
+                        index = piece.Index;
+                    }
+                    else if (piece.Id is { Length: > 0 } || piece.Name is { Length: > 0 } || calls.Count == 0)
+                    {
+                        if (piece.Position == 0) batch.Clear();
+                        index = calls.Count == 0 ? 0 : calls.Keys.Max() + 1;
+                        batch.Add(index);
+                    }
+                    else
+                    {
+                        index = piece.Position < batch.Count ? batch[piece.Position] : calls.Keys.Max();
+                    }
                     if (!calls.TryGetValue(index, out var call)) calls[index] = call = new Tools.ToolCall();
                     if (piece.Id is { Length: > 0 } id) call.Id = id;
                     if (piece.Name is { Length: > 0 } name) call.Name += name;
