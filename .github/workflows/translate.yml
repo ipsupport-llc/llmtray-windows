@@ -84,9 +84,11 @@ jobs:
           fi
           # shellcheck disable=SC2086
           # A batch that still fails after retries stays untranslated: what
-          # did translate is proposed anyway, and the next run fills the gap.
-          python3 scripts/l10n.py translate --mac mac/Resources/Localization $LANGS \
-            || echo "::warning::some batches failed; proposing the rest"
+          # did translate is proposed anyway (it's paid for), and the run
+          # turns red at the end so the failure is seen.
+          rc=0
+          python3 scripts/l10n.py translate --mac mac/Resources/Localization $LANGS || rc=$?
+          echo "TRANSLATE_RC=$rc" >> "$GITHUB_ENV"
       - name: Check
         run: python3 scripts/l10n.py check --mac mac/Resources/Localization
       - name: Propose
@@ -115,3 +117,8 @@ jobs:
           fi
           # A push by the Actions token starts no workflow: CI is started by hand.
           gh workflow run ci.yml --ref translations/auto
+      - name: Report failed batches
+        if: env.TRANSLATE_RC != '' && env.TRANSLATE_RC != '0'
+        run: |
+          echo "::error::some translation requests failed (see the Translate step); what did translate is proposed"
+          exit 1

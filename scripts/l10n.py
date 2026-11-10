@@ -18,6 +18,7 @@ DIR is the Mac repository's Resources/Localization.
 Standard library only.
 """
 import argparse
+import http.client
 import json
 import os
 import pathlib
@@ -348,8 +349,9 @@ def openai(messages, model, key):
         try:
             with urllib.request.urlopen(req, timeout=300) as r:
                 return json.loads(r.read())["choices"][0]["message"]["content"]
-        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
-            # A dropped connection or a 429/5xx: wait and try again.
+        except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError, json.JSONDecodeError) as e:
+            # A dropped or cut-off connection or a 429/5xx: wait and try again.
+            # Any other HTTP error (a bad key, a wrong model) fails at once.
             if attempt == 2 or (isinstance(e, urllib.error.HTTPError) and e.code not in (429, 500, 502, 503, 504)):
                 raise
             time.sleep(10 * (attempt + 1))
