@@ -211,6 +211,7 @@ public sealed partial class MainWindow : Window
                 [Ui.Button(L.T("Get models…"), () => _ = GetModelsAsync(), accent: true)]));
 
         yield return Ui.Section(L.T("Models"));
+        if (modelsError is { } problem) yield return Ui.Caption(problem, Ui.Red);
         if (catalog.Models.Count == 0)
         {
             yield return Ui.Card(Ui.Row(L.T("No models yet"),
@@ -489,7 +490,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>Opens the download window (also from the popover and the tray).</summary>
+    /// <summary>What last went wrong on the Models tab (a dialog that couldn't open, a model not deleted).</summary>
+    string? modelsError;
+
+    /// <summary>Opens the download window from the Models tab.</summary>
     public async Task GetModelsAsync()
     {
         try
@@ -500,8 +504,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             // Another dialog already open, or the window closing.
-            DownloadText.Text = ex.Message;
-            DownloadPanel.Visibility = Visibility.Visible;
+            modelsError = ex.Message;
+            RenderPage();
         }
     }
 
@@ -532,10 +536,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception e)
         {
-            DownloadText.Text = L.F("{0} wasn't deleted: {1}", model.Name, e.Message);
-            DownloadProgress.Visibility = Visibility.Collapsed;
-            DownloadCancel.Visibility = Visibility.Collapsed;
-            DownloadPanel.Visibility = Visibility.Visible;
+            modelsError = L.F("{0} wasn't deleted: {1}", model.Name, e.Message);
+            RenderPage();
         }
         App.Current.Library.Rescan();
     }
