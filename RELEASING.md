@@ -36,13 +36,10 @@ The subject must stay `CN=IPSupport LLC`: it has to equal the manifest's
    ZIPs, and creates a GitHub pre-release with the packages, the ZIPs and
    `LLMTray-signing.cer`.
 
-4. Bump the Scoop manifest (adr/0005) in a PR. Scoop's `checkver` reads the
-   new tag and fills in each ZIP's URL and the SHA-256 GitHub lists for it
-   (it downloads the ZIP only if GitHub lists none):
-
-   ```powershell
-   $env:SCOOP_GH_TOKEN = gh auth token   # GitHub's API allows 60 calls an hour without it
-   & "$(scoop prefix scoop)\bin\checkver.ps1" -App llmtray -Dir bucket -Update
-   ```
+4. The same run points the Scoop bucket
+   ([ipsupport-llc/scoop-bucket](https://github.com/ipsupport-llc/scoop-bucket),
+   adr/0005) at the new ZIPs: `scripts/bump-scoop.ps1` writes their SHA-256
+   into `bucket/llmtray.json` there, pushed with the bucket's deploy key
+   (secret `SCOOP_BUCKET_DEPLOY_KEY`). Nothing to do by hand.
 
 Stable tags fail until there is a public certificate.
