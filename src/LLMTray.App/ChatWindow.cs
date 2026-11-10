@@ -22,7 +22,7 @@ namespace LLMTray.App;
 /// messages on the right, answers on the left with their thought process
 /// folded, copy and numbers), Regenerate and tok/s above the composer.
 /// </summary>
-sealed class ChatWindow : Window
+sealed partial class ChatWindow : Window
 {
     readonly ChatClient chat;
     readonly ChatStore store;
@@ -68,6 +68,7 @@ sealed class ChatWindow : Window
         store.Changed += _ => DispatcherQueue.TryEnqueue(RenderChats);
 
         Content = Layout();
+        SetUpPictures((UIElement)Content);
         Size(1100, 760);
 
         search.TextChanged += (_, _) => RenderChats();
@@ -80,7 +81,12 @@ sealed class ChatWindow : Window
         ToolTipService.SetToolTip(temporary, L.T("Temporary chat: not saved"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(temporary, L.T("Temporary chat"));
         temporary.Click += (_, _) => chat.New(temporary.IsChecked == true);
-        model.SelectionChanged += (_, _) => { if (!rendering) RenderStatus(); };
+        model.SelectionChanged += (_, _) =>
+        {
+            if (rendering) return;
+            RenderStatus();
+            RenderAttachNote();
+        };
         regenerate.Click += (_, _) => _ = chat.RegenerateAsync(Options());
         send.Click += (_, _) => SendOrStop();
         input.PreviewKeyDown += (_, e) =>
@@ -167,10 +173,13 @@ sealed class ChatWindow : Window
             return;
         }
         var text = input.Text;
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0) return;
         input.Text = "";
+        var images = pending.ToList();
+        pending.Clear();
+        RenderAttachments();
         follow = true;
-        _ = chat.SendAsync(text, Options());
+        _ = chat.SendAsync(text, Options(), images);
     }
 
     // MARK: Layout
@@ -229,17 +238,25 @@ sealed class ChatWindow : Window
         bar.Children.Add(stats);
 
         var composer = new Grid { Padding = new Thickness(16, 6, 16, 14), ColumnSpacing = 8 };
+        composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         composer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(input, L.T("Message"));
-        composer.Children.Add(input);
+        composer.Children.Add(attach);
+        // Pictures waiting to be sent sit above the message box.
+        var box = new StackPanel { Spacing = 6 };
+        box.Children.Add(attachments);
+        box.Children.Add(attachNote);
+        box.Children.Add(input);
+        Grid.SetColumn(box, 1);
+        composer.Children.Add(box);
         thinking.VerticalAlignment = VerticalAlignment.Bottom;
-        Grid.SetColumn(thinking, 1);
+        Grid.SetColumn(thinking, 2);
         composer.Children.Add(thinking);
         send.VerticalAlignment = VerticalAlignment.Bottom;
         send.Style = Ui.Resource<Style>("AccentButtonStyle", send.Style);
-        Grid.SetColumn(send, 2);
+        Grid.SetColumn(send, 3);
         composer.Children.Add(send);
 
         var main = new Grid();
@@ -346,7 +363,8 @@ sealed class ChatWindow : Window
             bubble.ContextFlyout = copyMenu;
             var you = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Right };
             you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
-            you.Children.Add(bubble);
+            if (PicturesView(message, HorizontalAlignment.Right) is { } pictures) you.Children.Add(pictures);
+            if (message.Content.Length > 0) you.Children.Add(bubble);
             return you;
         }
 
@@ -398,6 +416,8 @@ sealed class ChatWindow : Window
                 Padding = new Thickness(14, 10, 14, 10),
             });
         }
+
+        if (PicturesView(message, HorizontalAlignment.Left) is { } made) stack.Children.Add(made);
 
         if (message.Activity is { } activity)
         {

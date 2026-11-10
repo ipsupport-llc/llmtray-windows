@@ -67,6 +67,36 @@ public sealed class ChatStore(string folder)
         Changed?.Invoke(file.Id);
     }
 
+    /// <summary>A chat's pictures: a "&lt;UUID&gt;-images" folder beside its file, as on the Mac.</summary>
+    public string ImagesFolder(Guid id) => Path.Combine(Folder, id.ToString("D").ToUpperInvariant() + "-images");
+
+    /// <summary>Writes a picture (PNG) of a chat; its file name, for the chat's imageFilenames.</summary>
+    public string SaveImage(Guid id, byte[] png)
+    {
+        var folder = ImagesFolder(id);
+        Directory.CreateDirectory(folder);
+        var name = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".png";
+        var path = Path.Combine(folder, name);
+        var temp = path + ".tmp";
+        File.WriteAllBytes(temp, png);
+        File.Move(temp, path, overwrite: true);
+        return name;
+    }
+
+    /// <summary>A saved picture, or null when it's gone or the name points elsewhere.</summary>
+    public byte[]? ReadImage(Guid id, string name)
+    {
+        if (name.Length == 0 || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)) return null;
+        try
+        {
+            return File.ReadAllBytes(Path.Combine(ImagesFolder(id), name));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     public void Rename(Guid id, string title)
     {
         if (Load(id) is { } file) Save(file with { Title = title.Trim() });
@@ -77,7 +107,7 @@ public sealed class ChatStore(string folder)
         try
         {
             File.Delete(PathOf(id));
-            var images = Path.Combine(Folder, id.ToString("D").ToUpperInvariant() + "-images");
+            var images = ImagesFolder(id);
             if (Directory.Exists(images)) Directory.Delete(images, recursive: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
