@@ -196,10 +196,21 @@ try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $chatWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition($np, 'LLMTray')))
         if (-not $chatWindow) { throw 'the chat window did not open' }
-        $box = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Message')))
-        $box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
-        $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($np, 'Send'))).
-            GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        # The window builds itself as it goes (notices come and go): each control is waited for.
+        function Find-InChat([string]$what, $type) {
+            $until = (Get-Date).AddSeconds(20)
+            do {
+                $found = $chatWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                    (New-Object System.Windows.Automation.PropertyCondition($np, $what)),
+                    (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $type)))))
+                if (-not $found) { Start-Sleep -Milliseconds 500 }
+            } until ($found -or (Get-Date) -gt $until)
+            if (-not $found) { throw "no $what in the chat window" }
+            return $found
+        }
+        (Find-InChat 'Message' ([System.Windows.Automation.ControlType]::Edit)).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).
+            SetValue('Write a haiku about a lighthouse, then list three facts about lighthouses as a markdown list.')
+        (Find-InChat 'Send' ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $package = Get-AppxPackage IPSupportLLC.LLMTray
         $sessions = Join-Path $env:LOCALAPPDATA "Packages\$($package.PackageFamilyName)\LocalState\sessions"
         $deadline = (Get-Date).AddMinutes(5)
