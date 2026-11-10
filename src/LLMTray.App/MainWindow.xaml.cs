@@ -1,3 +1,5 @@
+using LLMTray.Core.Control;
+using Microsoft.Win32;
 using LLMTray.Core;
 using LLMTray.Core.Downloads;
 using LLMTray.Core.Models;
@@ -650,22 +652,34 @@ public sealed partial class MainWindow : Window
         return Ui.Row(L.T("Command line"), help + " " + (onPath ? L.T("It's on your PATH: open a new terminal to use it.") : L.F("Its folder: {0}", folder)), button);
     }
 
-    static bool CliOnPath(string folder) =>
-        (Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "")
-            .Split(';', StringSplitOptions.RemoveEmptyEntries).Any(p => string.Equals(p.Trim().TrimEnd('\\'), folder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
+    static bool CliOnPath(string folder) => UserPath.Contains(RawUserPath().Value, folder);
 
-    /// <summary>This user's PATH only (no administrator rights); Windows tells running programs it changed.</summary>
+    /// <summary>HKCU\Environment\Path as stored (not expanded), and whether it's REG_EXPAND_SZ.</summary>
+    static (string Value, RegistryValueKind Kind) RawUserPath()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey("Environment");
+        if (key?.GetValue("Path", null, RegistryValueOptions.DoNotExpandEnvironmentNames) is not string value) return ("", RegistryValueKind.ExpandString);
+        return (value, key.GetValueKind("Path"));
+    }
+
+    /// <summary>
+    /// This user's PATH only (no administrator rights), edited as stored:
+    /// other entries keep their %VAR% references and the value its kind.
+    /// Running programs are told it changed.
+    /// </summary>
     static void SetCliOnPath(string folder, bool on)
     {
         try
         {
-            var parts = (Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "")
-                .Split(';', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => !string.Equals(p.Trim().TrimEnd('\\'), folder.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)).ToList();
-            if (on) parts.Add(folder);
-            Environment.SetEnvironmentVariable("Path", string.Join(";", parts), EnvironmentVariableTarget.User);
+            var (raw, kind) = RawUserPath();
+            if (UserPath.Edit(raw, folder, on) is not { } edited) return;
+            using (var key = Registry.CurrentUser.CreateSubKey("Environment"))
+            {
+                key.SetValue("Path", edited, kind is RegistryValueKind.String ? RegistryValueKind.String : RegistryValueKind.ExpandString);
+            }
+            Interop.EnvironmentBroadcast.Changed();
         }
-        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException)
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or IOException or ArgumentException)
         {
             // Policy forbids it: the folder is shown instead.
         }

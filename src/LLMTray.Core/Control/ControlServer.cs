@@ -13,15 +13,21 @@ public delegate Task<JsonObject> ControlHandler(JsonObject request, Func<JsonObj
 
 /// <summary>
 /// The app's end of the control pipe (adr/0013): always on while the app
-/// runs, reachable only by this user (the pipe is created CurrentUserOnly:
-/// its ACL names this user, and a pipe of the same name made by anyone else
-/// makes creating ours fail rather than be shared). Not reachable from a
-/// browser or the network.
+/// runs, reachable only by this user. Its first instance is created
+/// first-instance-only, so a pipe of that name made by anyone else (a
+/// squatter) makes ours fail rather than join theirs, and one instance is
+/// always kept listening, so the name never lapses while the app runs. Not
+/// reachable from a browser or the network.
 /// </summary>
-/// <param name="log">Told why a connection ended without an answer (the app's control log).</param>
+/// <param name="log">Told why a connection ended without an answer, or why the pipe couldn't be made (the app's control log).</param>
 public sealed class ControlServer(ControlHandler handler, string? pipeName = null, Action<string>? log = null) : IAsyncDisposable
 {
+    /// <summary>Requests served at once; more are told the app is busy.</summary>
+    public const int MaxClients = 8;
+
     readonly CancellationTokenSource stop = new();
+    readonly SemaphoreSlim clients = new(MaxClients, MaxClients);
+    readonly HashSet<Task> serving = [];
     Task? loop;
     bool failing;
 
@@ -29,33 +35,39 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
 
     public void Start() => loop = Task.Run(() => AcceptAsync(stop.Token));
 
+    NamedPipeServerStream Create(bool first) => new(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
+        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly | (first ? PipeOptions.FirstPipeInstance : PipeOptions.None));
+
     async Task AcceptAsync(CancellationToken ct)
     {
+        NamedPipeServerStream? listening = null;
         while (!ct.IsCancellationRequested)
         {
-            NamedPipeServerStream pipe;
-            try
+            if (listening is null)
             {
-                pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                // Once per run of failures, not every two seconds.
-                if (!failing) log?.Invoke($"the pipe {PipeName} couldn't be made: {e.Message}");
-                failing = true;
-                // Taken by another copy (the single-instance hand-over) or by someone else: try again shortly.
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                    // None of ours is open: only a fresh pipe of our own will do.
+                    listening = Create(first: true);
+                    failing = false;
                 }
-                catch (OperationCanceledException)
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
-                    return;
+                    // Taken by another copy (the single-instance hand-over) or by someone else: try again shortly.
+                    if (!failing) log?.Invoke($"the pipe {PipeName} couldn't be made (another copy, or someone else has the name): {e.Message}");
+                    failing = true;
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
             }
-            failing = false;
+            var pipe = listening;
             try
             {
                 await pipe.WaitForConnectionAsync(ct).ConfigureAwait(false);
@@ -63,16 +75,33 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException)
             {
                 await pipe.DisposeAsync().ConfigureAwait(false);
+                listening = null;
                 if (ct.IsCancellationRequested) return;
                 continue;
             }
-            _ = ServeAsync(pipe, ct);
+            // The next instance is made while this one is still open: the name is never free for someone else.
+            try
+            {
+                listening = Create(first: false);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                log?.Invoke($"another instance of the pipe couldn't be made: {e.Message}");
+                listening = null;
+            }
+            var task = ServeAsync(pipe, ct);
+            lock (serving) serving.Add(task);
+            _ = task.ContinueWith(t =>
+            {
+                lock (serving) serving.Remove(t);
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
+        if (listening is not null) await listening.DisposeAsync().ConfigureAwait(false);
     }
 
     async Task ServeAsync(NamedPipeServerStream pipe, CancellationToken ct)
     {
-        await using var _ = pipe;
+        await using var connection = pipe;
         var writing = new SemaphoreSlim(1, 1);
         async Task Send(JsonObject line)
         {
@@ -80,16 +109,26 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             await writing.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                await pipe.WriteAsync(bytes, ct).ConfigureAwait(false);
-                await pipe.FlushAsync(ct).ConfigureAwait(false);
+                // A client that doesn't read can't hold a write forever.
+                using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                limit.CancelAfter(TimeSpan.FromSeconds(30));
+                await pipe.WriteAsync(bytes, limit.Token).ConfigureAwait(false);
+                await pipe.FlushAsync(limit.Token).ConfigureAwait(false);
             }
             finally
             {
                 writing.Release();
             }
         }
+        var admitted = false;
         try
         {
+            admitted = await clients.WaitAsync(0, ct).ConfigureAwait(false);
+            if (!admitted)
+            {
+                await Send(ControlProtocol.Error("LLMTray is busy with other llmtray requests; try again")).ConfigureAwait(false);
+                return;
+            }
             var line = await ReadLineAsync(pipe, ct).ConfigureAwait(false);
             JsonObject? request = null;
             try
@@ -109,8 +148,9 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
                 await Send(ControlProtocol.Error($"this llmtray is newer than the app (protocol {version}); update LLMTray")).ConfigureAwait(false);
                 return;
             }
-            // A client that goes away cancels what it asked for.
+            // A client that goes away (its end closed: a read returns nothing) cancels what it asked for.
             using var gone = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _ = WatchAsync(pipe, gone);
             JsonObject final;
             try
             {
@@ -122,15 +162,47 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             }
             catch (Exception e) when (e is not OutOfMemoryException)
             {
+                log?.Invoke($"{request["cmd"]} failed: {e}");
                 final = ControlProtocol.Error(e.Message);
             }
             await Send(final).ConfigureAwait(false);
-            if (OperatingSystem.IsWindows()) pipe.WaitForPipeDrain();
+            // Until the client has read the answer, a few seconds at most.
+            if (OperatingSystem.IsWindows())
+            {
+                await Task.Run(pipe.WaitForPipeDrain, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            }
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             // Mostly the client went away; anything else is logged, never thrown at the app.
-            if (e is not (IOException or ObjectDisposedException or OperationCanceledException)) log?.Invoke($"a request failed: {e}");
+            if (e is not (IOException or ObjectDisposedException or OperationCanceledException or TimeoutException)) log?.Invoke($"a request failed: {e}");
+        }
+        finally
+        {
+            if (admitted) clients.Release();
+        }
+    }
+
+    /// <summary>The client sends nothing after its request: a read that ends means it hung up.</summary>
+    static async Task WatchAsync(Stream pipe, CancellationTokenSource gone)
+    {
+        var one = new byte[1];
+        try
+        {
+            while (await pipe.ReadAsync(one, gone.Token).ConfigureAwait(false) > 0)
+            {
+            }
+            gone.Cancel();
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
+        {
+            try
+            {
+                gone.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 
@@ -138,7 +210,7 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
     static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
     {
         var buffer = new MemoryStream();
-        var one = new byte[4096];
+        var one = new byte[1];
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
         limit.CancelAfter(TimeSpan.FromSeconds(10));
         while (true)
@@ -146,6 +218,7 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             int read;
             try
             {
+                // A byte at a time: nothing after the request's newline is taken from the pipe.
                 read = await stream.ReadAsync(one, limit.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -153,13 +226,13 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
                 return null;
             }
             if (read == 0) return null;
-            var newline = Array.IndexOf(one, (byte)'\n', 0, read);
-            buffer.Write(one, 0, newline >= 0 ? newline : read);
+            if (one[0] == (byte)'\n') return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+            buffer.WriteByte(one[0]);
             if (buffer.Length > ControlProtocol.MaxRequestBytes) return null;
-            if (newline >= 0) return Encoding.UTF8.GetString(buffer.ToArray());
         }
     }
 
+    /// <summary>Stops listening, cancels what's being served and waits for it, a few seconds at most.</summary>
     public async ValueTask DisposeAsync()
     {
         stop.Cancel();
@@ -173,6 +246,14 @@ public sealed class ControlServer(ControlHandler handler, string? pipeName = nul
             {
             }
         }
-        stop.Dispose();
+        Task[] left;
+        lock (serving) left = [.. serving];
+        try
+        {
+            await Task.WhenAll(left).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException)
+        {
+        }
     }
 }

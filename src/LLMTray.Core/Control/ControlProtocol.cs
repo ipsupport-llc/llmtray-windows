@@ -54,6 +54,9 @@ public static class ControlProtocol
 /// <summary>The CLI's side: one request, its reply lines as they come.</summary>
 public static class ControlClient
 {
+    /// <summary>A reply line at most (a long model list fits many times over).</summary>
+    public const int MaxReplyBytes = 16 << 20;
+
     /// <summary>Sends <paramref name="request"/> and yields each reply line until the final one.</summary>
     public static async IAsyncEnumerable<JsonObject> AskAsync(JsonObject request, TimeSpan connectTimeout,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -65,8 +68,8 @@ public static class ControlClient
         var bytes = Encoding.UTF8.GetBytes(ControlProtocol.Line(request));
         await pipe.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
         await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
-        using var reader = new StreamReader(pipe, new UTF8Encoding(false));
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        var lines = new LineReader(pipe, MaxReplyBytes);
+        while (await lines.ReadAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (line.Length == 0) continue;
             JsonObject? reply;
@@ -79,9 +82,38 @@ public static class ControlClient
                 reply = null;
             }
             if (reply is null) throw new IOException("LLMTray sent something that isn't a reply");
+            // Decided before the caller sees (and may change) it.
+            var last = reply.ContainsKey("done") || reply.ContainsKey("error");
             yield return reply;
-            if (reply.ContainsKey("done") || reply.ContainsKey("error")) yield break;
+            if (last) yield break;
         }
         throw new IOException("LLMTray closed the connection before it answered");
+    }
+
+    /// <summary>UTF-8 lines from a stream, each at most a set length.</summary>
+    sealed class LineReader(Stream stream, int max)
+    {
+        readonly byte[] buffer = new byte[8192];
+        int start, end;
+
+        public async Task<string?> ReadAsync(CancellationToken ct)
+        {
+            var line = new MemoryStream();
+            while (true)
+            {
+                if (start == end)
+                {
+                    start = 0;
+                    end = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+                    if (end == 0) return line.Length > 0 ? Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length) : null;
+                }
+                var newline = Array.IndexOf(buffer, (byte)'\n', start, end - start);
+                var stopAt = newline >= 0 ? newline : end;
+                line.Write(buffer, start, stopAt - start);
+                start = newline >= 0 ? newline + 1 : end;
+                if (line.Length > max) throw new IOException("LLMTray sent a reply line too long to read");
+                if (newline >= 0) return Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length).TrimEnd('\r');
+            }
+        }
     }
 }

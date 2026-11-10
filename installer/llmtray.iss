@@ -38,6 +38,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 MinVersion=10.0.22621
 WizardStyle=modern
+; Uninstalling takes llmtray's folder off PATH (if the app put it there) and says so to running programs.
+ChangesEnvironment=yes
 WizardSizePercent=110
 SetupIconFile={#Source}\app\Assets\AppIcon.ico
 UninstallDisplayIcon={app}\LLMTray.exe
@@ -134,4 +136,38 @@ begin
   finally
     Keep.Free;
   end;
+end;
+
+{ The app's "Add to PATH" (adr/0013) puts app\cli on this user's PATH;
+  uninstalling takes exactly that entry off and leaves the rest as stored. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Raw, Rest, Part, Kept, Cli: String;
+  I: Integer;
+begin
+  if CurUninstallStep <> usPostUninstall then Exit;
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Raw) then Exit;
+  Cli := Lowercase(ExpandConstant('{app}\app\cli'));
+  Rest := Raw;
+  Kept := '';
+  while Rest <> '' do
+  begin
+    I := Pos(';', Rest);
+    if I = 0 then
+    begin
+      Part := Rest;
+      Rest := '';
+    end
+    else
+    begin
+      Part := Copy(Rest, 1, I - 1);
+      Delete(Rest, 1, I);
+    end;
+    if (Part <> '') and (Lowercase(RemoveBackslashUnlessRoot(Trim(Part))) <> Cli) then
+    begin
+      if Kept <> '' then Kept := Kept + ';';
+      Kept := Kept + Part;
+    end;
+  end;
+  if Kept <> Raw then RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Kept);
 end;

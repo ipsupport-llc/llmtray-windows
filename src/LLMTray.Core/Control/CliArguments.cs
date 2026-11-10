@@ -52,11 +52,12 @@ public sealed record CliArguments(string Command, IReadOnlyList<string> Words, I
             }
             if (Valued.Contains(a))
             {
-                if (i + 1 >= args.Count) throw new FormatException($"{a} needs a value");
+                // An option after it isn't its value (--model --json).
+                if (i + 1 >= args.Count || Flags.Contains(args[i + 1]) || Valued.Contains(args[i + 1])) throw new FormatException($"{a} needs a value");
                 options[a] = args[++i];
                 continue;
             }
-            if (a.StartsWith("--", StringComparison.Ordinal) && a.Contains('='))
+            if (a.StartsWith('-') && a.Contains('='))
             {
                 var eq = a.IndexOf('=');
                 var name = a[..eq];

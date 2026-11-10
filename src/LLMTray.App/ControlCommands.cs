@@ -141,9 +141,15 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
         var source = app.Sources[app.Settings.DownloadSource];
         var root = app.ModelsFolder;
         DownloadJob job;
+        // An exact title or folder; part of a title only when it names one model (a big download is never a guess).
         var featured = FeaturedModels.All.FirstOrDefault(m => m.Title.Equals(name, StringComparison.OrdinalIgnoreCase)
-            || m.Folder.Equals(name, StringComparison.OrdinalIgnoreCase)
-            || m.Title.Contains(name, StringComparison.OrdinalIgnoreCase));
+            || m.Folder.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (featured is null && !name.Contains('/'))
+        {
+            var partial = FeaturedModels.All.Where(m => m.Title.Contains(name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (partial.Count > 1) return ControlProtocol.Error($"{name} could be {string.Join(", ", partial.Select(m => m.Title))}; give the whole name");
+            featured = partial.FirstOrDefault();
+        }
         if (featured is not null)
         {
             if (!featured.IsOn(source.Kind)) return ControlProtocol.Error($"{featured.Title} isn't on {source.Kind}; choose the other source in the window");
@@ -157,34 +163,49 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
             var (files, problem) = PullPlan.Choose(await source.ListAsync(pinned, ct), parts.Length > 1 ? parts[1] : null);
             if (files is null) return ControlProtocol.Error(problem!);
             var folder = source.LocalFolder(pinned);
+            // Each file stays inside its repository's folder: a listed "../other/x.gguf" can't replace another model.
+            var repoRoot = FeaturedModel.Inside(root, folder);
             var items = new List<DownloadItem>();
             foreach (var f in files)
             {
                 var url = await source.FileUrlAsync(pinned, f.Name, ct);
-                items.Add(new DownloadItem(url, FeaturedModel.Inside(root, Path.Combine(folder, f.Name)), f.Size > 0 ? f.Size : null, f.Sha256, $"{pinned}/{f.Name}"));
+                items.Add(new DownloadItem(url, FeaturedModel.Inside(repoRoot, f.Name), f.Size > 0 ? f.Size : null, f.Sha256, $"{pinned}/{f.Name}"));
             }
             job = new DownloadJob(Path.GetFileNameWithoutExtension(files[0].Name), items);
         }
         var finished = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lastPercent = -1L;
+        // Whether the queue got to it yet: once it has and moved on, it finished, failed or was cancelled.
+        var started = 0;
+        // Progress lines go out one after another, in order.
+        var sending = Task.CompletedTask;
+        var sendLock = new object();
+        void Send(JsonObject line)
+        {
+            lock (sendLock) sending = sending.ContinueWith(_ => emit(line), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+        }
         void Completed(DownloadJob done)
         {
             if (done == job) finished.TrySetResult(null);
         }
         void Changed(DownloadState state)
         {
-            if (state.Current == job && state.Total is long total && total > 0)
+            if (state.Current == job)
             {
-                var percent = 100 * state.Received / total;
-                if (percent != Interlocked.Exchange(ref lastPercent, percent))
+                Volatile.Write(ref started, 1);
+                if (state.Total is long total && total > 0)
                 {
-                    _ = emit(ControlProtocol.Event("progress", new JsonObject { ["received"] = state.Received, ["total"] = total, ["text"] = $"{job.Title}: {percent}%" }));
+                    var percent = 100 * state.Received / total;
+                    if (percent != Interlocked.Exchange(ref lastPercent, percent))
+                    {
+                        Send(ControlProtocol.Event("progress", new JsonObject { ["received"] = state.Received, ["total"] = total, ["text"] = $"{job.Title}: {percent}%" }));
+                    }
                 }
             }
-            // The queue moved on without it: it failed or was cancelled.
-            else if (state.Current != job && state.LastError is { } error && lastPercent >= 0 && !finished.Task.IsCompleted)
+            else if (Volatile.Read(ref started) == 1 && !finished.Task.IsCompleted)
             {
-                finished.TrySetResult(error);
+                // Moved on without Completed: it failed or was cancelled (Completed, when it comes first, wins).
+                finished.TrySetResult(state.LastError ?? $"{job.Title} didn't finish");
             }
         }
         app.Downloads.Completed += Completed;

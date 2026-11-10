@@ -5,6 +5,7 @@ using LLMTray.Core.Control;
 
 // llmtray (adr/0013): exit codes 0 ok, 1 error, 2 usage, 130 after Ctrl-C.
 Console.OutputEncoding = new UTF8Encoding(false);
+Console.InputEncoding = new UTF8Encoding(false);
 CliArguments arguments;
 try
 {
@@ -20,6 +21,8 @@ catch (FormatException e)
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
+    // The first Ctrl-C stops politely; a second one ends llmtray at once.
+    if (cancel.IsCancellationRequested) return;
     e.Cancel = true;
     cancel.Cancel();
 };
@@ -39,9 +42,10 @@ catch (OperationCanceledException)
 {
     return 130;
 }
-catch (Exception e) when (e is IOException or TimeoutException or HttpRequestException or UnauthorizedAccessException or InvalidOperationException)
+catch (Exception e)
 {
-    Console.Error.WriteLine($"llmtray: {e.Message}");
+    // Whatever went wrong is one line and exit 1, never a stack trace.
+    Console.Error.WriteLine($"llmtray: {(e is TimeoutException ? "LLMTray didn't answer (is it running?)" : e.Message)}");
     return 1;
 }
 
@@ -53,7 +57,9 @@ static int Help()
 
 static int Version()
 {
-    Console.WriteLine($"llmtray {typeof(CliArguments).Assembly.GetName().Version?.ToString(3) ?? "dev"}");
+    var version = typeof(CliArguments).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0];
+    Console.WriteLine($"llmtray {(version is null or "1.0.0" ? "dev" : version)}");
     return 0;
 }
 
@@ -79,8 +85,9 @@ static async Task<int> Control(CliArguments a, CancellationToken ct)
         }
         if (json)
         {
-            reply.Remove("done");
-            Console.WriteLine(reply.ToJsonString());
+            var shown = reply.DeepClone().AsObject();
+            shown.Remove("done");
+            Console.WriteLine(shown.ToJsonString());
         }
         else if (reply["text"]?.GetValue<string>() is { Length: > 0 } text)
         {
@@ -124,7 +131,14 @@ static void StartApp()
     var app = Path.Combine(Path.GetDirectoryName(here) ?? here, "LLMTray.exe");
     if (!File.Exists(app)) throw new IOException($"LLMTray isn't running, and it isn't at {app} to start");
     Console.Error.WriteLine("llmtray: starting LLMTray…");
-    Process.Start(new ProcessStartInfo(app, "--background") { UseShellExecute = false })?.Dispose();
+    try
+    {
+        Process.Start(new ProcessStartInfo(app, "--background") { UseShellExecute = false })?.Dispose();
+    }
+    catch (System.ComponentModel.Win32Exception e)
+    {
+        throw new IOException($"LLMTray isn't running and couldn't be started: {e.Message}", e);
+    }
 }
 
 static async Task<int> Api(CancellationToken ct)
@@ -136,10 +150,21 @@ static async Task<int> Api(CancellationToken ct)
             Console.Error.WriteLine($"llmtray: {error}");
             return 1;
         }
-        if (reply["api"]?.GetValue<string>() is { } api) Console.WriteLine(api);
+        if (reply["done"] is null) continue;
+        if (ApiOf(reply) is not { } api)
+        {
+            Console.Error.WriteLine("llmtray: LLMTray didn't say where its API is");
+            return 1;
+        }
+        Console.WriteLine(api);
     }
     return 0;
 }
+
+/// <summary>The API address from a status reply, only if it's on this PC: the prompt never goes anywhere else.</summary>
+static string? ApiOf(JsonObject reply) =>
+    reply["api"] is JsonValue v && v.TryGetValue<string>(out var text) && Uri.TryCreate(text, UriKind.Absolute, out var url)
+        && url.Scheme == Uri.UriSchemeHttp && url.IsLoopback ? text : null;
 
 /// <summary>
 /// A question to a model through the API, the answer streamed to stdout
@@ -162,9 +187,13 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
             Console.Error.WriteLine($"llmtray: {error}");
             return 1;
         }
-        api ??= reply["api"]?.GetValue<string>();
+        if (reply["done"] is not null) api = ApiOf(reply);
     }
-    if (api is null) return 1;
+    if (api is null)
+    {
+        Console.Error.WriteLine("llmtray: LLMTray didn't say where its API is");
+        return 1;
+    }
     var messages = new JsonArray();
     if (a.Option("--system", "-s") is { } system) messages.Add((JsonNode)new JsonObject { ["role"] = "system", ["content"] = system });
     messages.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] = prompt });
@@ -186,13 +215,18 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
     var showThinking = a.Has("--show-thinking");
     var answer = new StringBuilder();
     var thinking = false;
+    var finished = false;
     await using var stream = await response.Content.ReadAsStreamAsync(ct);
     using var reader = new StreamReader(stream, Encoding.UTF8);
     while (await reader.ReadLineAsync(ct) is { } line)
     {
         if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
         var data = line[5..].Trim();
-        if (data == "[DONE]") break;
+        if (data == "[DONE]")
+        {
+            finished = true;
+            break;
+        }
         JsonNode? chunk;
         try
         {
@@ -207,7 +241,10 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
             Console.Error.WriteLine($"llmtray: {error["message"] ?? error}");
             return 1;
         }
-        var delta = chunk?["choices"]?[0]?["delta"];
+        // The last chunk may carry usage only, with no choices.
+        var choice = chunk?["choices"] is JsonArray { Count: > 0 } choices ? choices[0] : null;
+        if (choice?["finish_reason"] is JsonValue reason && reason.TryGetValue<string>(out _)) finished = true;
+        var delta = choice?["delta"];
         var reasoning = (delta?["reasoning_content"] ?? delta?["reasoning"])?.GetValue<string>();
         if (reasoning is { Length: > 0 } && showThinking && !json)
         {
@@ -225,11 +262,17 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
                 Console.Error.WriteLine();
                 thinking = false;
             }
-            answer.Append(content);
+            if (json) answer.Append(content);
             if (!json) Console.Write(content);
         }
     }
+    if (!json) Console.WriteLine();
+    if (!finished)
+    {
+        // Cut off (the server stopped mid-answer): what came isn't the whole answer.
+        Console.Error.WriteLine("llmtray: the answer was cut off");
+        return 1;
+    }
     if (json) Console.WriteLine(new JsonObject { ["content"] = answer.ToString() }.ToJsonString());
-    else Console.WriteLine();
     return 0;
 }

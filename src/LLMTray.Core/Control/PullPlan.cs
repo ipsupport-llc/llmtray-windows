@@ -21,7 +21,9 @@ public static class PullPlan
         RemoteFile? pick;
         if (wanted is { Length: > 0 })
         {
-            pick = models.FirstOrDefault(f => f.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase));
+            // A whole file of that quantization first; a split one only says to use the window.
+            pick = whole.FirstOrDefault(f => f.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase))
+                ?? models.FirstOrDefault(f => f.Name.Contains(wanted, StringComparison.OrdinalIgnoreCase));
             if (pick is null) return (null, $"no file with {wanted} in its name");
         }
         else
