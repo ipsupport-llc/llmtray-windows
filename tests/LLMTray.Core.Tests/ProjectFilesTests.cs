@@ -147,6 +147,36 @@ public sealed class ProjectFilesTests : IDisposable
     }
 
     [Fact]
+    public void AScannedPageIsReadFromItsPicture()
+    {
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNoAAAAggCBd81ytgAAAABJRU5ErkJggg==");
+        var builder = new PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        // A scan with a scanner's footer, a text page with a logo, a blank page.
+        var scan = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        scan.AddPng(png, new UglyToad.PdfPig.Core.PdfRectangle(0, 0, 500, 700));
+        scan.AddText("Page 1", 8, new UglyToad.PdfPig.Core.PdfPoint(50, 20), font);
+        var text = builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        text.AddPng(png, new UglyToad.PdfPig.Core.PdfRectangle(0, 700, 50, 750));
+        text.AddText(string.Concat(Enumerable.Repeat("Delivery within thirty days. ", 6)), 10, new UglyToad.PdfPig.Core.PdfPoint(50, 600), font);
+        builder.AddPage(UglyToad.PdfPig.Content.PageSize.A4);
+        var path = Path.Combine(root, "scan.pdf");
+        File.WriteAllBytes(path, builder.Build());
+        var asked = new List<int>();
+        var pages = DocumentExtractor.Extract(path, DocumentFormat.Pdf, recognize: (_, page) =>
+        {
+            asked.Add(page);
+            return "Invoice 42: payment due in March";
+        }).ToList();
+        // Only the scan is recognized (a text page and a page without a picture aren't), after what little text it had.
+        Assert.Equal([1], asked);
+        Assert.Equal("Page 1\nInvoice 42: payment due in March", pages[0].Text);
+        Assert.DoesNotContain("Invoice", pages[1].Text);
+        // Without a recognizer (or a recognition language), a scan reads as before.
+        Assert.Equal("Page 1", DocumentExtractor.Extract(path, DocumentFormat.Pdf).First().Text.Trim());
+    }
+
+    [Fact]
     public void ZipBombsAndDoctypesAreRefused()
     {
         var path = Path.Combine(root, "bomb.docx");

@@ -33,14 +33,15 @@ public static class ExtractProtocol
     public const string ArgumentName = "--extract";
 
     /// <summary>The child: <c>LLMTray.exe --extract &lt;path&gt; &lt;format&gt;</c>. Returns its exit code.</summary>
-    public static int RunChild(string path, string format, TextReader input, Stream output)
+    /// <param name="recognize">Reads scanned PDF pages (the app's: Windows' PDF renderer and text recognition, in this process).</param>
+    public static int RunChild(string path, string format, TextReader input, Stream output, PageRecognizer? recognize = null)
     {
         using var writer = new StreamWriter(output, new UTF8Encoding(false)) { AutoFlush = false, NewLine = "\n" };
         if (input.ReadLine()?.Trim() != "go") return 2;
         try
         {
             if (!Enum.TryParse<DocumentFormat>(format, out var kind)) throw new ExtractException("unknown format");
-            foreach (var page in DocumentExtractor.Extract(path, kind))
+            foreach (var page in DocumentExtractor.Extract(path, kind, recognize: recognize))
             {
                 var line = new JsonObject { ["p"] = page.Number, ["t"] = page.Text };
                 if (page.Label is { } label) line["l"] = label;
@@ -156,8 +157,8 @@ public static class ExtractProtocol
 /// <summary>Runs <see cref="ExtractProtocol"/> against a child started by <paramref name="start"/> (the app's: its own exe in a job).</summary>
 public sealed class ChildProcessReader(Func<string, DocumentFormat, ReaderProcess> start) : IDocumentReader
 {
-    /// <summary>A minute, and a minute more per 10 MB.</summary>
-    public static TimeSpan WallTime(long bytes) => TimeSpan.FromSeconds(60 + bytes / (10L << 20) * 60);
+    /// <summary>Two minutes, and a minute more per 5 MB: a scan's pages are recognized one by one, a second or so each.</summary>
+    public static TimeSpan WallTime(long bytes) => TimeSpan.FromSeconds(120 + bytes / (5L << 20) * 60);
 
     public Task<IReadOnlyList<ExtractedPage>> ReadAsync(string path, DocumentFormat format, CancellationToken cancellationToken)
     {

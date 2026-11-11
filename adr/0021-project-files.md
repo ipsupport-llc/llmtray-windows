@@ -35,9 +35,20 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   repeated with each chunk), PowerPoint (.pptx: a page per slide, notes
   after), OpenDocument text, RTF, HTML, Markdown, plain text and code.
   Text files: BOM, then UTF-8, then the system's legacy code page. Not yet:
-  legacy .doc/.xls/.ppt (refused by name at add), scans (a page with no
-  text layer is "no text"; Windows OCR is the next tier), pictures, linked
-  folders.
+  legacy .doc/.xls/.ppt (refused by name at add), linked folders. Pictures
+  are kept apart, for documents (adr/0024).
+- **Scanned PDF pages are read from their picture** (Mac adr/0012 tier 2,
+  ahead of the Mac). The test is a page with fewer than 100 characters of
+  text (a scanner's footer, a page number) and a picture on it.
+  - It runs in the reader process: Windows' own PDF renderer
+    (`Windows.Data.Pdf`) draws the page at the size the recognizer takes,
+    and `Windows.Media.Ocr` reads it in the user's languages, as for a
+    shown window (adr/0022).
+  - The recognized text follows what little the page had.
+  - At most 300 pages a document.
+  - The reader's wall time is two minutes, and a minute more per 5 MB.
+  - Nothing is downloaded. With no recognition language installed, or a
+    page that won't draw, a scan reads as no text, as before.
 - **Readers see hostile files, so they're our own and confined**: OOXML
   and ODT through a capped zip reader (entries, bytes per part and in all,
   compression ratio) and XML with DTDs prohibited and nesting capped; RTF
@@ -136,5 +147,5 @@ The Mac is the spec; what differs is what Windows offers: SQLite from
 NuGet (Windows has no system SQLite to link), PdfPig and our own readers
 instead of PDFKit and the system importers, a Job Object instead of
 posix_spawn limits, and llama.cpp's bge-m3 GGUF already used by memory.
-Not built yet, on the map: OCR (Windows.Media.Ocr), the legacy Office
-formats, linked folders, the df gate and compaction of the index.
+Not built yet, on the map: OCR of pictures themselves (and their
+descriptions, Mac tier 2's second half), the legacy Office formats, linked folders, the df gate and compaction of the index.

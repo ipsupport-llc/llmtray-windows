@@ -16,6 +16,14 @@ namespace LLMTray.Core.ProjectFiles;
 /// </summary>
 public sealed record ExtractedPage(int Number, string Text, string? Label = null, bool Table = false);
 
+/// <summary>
+/// Reads the text in a scanned page (adr/0021, Mac adr/0012 tier 2): the page rendered and recognized on this PC.
+/// In the reader process only; null when nothing reads (no recognition language, a blank page).
+/// </summary>
+/// <param name="path">The PDF.</param>
+/// <param name="page">The page's number, from 1.</param>
+public delegate string? PageRecognizer(string path, int page);
+
 public enum DocumentFormat { Unsupported, Text, Markdown, Code, Html, Pdf, Docx, Xlsx, Pptx, Odt, Rtf, Legacy }
 
 /// <summary>What a file is, from its content first and its extension second (Mac adr/0012).</summary>
@@ -135,7 +143,14 @@ public static class DocumentExtractor
     /// <summary>A text file's "page": about this many characters, cut at a line break.</summary>
     public const int TextPageChars = 6_000;
 
-    public static IEnumerable<ExtractedPage> Extract(string path, DocumentFormat format, ExtractLimits? limits = null)
+    /// <summary>A page with less text than this and a picture on it is taken for a scan (a scanner's header or a page number aside).</summary>
+    public const int ScanTextBelow = 100;
+
+    /// <summary>Pages of one document recognized at most: each takes a second or so.</summary>
+    public const int MaxRecognizedPages = 300;
+
+    /// <param name="recognize">Reads scanned PDF pages (the reader process's); none: a scan reads as no text.</param>
+    public static IEnumerable<ExtractedPage> Extract(string path, DocumentFormat format, ExtractLimits? limits = null, PageRecognizer? recognize = null)
     {
         limits ??= ExtractLimits.Default;
         if (new FileInfo(path).Length > limits.MaxBytes) throw new ExtractException("the file is too large");
@@ -143,7 +158,7 @@ public static class DocumentExtractor
         {
             DocumentFormat.Text or DocumentFormat.Markdown or DocumentFormat.Code => TextPages(ReadText(path), 1),
             DocumentFormat.Html => TextPages(Tools.HtmlText.Text(ReadText(path)), 1),
-            DocumentFormat.Pdf => Pdf(path),
+            DocumentFormat.Pdf => Pdf(path, recognize),
             DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt => Package(path),
             DocumentFormat.Rtf => TextPagesWithBreaks(RtfText.Text(File.ReadAllBytes(path))),
             _ => throw new ExtractException(DocumentFormats.Describe(format)),
@@ -249,8 +264,9 @@ public static class DocumentExtractor
         }
     }
 
-    static IEnumerable<ExtractedPage> Pdf(string path)
+    static IEnumerable<ExtractedPage> Pdf(string path, PageRecognizer? recognize)
     {
+        var recognized = 0;
         PdfDocument pdf;
         try
         {
@@ -278,8 +294,26 @@ public static class DocumentExtractor
                     // One unreadable page doesn't fail the rest: it reads as empty.
                     text = "";
                 }
+                // A scan: next to no text and a picture. Its text is read from the picture, after what little the page had.
+                if (recognize is not null && text.Trim().Length < ScanTextBelow && recognized < MaxRecognizedPages && HasPicture(pdf, i))
+                {
+                    recognized++;
+                    if (recognize(path, i) is { Length: > 0 } read) text = text.Trim().Length == 0 ? read : text.Trim() + "\n" + read;
+                }
                 yield return new ExtractedPage(i, text);
             }
+        }
+    }
+
+    static bool HasPicture(PdfDocument pdf, int page)
+    {
+        try
+        {
+            return pdf.GetPage(page).GetImages().Any();
+        }
+        catch (Exception e) when (e is PdfDocumentFormatException or InvalidOperationException or ArgumentException or IndexOutOfRangeException or NullReferenceException or InvalidCastException or KeyNotFoundException)
+        {
+            return false;
         }
     }
 
