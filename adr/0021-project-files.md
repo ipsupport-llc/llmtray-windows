@@ -53,7 +53,7 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
     reads as no text, and the rest of the document goes on. One that hangs
     can't be stopped in-process, so after it the document's remaining
     scans read as no text rather than pile up beside it.
-  - At most 600 pages are tried.
+  - At most 600 pages are tried; a 601st scan fails the document too.
   - More than 300 recognized pages fails the document ("split the PDF"),
     never a quietly cut one.
   - The reader's wait starts again with each page that comes, since a

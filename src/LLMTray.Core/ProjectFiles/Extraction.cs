@@ -297,9 +297,10 @@ public static class DocumentExtractor
                 }
                 // A scan: next to no text and a picture. Its text is read from the picture, after what little the page had.
                 // Attempts are bounded too: a long PDF of blank or unreadable scans isn't drawn page after page.
-                if (recognize is not null && text.Trim().Length < ScanTextBelow && attempts < MaxRecognizedPages * 2 && HasPicture(pdf, i))
+                if (recognize is not null && text.Trim().Length < ScanTextBelow && HasPicture(pdf, i))
                 {
-                    attempts++;
+                    // Past the attempts, one more scan fails the document rather than read as nothing.
+                    if (++attempts > MaxRecognizedPages * 2) throw new ExtractException($"more than {MaxRecognizedPages * 2} scanned pages; split the PDF");
                     string? read;
                     try
                     {
@@ -316,7 +317,8 @@ public static class DocumentExtractor
                         // The picture holds the page's own words too (a footer drawn over the scan): not twice. Spacing and
                         // case aside, and only for a few words or more (a bare "42" may be part of something else).
                         var had = text.Trim();
-                        text = had.Length == 0 || (had.Length >= 8 && Squeeze(read).Contains(Squeeze(had), StringComparison.Ordinal)) ? read : had + "\n" + read;
+                        var squeezed = Squeeze(had);
+                        text = had.Length == 0 || (squeezed.Length >= 8 && Squeeze(read).Contains(squeezed, StringComparison.Ordinal)) ? read : had + "\n" + read;
                     }
                 }
                 yield return new ExtractedPage(i, text);
