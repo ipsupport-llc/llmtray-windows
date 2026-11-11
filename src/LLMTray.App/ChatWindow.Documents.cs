@@ -20,7 +20,9 @@ sealed partial class ChatWindow
     async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document)
     {
         var at = message.Documents.IndexOf(document);
-        var problem = await chat.RemakeDocumentAsync(message, document, Printer);
+        var app = App.Current;
+        var problem = await chat.RemakeDocumentAsync(message, document, Printer, app.ProjectFiles,
+            chat.Id is { } chatId && !chat.Temporary ? () => app.ChatLibrary.ProjectOf(chatId)?.Id : null);
         var text = problem is null ? null : L.F("Make again: {0}", problem);
         if (at >= 0 && at < message.Documents.Count && message.Documents[at] != document)
         {
@@ -185,7 +187,7 @@ sealed partial class ChatWindow
         var app = App.Current;
         // Project files are turned on first if they're off (Mac).
         if (!app.Settings.ProjectFiles) app.SetProjectFiles(true);
-        var results = await Task.Run(() => app.ProjectFiles.Add(project, [path]));
+        var results = await app.ProjectFiles.AddAsync(project, [path]);
         var refused = results.FirstOrDefault(r => r.Refused is not null);
         say(refused is null ? L.T("Added to the project.") : L.F("Not added: {0}", L.T(refused.Refused!)));
         RenderChats();

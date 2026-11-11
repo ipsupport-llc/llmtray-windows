@@ -63,7 +63,7 @@ sealed partial class ChatWindow
         pinNote.TextWrapping = TextWrapping.Wrap;
         Button add = null!;
         add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
-        var intro = Ui.Caption(L.T("The chats of this project search these files and cite them by page. Drop files here or add them."));
+        var intro = Ui.Caption(L.T("The chats of this project search these files and cite them by page; pictures are kept for documents. Drop files here or add them."));
         intro.TextWrapping = TextWrapping.Wrap;
         var body = new StackPanel
         {
@@ -107,7 +107,9 @@ sealed partial class ChatWindow
             pinNote.Text = L.F("Pinned: {0} files, ≈{1} of {2} tokens. Their whole text goes with every message of this project's chats, and those chats don't use web tools, MCP servers or folder changes while any file is pinned.",
                 pins.Count, used, limit) + (used > limit ? " " + L.T("They don't all fit this model now: the ones past the limit are read with search instead.") : "");
             var s = app.ProjectFiles.Summary(project.Id);
-            summary.Text = docs.Count == 0 ? L.T("No files yet.")
+            var pictures = app.ProjectFiles.Pictures(project.Id);
+            summary.Text = docs.Count == 0 && pictures.Count > 0 ? (pictures.Count == 1 ? L.T("1 picture") : L.F("{0} pictures", pictures.Count))
+                : docs.Count == 0 ? L.T("No files yet.")
                 : s.Indexing ? L.F("{0} files · reading {1}", docs.Count, s.Waiting)
                 : L.F("{0} files · {1} on disk", docs.Count, Size(index?.DiskBytes() ?? 0));
             list.Children.Clear();
@@ -148,6 +150,44 @@ sealed partial class ChatWindow
                 row.Children.Add(buttons);
                 list.Children.Add(row);
             }
+            // Pictures (adr/0024): kept for documents, never searched; shown apart.
+            if (pictures.Count > 0)
+            {
+                list.Children.Add(new TextBlock { Text = L.T("Pictures"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) });
+                list.Children.Add(Ui.Caption(L.T("A document can show them; chats don't search them.")));
+                foreach (var picture in pictures)
+                {
+                    var id = picture.Id;
+                    UIElement thumb = new FontIcon { Glyph = "\uEB9F", FontSize = 24, Width = 48 };
+                    if (app.ProjectFiles.PictureThumbnail(project.Id, picture) is { } thumbPath && File.Exists(thumbPath))
+                    {
+                        var image = new Image { Width = 48, Height = 48, Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill };
+                        try
+                        {
+                            _ = SetSourceAsync(image, File.ReadAllBytes(thumbPath), 48);
+                            thumb = image;
+                        }
+                        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                        {
+                        }
+                    }
+                    var name = new TextBlock { Text = $"{picture.Id}. {picture.Name}", TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
+                    ToolTipService.SetToolTip(name, picture.Name);
+                    var detail = Ui.Caption(L.F("{0} × {1} · {2}", picture.Width, picture.Height, Size(picture.Bytes)));
+                    var remove = IconButton("\uE74D", L.T("Remove"), picture.Name, () => app.ProjectFiles.RemovePicture(project.Id, id));
+                    var row = new Grid { ColumnSpacing = 8 };
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var text = new StackPanel { Children = { name, detail }, VerticalAlignment = VerticalAlignment.Center };
+                    Grid.SetColumn(text, 1);
+                    Grid.SetColumn(remove, 2);
+                    row.Children.Add(thumb);
+                    row.Children.Add(text);
+                    row.Children.Add(remove);
+                    list.Children.Add(row);
+                }
+            }
         }
 
         async Task AddAsync(IReadOnlyList<string> paths)
@@ -156,7 +196,7 @@ sealed partial class ChatWindow
             add.IsEnabled = false;
             note.Text = L.T("Copying…");
             note.Visibility = Visibility.Visible;
-            var results = await Task.Run(() => app.ProjectFiles.Add(project.Id, paths, FreeSpace));
+            var results = await app.ProjectFiles.AddAsync(project.Id, paths, FreeSpace);
             add.IsEnabled = true;
             var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!))).ToList();
             note.Text = refused.Count == 0 ? "" : L.T("Not added:") + "\n" + string.Join("\n", refused.Take(12));
@@ -167,7 +207,7 @@ sealed partial class ChatWindow
         async Task PickAsync()
         {
             var picker = new Windows.Storage.Pickers.FileOpenPicker();
-            foreach (var ext in DocumentFormats.Offered) picker.FileTypeFilter.Add("." + ext);
+            foreach (var ext in DocumentFormats.Offered.Concat(ProjectPictures.Formats).Distinct(StringComparer.OrdinalIgnoreCase)) picker.FileTypeFilter.Add("." + ext);
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
             IReadOnlyList<StorageFile> files;
             try
@@ -233,7 +273,9 @@ sealed partial class ChatWindow
         var notes = Path.Combine(temp, "notes.txt");
         File.WriteAllText(notes, "Call the supplier on Monday about the penalties.");
         app.UpdateSettings(app.Settings with { ProjectFiles = true });
-        var added = await Task.Run(() => app.ProjectFiles.Add(demo.Id, [terms, notes]));
+        // A picture too (adr/0024): the chat's own screenshot, through the decoder process.
+        var added = await app.ProjectFiles.AddAsync(demo.Id, [terms, notes, Path.Combine(folder, "chat.png")]);
+        var forDocument = await app.ProjectFiles.PictureForDocumentAsync(demo.Id, "p1", CancellationToken.None);
         var until = DateTime.UtcNow.AddSeconds(20);
         while (app.ProjectFiles.Summary(demo.Id).Waiting > 0 && DateTime.UtcNow < until) await Task.Delay(250);
         RenderChats();
@@ -242,7 +284,9 @@ sealed partial class ChatWindow
         var docs = app.ProjectFiles.Index(demo.Id)?.Documents() ?? [];
         var (hits, wordsOnly) = await app.ProjectFiles.SearchAsync(demo.Id, "payment", null, 3, CancellationToken.None);
         File.WriteAllLines(Path.Combine(folder, "project-files.txt"),
-            [.. added.Select(a => $"added {a.Name}: {a.Doc?.ToString() ?? a.Refused}"),
+            [.. added.Select(a => $"added {a.Name}: {a.Doc?.ToString() ?? a.Picture ?? a.Refused}"),
+             .. app.ProjectFiles.Pictures(demo.Id).Select(p => $"picture {p.Id} {p.Name}: {p.Width}x{p.Height} {p.Bytes} bytes thumbnail={p.Thumbnail is not null}"),
+             forDocument is null ? "picture for a document: none" : $"picture for a document: {forDocument.Width}x{forDocument.Height}, {forDocument.Data.Length} bytes, jpeg={forDocument.IsJpeg}",
              .. docs.Select(d => $"doc {d.Doc} {d.Name}: {d.Status} pages={d.Pages} error={d.Error}"),
              $"search 'payment' (words only: {wordsOnly}): " + string.Join("; ", hits.Select(h => $"[{h.Doc}:{h.Page}] {h.Text}"))]);
         _ = ProjectFilesAsync(demo);

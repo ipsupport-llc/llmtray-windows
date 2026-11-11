@@ -24,6 +24,12 @@ public static class Program
         {
             return LLMTray.Core.ProjectFiles.ExtractProtocol.RunChild(args[2], args[3], Console.In, Console.OpenStandardOutput());
         }
+        // The project pictures' decoder (adr/0024): a child too, Windows' own image codecs in it.
+        if (args.Length == 5 && args[1] == Interop.PictureDecoding.ArgumentName)
+        {
+            WinRT.ComWrappersSupport.InitializeComWrappers();
+            return Interop.PictureDecoding.RunChild(args[2], args[3], args[4]);
+        }
         using var instance = new Mutex(initiallyOwned: true, InstanceMutexName, out var first);
         if (!first)
         {

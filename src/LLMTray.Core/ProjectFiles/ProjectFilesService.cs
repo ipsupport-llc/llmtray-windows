@@ -3,14 +3,16 @@ using LLMTray.Core.Runtime;
 namespace LLMTray.Core.ProjectFiles;
 
 /// <summary>A project's files at a glance: the sidebar's progress and the Files window's summary.</summary>
-public sealed record ProjectFilesSummary(int Total, int Ready, int WordsOnly, int Waiting, int Failed, string? Activity)
+/// <param name="Pictures">The project's pictures (adr/0024): kept for documents, never searched or counted in <paramref name="Total"/>.</param>
+public sealed record ProjectFilesSummary(int Total, int Ready, int WordsOnly, int Waiting, int Failed, string? Activity, int Pictures = 0)
 {
     public static readonly ProjectFilesSummary None = new(0, 0, 0, 0, 0, null);
     public bool Indexing => Waiting > 0;
 }
 
 /// <summary>What happened to each file of an add: added, or refused with the reason.</summary>
-public sealed record AddResult(string Name, long? Doc, string? Refused);
+/// <param name="Picture">A picture's id when it went to the project's pictures (adr/0024).</param>
+public sealed record AddResult(string Name, long? Doc, string? Refused, string? Picture = null);
 
 /// <summary>
 /// Project files (adr/0021): one <see cref="ProjectIndex"/> per project
@@ -45,8 +47,16 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public const int EmbedBatch = 16;
 
     /// <param name="foreground">True while a chat or API request runs: embedding waits (the reader still runs).</param>
-    public ProjectFilesService(string root, Func<bool> enabled, Func<IEmbedder?> embedder, IDocumentReader reader, Func<bool> foreground, bool start = true)
+    readonly IPictureDecoder? pictures;
+    /// <summary>Projects whose pictures were reconciled this run.</summary>
+    readonly HashSet<Guid> reconciled = [];
+    readonly Dictionary<Guid, object> pictureLocks = [];
+
+    /// <param name="pictures">Decodes pictures for the project's store (adr/0024); none: pictures are refused.</param>
+    public ProjectFilesService(string root, Func<bool> enabled, Func<IEmbedder?> embedder, IDocumentReader reader, Func<bool> foreground, bool start = true,
+        IPictureDecoder? pictures = null)
     {
+        this.pictures = pictures;
         this.root = root;
         this.enabled = enabled;
         this.embedder = embedder;
@@ -81,7 +91,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
 
     public ProjectFilesSummary Summary(Guid project)
     {
-        if (Index(project) is not { } index) return ProjectFilesSummary.None;
+        // A project with pictures only has no index yet.
+        if (Index(project) is not { } index) return Pictures(project).Count is var only and > 0 ? ProjectFilesSummary.None with { Pictures = only } : ProjectFilesSummary.None;
         var docs = index.Documents();
         string? doing;
         lock (sync) doing = activity.GetValueOrDefault(project);
@@ -90,7 +101,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
             docs.Count(d => d.Status == DocumentStatus.Searchable),
             docs.Count(d => d.Status is DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting || d.Reindex),
             docs.Count(d => d.Status is DocumentStatus.Failed or DocumentStatus.Unsupported),
-            doing);
+            doing,
+            Pictures(project).Count);
     }
 
     /// <summary>Copies the files in (each refused by name when it can't be), then wakes the reader.</summary>
@@ -152,6 +164,154 @@ public sealed class ProjectFilesService : IAsyncDisposable
         Changed?.Invoke(project);
         Poke();
         return results;
+    }
+
+    // ---- Pictures (adr/0024, Mac adr/0020 "Project pictures") ----
+
+    object PictureLock(Guid project)
+    {
+        lock (sync)
+        {
+            if (!pictureLocks.TryGetValue(project, out var gate)) pictureLocks[project] = gate = new object();
+            return gate;
+        }
+    }
+
+    /// <summary>The project's folder while it exists and isn't being deleted; null otherwise.</summary>
+    string? LiveFolder(Guid project)
+    {
+        lock (sync)
+        {
+            if (deleted.Contains(project) || File.Exists(DeletionMarker(project))) return null;
+        }
+        return Folder(project);
+    }
+
+    /// <summary>The project's pictures, oldest first (reconciled once a run: leftovers of a crash go).</summary>
+    public IReadOnlyList<ProjectPicture> Pictures(Guid project)
+    {
+        if (LiveFolder(project) is not { } folder || !Directory.Exists(Path.Combine(folder, "pictures"))) return [];
+        bool first;
+        lock (sync) first = reconciled.Add(project);
+        if (first)
+        {
+            try
+            {
+                lock (PictureLock(project)) ProjectPictures.Reconcile(folder);
+            }
+            catch (Exception e) when (e is PictureStoreException or IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        return ProjectPictures.Manifest(folder).Pictures;
+    }
+
+    /// <summary>A picture's copy and its record, if the project lists it.</summary>
+    public (ProjectPicture Picture, string Path)? PictureFile(Guid project, string id) =>
+        LiveFolder(project) is { } folder ? ProjectPictures.FileOf(id, folder) : null;
+
+    public string? PictureThumbnail(Guid project, ProjectPicture picture) =>
+        LiveFolder(project) is { } folder ? ProjectPictures.ThumbnailOf(picture, folder) : null;
+
+    public void RemovePicture(Guid project, string id)
+    {
+        if (LiveFolder(project) is not { } folder) return;
+        try
+        {
+            lock (PictureLock(project)) ProjectPictures.Remove(id, folder);
+        }
+        catch (Exception e) when (e is PictureStoreException or IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+        Changed?.Invoke(project);
+    }
+
+    /// <summary>A picture decoded for a document (at most 2,400 px, no metadata); null when it can't be.</summary>
+    public async Task<DecodedPicture?> PictureForDocumentAsync(Guid project, string id, CancellationToken cancellationToken)
+    {
+        if (pictures is null || PictureFile(project, id) is not { } file) return null;
+        try
+        {
+            return await pictures.DecodeAsync(file.Path, ProjectPictures.DocumentSide, cancellationToken).ConfigureAwait(false);
+        }
+        catch (PictureDecodeException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Adds files: pictures to the project's pictures (each checked and measured by the decoder first), the
+    /// rest to its documents as <see cref="Add"/> does.
+    /// </summary>
+    public async Task<IReadOnlyList<AddResult>> AddAsync(Guid project, IReadOnlyList<string> paths, Func<string, long>? freeSpace = null,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new List<AddResult>();
+        var documents = paths.Where(p => !ProjectPictures.IsPicture(p) || Directory.Exists(p)).ToList();
+        if (documents.Count > 0) results.AddRange(await Task.Run(() => Add(project, documents, freeSpace), cancellationToken).ConfigureAwait(false));
+        var added = false;
+        foreach (var path in paths.Where(p => ProjectPictures.IsPicture(p) && !Directory.Exists(p)))
+        {
+            var result = await AddPictureAsync(project, path, freeSpace, cancellationToken).ConfigureAwait(false);
+            added |= result.Picture is not null;
+            results.Add(result);
+        }
+        if (added) Changed?.Invoke(project);
+        return results;
+    }
+
+    async Task<AddResult> AddPictureAsync(Guid project, string path, Func<string, long>? freeSpace, CancellationToken cancellationToken)
+    {
+        var name = Path.GetFileName(path);
+        if (pictures is null) return new AddResult(name, null, "pictures can't be added here");
+        if (LiveFolder(project) is not { } folder) return new AddResult(name, null, "the project was deleted");
+        var temp = Path.Combine(Path.GetTempPath(), "llmtray-picture-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Too large before anything reads it; then a private copy (capped), decoded, and what's stored is that copy.
+            if (new FileInfo(path).Length > ProjectPictures.MaxBytes) return new AddResult(name, null, "too large");
+            if (freeSpace is not null && freeSpace(root) < new FileInfo(path).Length + (100L << 20)) return new AddResult(name, null, "not enough disk space");
+            Directory.CreateDirectory(temp);
+            var copy = await Task.Run(() => ProjectPictures.PrivateCopy(path, temp), cancellationToken).ConfigureAwait(false);
+            DecodedPicture decoded;
+            try
+            {
+                decoded = await pictures.DecodeAsync(copy, ProjectPictures.ThumbnailSide, cancellationToken).ConfigureAwait(false);
+            }
+            catch (PictureDecodeException e)
+            {
+                return new AddResult(name, null, e.Message);
+            }
+            var check = new ProjectPictures.Checked(copy, name, decoded.Width, decoded.Height, decoded.Data);
+            (ProjectPicture Picture, bool Duplicate) stored;
+            lock (PictureLock(project))
+            {
+                // Deleted while it was decoded: nothing is made again.
+                if (LiveFolder(project) is null) return new AddResult(name, null, "the project was deleted");
+                stored = ProjectPictures.Add(check, folder);
+            }
+            return stored.Duplicate ? new AddResult(name, null, "already in the project") : new AddResult(name, null, null, stored.Picture.Id);
+        }
+        catch (PictureStoreException e)
+        {
+            return new AddResult(name, null, e.Message);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new AddResult(name, null, "couldn't be read: " + e.Message);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     public void Remove(Guid project, long doc)
