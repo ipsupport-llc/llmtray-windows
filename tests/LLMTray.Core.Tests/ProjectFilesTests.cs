@@ -89,6 +89,20 @@ public sealed class ProjectFilesTests : IDisposable
     }
 
     [Fact]
+    public void APackageIsReadByItsParts()
+    {
+        const string S = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+        var path = Zip("really-a-workbook.docx",
+            ("xl/workbook.xml", $"<workbook {S}><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"),
+            ("xl/_rels/workbook.xml.rels", "<Relationships><Relationship Id=\"rId1\" Type=\"x/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>"),
+            ("xl/worksheets/sheet1.xml", $"<worksheet {S}><sheetData><row><c r=\"A1\" t=\"inlineStr\"><is><t>cell</t></is></c></row></sheetData></worksheet>"));
+        Assert.Equal(DocumentFormat.Docx, DocumentFormats.Detect(path));
+        Assert.Equal("cell", Assert.Single(Read(path)).Text);
+        var neither = Zip("empty.docx", ("other.txt", "x"));
+        Assert.Throws<ExtractException>(() => Read(neither));
+    }
+
+    [Fact]
     public void OpenDocumentText()
     {
         var path = Zip("d.odt", ("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", """
@@ -105,6 +119,9 @@ public sealed class ProjectFilesTests : IDisposable
         var rtf = @"{\rtf1\ansi\ansicpg1251{\fonttbl{\f0 Arial;}}{\*\generator x;}\f0 \'cf\'f0\'e8\'e2\'e5\'f2\par caf\u233?\page next}";
         // A \u's fallback may be a control symbol: skipped, not the text after it.
         Assert.Equal("{X", RtfText.Text(Encoding.ASCII.GetBytes(@"{\rtf1\uc1\u123\{X}")));
+        Assert.Equal("AX", RtfText.Text(Encoding.ASCII.GetBytes(@"{\rtf1\uc1\u65\*X}")));
+        Assert.Equal("AX", RtfText.Text(Encoding.ASCII.GetBytes(@"{\rtf1\uc1\u65\bin3 {}ZX}")));
+        Assert.Equal("AXY", RtfText.Text(Encoding.ASCII.GetBytes(@"{\rtf1\uc1\u65{\b X}Y}")));
         Assert.Equal("Привет\ncafé\n\fnext", RtfText.Text(Encoding.ASCII.GetBytes(rtf)));
         var path = Path.Combine(root, "e.rtf");
         File.WriteAllText(path, rtf);
@@ -157,6 +174,9 @@ public sealed class ProjectFilesTests : IDisposable
         File.WriteAllBytes(utf32, [.. new byte[] { 0xFF, 0xFE, 0, 0 }, .. new UTF32Encoding(false, false).GetBytes("emoji 😀")]);
         Assert.Equal(DocumentFormat.Text, DocumentFormats.Detect(utf32));
         Assert.Equal("emoji 😀", Read(utf32).Single().Text);
+        var utf32be = Path.Combine(root, "wide-be.txt");
+        File.WriteAllBytes(utf32be, [.. new byte[] { 0, 0, 0xFE, 0xFF }, .. new UTF32Encoding(true, false).GetBytes("big 😀")]);
+        Assert.Equal("big 😀", Read(utf32be).Single().Text);
         // A zip's kind comes from its name: the app never opens it.
         var unnamed = Zip("x.zip", ("word/document.xml", "<w:document/>"));
         Assert.Equal(DocumentFormat.Unsupported, DocumentFormats.Detect(unnamed));

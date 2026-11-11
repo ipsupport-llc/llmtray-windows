@@ -28,7 +28,9 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   Again keeps the current text searchable until the new text commits; a
   failed re-read keeps the old one. Adding the same content twice is
   refused by its SHA-256.
-- **Formats, from the content first**: PDF (PdfPig, text layer), Word
+- **Formats, from the content first** (except Office and ODT packages: the
+  app takes their kind from the name and never opens a zip itself; the
+  reader picks the real kind by its parts): PDF (PdfPig, text layer), Word
   (.docx), Excel (.xlsx: a page per sheet, rows as `a | b`, the header row
   repeated with each chunk), PowerPoint (.pptx: a page per slide, notes
   after), OpenDocument text, RTF, HTML, Markdown, plain text and code.
@@ -86,8 +88,9 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   resolved in the project they were made in), shown under it as links that
   open the copy. Windows has no page anchor for a file opened in its app,
   so the link names the page; it says when the file was removed or read
-  again since. Text and code copies open in Notepad, so a script's copy
-  never runs.
+  again since. A copy is kept under its format's own extension (an .hta
+  that is HTML becomes .html); PDF, Office, ODT, RTF and HTML copies open
+  in their app, everything else in Notepad, so a script's copy never runs.
 - **UI.** A project's menu has Files…: add (picker or drop), each file's
   status with its reason, Open, Read Again, Remove. The project's row in
   the sidebar shows a small ring while it reads and a mark when files

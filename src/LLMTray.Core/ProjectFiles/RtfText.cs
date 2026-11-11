@@ -96,7 +96,7 @@ public static class RtfText
                     // A control symbol: \\ \{ \} literal, \~ non-breaking space, \- optional hyphen, \_ hyphen.
                     i++;
                     // A \u's fallback counts it as one character, skipped.
-                    if (pendingSkip > 0 && d != (byte)'*')
+                    if (pendingSkip > 0)
                     {
                         pendingSkip--;
                         continue;
@@ -122,8 +122,8 @@ public static class RtfText
                     if (int.TryParse(Encoding.ASCII.GetString(rtf, paramStart, i - paramStart), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)) parameter = value;
                 }
                 if (i < rtf.Length && rtf[i] == ' ') i++;
-                // A \u's fallback: any other control word counts as one character, skipped (\bin's data with it).
-                if (pendingSkip > 0 && word != "u")
+                // A \u's fallback: any control word counts as one character, skipped (\bin's data with it; the spec counts \u too).
+                if (pendingSkip > 0)
                 {
                     pendingSkip--;
                     if (word == "bin" && parameter is { } skipped) i += Math.Max(0, skipped);

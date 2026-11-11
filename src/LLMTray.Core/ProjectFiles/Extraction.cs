@@ -144,10 +144,7 @@ public static class DocumentExtractor
             DocumentFormat.Text or DocumentFormat.Markdown or DocumentFormat.Code => TextPages(ReadText(path), 1),
             DocumentFormat.Html => TextPages(Tools.HtmlText.Text(ReadText(path)), 1),
             DocumentFormat.Pdf => Pdf(path),
-            DocumentFormat.Docx => Docx(path),
-            DocumentFormat.Xlsx => Xlsx(path),
-            DocumentFormat.Pptx => Pptx(path),
-            DocumentFormat.Odt => Odt(path),
+            DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt => Package(path),
             DocumentFormat.Rtf => TextPagesWithBreaks(RtfText.Text(File.ReadAllBytes(path))),
             _ => throw new ExtractException(DocumentFormats.Describe(format)),
         };
@@ -291,6 +288,31 @@ public static class DocumentExtractor
     const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     const string S = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
     const string P = "http://schemas.openxmlformats.org/presentationml/2006/main";
+
+    /// <summary>
+    /// An Office or OpenDocument package, read by what its parts are (the
+    /// app took its kind from the name, never opening the zip): an .xlsx
+    /// named .docx is read as the workbook it is.
+    /// </summary>
+    static IEnumerable<ExtractedPage> Package(string path)
+    {
+        DocumentFormat kind;
+        using (var zip = new SafeZip(File.OpenRead(path)))
+        {
+            kind = zip.Has("word/document.xml") ? DocumentFormat.Docx
+                : zip.Has("xl/workbook.xml") ? DocumentFormat.Xlsx
+                : zip.Has("ppt/presentation.xml") ? DocumentFormat.Pptx
+                : zip.Read("mimetype") is { } mime && Encoding.ASCII.GetString(mime).Trim() == "application/vnd.oasis.opendocument.text" ? DocumentFormat.Odt
+                : throw new ExtractException("the file isn't a Word, Excel, PowerPoint or OpenDocument text file");
+        }
+        return kind switch
+        {
+            DocumentFormat.Docx => Docx(path),
+            DocumentFormat.Xlsx => Xlsx(path),
+            DocumentFormat.Pptx => Pptx(path),
+            _ => Odt(path),
+        };
+    }
 
     /// <summary>Word: paragraphs as lines, headings as "#", table cells as "a | b", Word's page breaks as pages.</summary>
     static IEnumerable<ExtractedPage> Docx(string path)

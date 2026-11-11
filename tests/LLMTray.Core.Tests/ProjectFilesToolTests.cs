@@ -123,7 +123,10 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
 
         var error = await Assert.ThrowsAsync<ExtractException>(() => ExtractProtocol.ReadAsync(Fake("{\"error\":\"the PDF is damaged\"}\n"u8.ToArray()), ExtractLimits.Default, TimeSpan.FromSeconds(5), default));
         Assert.Equal("the PDF is damaged", error.Message);
-        var many = string.Concat(Enumerable.Range(1, 4).Select(i => $"{{\"p\":{i},\"t\":\"x\"}}\n"));
+        // The parent counts the text itself: two pages over the cap fail, though their bytes fit.
+        var twoPages = "{\"p\":1,\"t\":\"ab\"}\n{\"p\":2,\"t\":\"cd\"}\n{\"done\":true}\n"u8.ToArray();
+        await Assert.ThrowsAsync<ExtractException>(() => ExtractProtocol.ReadAsync(Fake(twoPages), new ExtractLimits(MaxTextChars: 3), TimeSpan.FromSeconds(5), default));
+                var many = string.Concat(Enumerable.Range(1, 4).Select(i => $"{{\"p\":{i},\"t\":\"x\"}}\n"));
         await Assert.ThrowsAsync<ExtractException>(() => ExtractProtocol.ReadAsync(Fake(Encoding.UTF8.GetBytes(many)), new ExtractLimits(MaxPages: 3), TimeSpan.FromSeconds(5), default));
         var cut = await Assert.ThrowsAsync<ExtractException>(() => ExtractProtocol.ReadAsync(Fake("{\"p\":1,\"t\":\"x\"}\n"u8.ToArray(), exit: 1), ExtractLimits.Default, TimeSpan.FromSeconds(5), default));
         Assert.Contains("failed", cut.Message);
