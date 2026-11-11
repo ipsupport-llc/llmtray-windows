@@ -117,8 +117,11 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   **Trust**: a turn whose request carries pinned text starts with the
   barrier down: network tools and MCP servers aren't declared and are
   refused, folder changes too, with their own text (unpinning lifts it). A
-  pin is refused once any tool returned text in the turn, so file text
-  can't pin itself or another file; unpinning always works.
+  pin is refused once any tool returned text in the turn (project_files'
+  listing aside: the model lists the files to find the id of the one the
+  user named), so a tool's text can't pin a file; the pinned text alone
+  doesn't count, as on the Mac, else a project with a pin could never get
+  a second. Unpinning always works. Only looking at folders is declared.
 - **New files are said** (Mac, "New files are said"): the chat keeps its
   project's file names as of its last message (`projectFilesSeen`); the
   user's next message carries a note, before its text, saying how many

@@ -167,20 +167,20 @@ public sealed class ProjectFilesService : IAsyncDisposable
         }
         catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // Not removed (the index busy). Not yet marked removing: it stays listed and readable. Marked: the worker finishes it.
-            var marked = false;
-            try
-            {
-                marked = index.Document(doc)?.Status == DocumentStatus.Removing;
-            }
-            catch (Exception again) when (again is Microsoft.Data.Sqlite.SqliteException or IOException or InvalidOperationException)
-            {
-                marked = true;
-            }
-            if (!marked) lock (sync) removed.Remove((project, doc));
+            // Not removed (the index busy). Not yet marked removing: it stays listed and readable. Marked: the worker's
+            // FinishRemovals completes it whatever this set holds, so the mark can always go.
+            lock (sync) removed.Remove((project, doc));
         }
         // A worker that skipped this document goes on with the next at once.
         Poke();
+        Changed?.Invoke(project);
+    }
+
+    /// <summary>Pins or unpins a file (the Files dialog, or the tool at the user's word); an open dialog hears of it.</summary>
+    public void SetPinned(Guid project, long doc, bool on)
+    {
+        if (Index(project) is not { } index) return;
+        index.SetPinned(doc, on);
         Changed?.Invoke(project);
     }
 

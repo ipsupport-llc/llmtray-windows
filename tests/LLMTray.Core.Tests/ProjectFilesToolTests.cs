@@ -184,6 +184,20 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
     }
 
     [Fact]
+    public void ThePinSizeCountedInSqlMatchesTheText()
+    {
+        var doc = AddText("mixed.txt", "Договор \"A\"\nline\ttab\\back", "second page / slash");
+        var (files, _) = PinnedFilesOf(doc);
+        Assert.Equal(PinnedFiles.Bytes(files.Single()), service.Index(project)!.PinBytes()[doc]);
+
+        (List<PinnedFileText>, List<PinnedFileNote>) PinnedFilesOf(long d)
+        {
+            service.Index(project)!.SetPinned(d, true);
+            return service.Index(project)!.PinnedFiles();
+        }
+    }
+
+    [Fact]
     public void RatiosTakeTheLowestLessTenPercent()
     {
         var ratios = new PinTokenRatios(Path.Combine(root, "ratios.json"));

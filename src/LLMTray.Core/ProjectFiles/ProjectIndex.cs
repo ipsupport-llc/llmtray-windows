@@ -216,9 +216,10 @@ public sealed partial class ProjectIndex
         return Documents(db);
     }
 
-    static List<ProjectDocument> Documents(SqliteConnection db)
+    static List<ProjectDocument> Documents(SqliteConnection db, SqliteTransaction? tx = null)
     {
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT doc, rev, name, ext, format, sha256, bytes, added_at, status, pages, error, reindex FROM documents ORDER BY doc";
         using var r = cmd.ExecuteReader();
         var list = new List<ProjectDocument>();

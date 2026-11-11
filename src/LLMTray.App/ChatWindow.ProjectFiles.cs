@@ -125,8 +125,7 @@ sealed partial class ChatWindow
                 PinCheck check = pinned ? new PinCheck.AlreadyPinned() : PinnedFiles.Check(doc, docs, pins, tokens, limit);
                 var pin = IconButton(pinned ? "\uE77A" : "\uE718", pinned ? L.T("Unpin") : L.T("Pin"), d.Name, () =>
                 {
-                    index?.SetPinned(doc, !pinned);
-                    Render();
+                    app.ProjectFiles.SetPinned(project.Id, doc, !pinned);
                 });
                 pin.IsEnabled = check is PinCheck.Fits or PinCheck.AlreadyPinned;
                 ToolTipService.SetToolTip(pin, check switch
@@ -195,8 +194,11 @@ sealed partial class ChatWindow
             Content = body,
             CloseButtonText = L.T("Done"),
         };
+        // A model loaded or switched meanwhile: the pins' sizes and limit are its.
+        void OnHost(LLMTray.Core.Runtime.HostState _) => Render();
         Render();
         app.ProjectFilesChanged += OnChanged;
+        app.HostChanged += OnHost;
         filesDialog = dialog;
         try
         {
@@ -209,6 +211,7 @@ sealed partial class ChatWindow
         {
             filesDialog = null;
             app.ProjectFilesChanged -= OnChanged;
+            app.HostChanged -= OnHost;
         }
     }
 

@@ -272,7 +272,7 @@ public static class ProjectFilesTool
         if (docs.FirstOrDefault(d => d.Doc == doc && d.Status != DocumentStatus.Removing) is not { } file) return Fail($"no file with doc {doc}: project_files() lists them");
         if (!pin)
         {
-            index.SetPinned(doc, false);
+            turn.Service.SetPinned(turn.Project, doc, false);
             return Ok(SelectableTool.Json(new JsonObject { ["unpinned"] = file.Name, ["from"] = "the user's next message" }));
         }
         if (turn.TextReturned) return Fail("refused: a tool already returned text in this answer; pin only when the user asks, in a message of their own");
@@ -287,7 +287,7 @@ public static class ProjectFilesTool
                 return Fail($"{file.Name} is ≈{t.Tokens} tokens; the pinned files may take ≈{t.Limit} with this model and ≈{t.Used} are taken. "
                     + "Read it with project_files(doc, pages) instead and tell the user it's too long to pin.");
             case PinCheck.Fits f:
-                index.SetPinned(doc, true);
+                turn.Service.SetPinned(turn.Project, doc, true);
                 return Ok(SelectableTool.Json(new JsonObject
                 {
                     ["pinned"] = file.Name,
@@ -362,7 +362,8 @@ public static class ProjectFilesTool
                 if (keep < text.Length && char.IsHighSurrogate(text[keep - 1])) keep--;
                 entry["text"] = text[..keep];
                 read.Add(entry);
-                turn.Returned.Add($"p{doc}:{d.Rev}:{p.Page}:{start}");
+                // Only a page shown to its end counts as shown: a cut one may be read again from where it stopped.
+                if (keep == text.Length) turn.Returned.Add($"p{doc}:{d.Rev}:{p.Page}:{start}");
                 Cite(turn, doc, d.Rev, p.Page, null, d.Name);
                 if (keep < text.Length) result["next"] = $"{doc}:{d.Rev}:{p.Page}:{start + keep}:{lastPage}";
                 else shownThrough = p.Page;

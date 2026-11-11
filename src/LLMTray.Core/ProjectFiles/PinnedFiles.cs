@@ -65,22 +65,34 @@ public static class PinnedFiles
     }
 
     /// <summary>The files a request carries, in pin order: each while it fits what's left of the limit and the request's room; the rest are notes.</summary>
+    /// <summary>Tokens kept for the tools' declarations when pins are chosen before those are built.</summary>
+    public const int DeclarationsAllowance = 1_500;
+
+    /// <summary>
+    /// The files a request carries, in pin order: each while it fits what's
+    /// left of the limit and the request's room; the rest are notes. The
+    /// framing and each note's line count against the room too.
+    /// </summary>
     public static (List<PinnedFileText> Files, List<PinnedFileNote> Left) Select(IReadOnlyList<PinnedFileText> files, int limitTokens, double bytesPerToken, int roomTokens)
     {
         var included = new List<PinnedFileText>();
         var left = new List<PinnedFileNote>();
         var used = 0;
+        // The framing and closing lines, counted at the estimator's low rate.
+        var overhead = Tokens(JsonBytes(Framing + "\n\n" + Closing), 2);
         foreach (var f in files)
         {
             var t = Tokens(Bytes(f), bytesPerToken);
-            if (used + t <= limitTokens && used + t <= roomTokens)
+            if (used + t <= limitTokens && overhead + used + t <= roomTokens)
             {
                 included.Add(f);
                 used += t;
             }
             else
             {
-                left.Add(new PinnedFileNote(f.Doc, f.Name, TooLong: true));
+                var note = new PinnedFileNote(f.Doc, f.Name, TooLong: true);
+                left.Add(note);
+                overhead += Tokens(JsonBytes(Line(note) + "\n"), 2);
             }
         }
         return (included, left);
@@ -134,7 +146,10 @@ public sealed class PinTokenRatios(string file)
         if (samples is not null) return samples;
         try
         {
-            samples = File.Exists(file) ? JsonSerializer.Deserialize<Dictionary<string, List<double>>>(File.ReadAllText(file)) ?? [] : [];
+            var read = File.Exists(file) ? JsonSerializer.Deserialize<Dictionary<string, List<double>?>>(File.ReadAllText(file)) ?? [] : [];
+            // A hand-edited file: lists that aren't there, and only sane samples, the last five.
+            samples = read.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key,
+                kv => kv.Value!.Where(v => double.IsFinite(v) && v > 0).TakeLast(5).ToList());
         }
         catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
         {
@@ -184,9 +199,10 @@ public sealed partial class ProjectIndex
         return Pins(db);
     }
 
-    static List<long> Pins(SqliteConnection db)
+    static List<long> Pins(SqliteConnection db, SqliteTransaction? tx = null)
     {
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT key FROM meta WHERE key LIKE 'pin:%'
               AND EXISTS (SELECT 1 FROM documents d WHERE d.status <> 'removing' AND 'pin:' || d.doc = meta.key)
@@ -222,15 +238,16 @@ public sealed partial class ProjectIndex
         }
     }
 
-    /// <summary>The pinned files' current texts in pin order, and notes for those without text now.</summary>
+    /// <summary>The pinned files' current texts in pin order, and notes for those without text now: one snapshot (a re-read committing meanwhile can't leave a file without its pages).</summary>
     public (List<PinnedFileText> Files, List<PinnedFileNote> Notes) PinnedFiles()
     {
         using var db = Open();
-        var pins = Pins(db);
+        using var snapshot = db.BeginTransaction(deferred: true);
+        var pins = Pins(db, snapshot);
         var files = new List<PinnedFileText>();
         var notes = new List<PinnedFileNote>();
         if (pins.Count == 0) return (files, notes);
-        var docs = Documents(db).ToDictionary(d => d.Doc);
+        var docs = Documents(db, snapshot).ToDictionary(d => d.Doc);
         foreach (var doc in pins)
         {
             if (!docs.TryGetValue(doc, out var d)) continue;
@@ -240,6 +257,7 @@ public sealed partial class ProjectIndex
                 continue;
             }
             using var cmd = db.CreateCommand();
+            cmd.Transaction = snapshot;
             cmd.CommandText = "SELECT page, label, text FROM pages WHERE doc = $d AND rev = $r ORDER BY page";
             cmd.Parameters.AddWithValue("$d", doc);
             cmd.Parameters.AddWithValue("$r", d.Rev);
@@ -251,21 +269,39 @@ public sealed partial class ProjectIndex
         return (files, notes);
     }
 
-    /// <summary>Each ready document's size if pinned, in request bytes (made tokens at a model's ratio).</summary>
+    /// <summary>
+    /// Each document's size if pinned, in request bytes (made tokens at a
+    /// model's ratio): counted in SQL from its current pages' lengths, never
+    /// reading the text out (the Files dialog asks on every change). A pinned
+    /// document with no text now keeps the size of the text it has.
+    /// </summary>
     public Dictionary<long, int> PinBytes()
     {
         using var db = Open();
-        var result = new Dictionary<long, int>();
-        foreach (var d in Documents(db).Where(d => DocumentStatus.IsReady(d.Status)))
+        var docs = Documents(db).Where(d => d.Status != DocumentStatus.Removing).ToDictionary(d => d.Doc);
+        using var cmd = db.CreateCommand();
+        // UTF-8 bytes plus one for each character JSON escapes with a backslash (", \, newline, tab, CR).
+        cmd.CommandText = """
+            SELECT p.doc, p.page, length(CAST(p.text AS BLOB))
+              + (length(p.text) - length(replace(p.text, '"', ''))) + (length(p.text) - length(replace(p.text, '\', '')))
+              + (length(p.text) - length(replace(p.text, char(10), ''))) + (length(p.text) - length(replace(p.text, char(9), '')))
+              + (length(p.text) - length(replace(p.text, char(13), '')))
+            FROM pages p JOIN documents d ON d.doc = p.doc AND d.rev = p.rev ORDER BY p.doc, p.page
+            """;
+        using var r = cmd.ExecuteReader();
+        var pages = new Dictionary<long, List<(int Page, long Bytes)>>();
+        while (r.Read())
         {
-            using var cmd = db.CreateCommand();
-            cmd.CommandText = "SELECT page, label, text FROM pages WHERE doc = $d AND rev = $r ORDER BY page";
-            cmd.Parameters.AddWithValue("$d", d.Doc);
-            cmd.Parameters.AddWithValue("$r", d.Rev);
-            using var r = cmd.ExecuteReader();
-            var pages = new List<PageText>();
-            while (r.Read()) pages.Add(new PageText(r.GetInt32(0), r.IsDBNull(1) ? null : r.GetString(1), r.GetString(2)));
-            result[d.Doc] = ProjectFiles.PinnedFiles.Bytes(new PinnedFileText(d.Doc, d.Rev, d.Name, pages));
+            var doc = r.GetInt64(0);
+            if (!pages.TryGetValue(doc, out var list)) pages[doc] = list = [];
+            list.Add((r.GetInt32(1), r.GetInt64(2)));
+        }
+        var result = new Dictionary<long, int>();
+        foreach (var (doc, list) in pages)
+        {
+            if (!docs.TryGetValue(doc, out var d)) continue;
+            var empty = ProjectFiles.PinnedFiles.Bytes(new PinnedFileText(doc, d.Rev, d.Name, list.Select(p => new PageText(p.Page, null, "")).ToList()));
+            result[doc] = (int)Math.Min(int.MaxValue, empty + list.Sum(p => p.Bytes));
         }
         return result;
     }

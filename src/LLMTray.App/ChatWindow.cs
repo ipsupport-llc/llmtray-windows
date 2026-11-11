@@ -272,7 +272,8 @@ sealed partial class ChatWindow : Window
             // Project files (adr/0021): the chat's project as it is when each call runs (a move refuses the rest of the turn).
             ProjectFiles: app.ProjectFiles,
             ProjectOfChat: chat.Id is { } fileChat && !chat.Temporary ? () => app.ChatLibrary.ProjectOf(fileChat)?.Id : null,
-            ContextTokens: app.Host.ContextTokens,
+            // The running server's context, when it runs the model this message goes to; else unknown (the safe default).
+            ContextTokens: entry is not null && app.Host.State.Model?.FullPath == entry.FullPath ? app.Host.ContextTokens : 0,
             PinShare: app.Settings.PinShare,
             PinRatios: app.PinRatios,
             ModelKey: entry?.FullPath);

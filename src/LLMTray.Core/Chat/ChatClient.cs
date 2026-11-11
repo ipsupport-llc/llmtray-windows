@@ -398,7 +398,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 // Pinned files (Mac adr/0012): each while it fits the limit and the request's room, the rest a line each.
                 var context = options.ContextTokens > 0 ? options.ContextTokens : 8_192;
                 var reserve = Math.Min(options.Profile?.MaxTokens is > 0 and var m ? m : 2_048, context / 4);
-                var room = context - reserve - context / 10 - (int)Math.Min(int.MaxValue, MeasureBytes(history, null) / ProjectFiles.ProjectFilesTool.BytesPerToken);
+                // The tools' declarations aren't built yet: a share of the room is kept for them.
+                var room = context - reserve - context / 10 - ProjectFiles.PinnedFiles.DeclarationsAllowance
+                    - (int)Math.Min(int.MaxValue, MeasureBytes(history, null) / ProjectFiles.ProjectFilesTool.BytesPerToken);
                 var (carried, left) = ProjectFiles.PinnedFiles.Select(pinnedAll.Files, pinLimit, pinRatio, room);
                 pinnedSent = carried;
                 var pinnedBlock = ProjectFiles.PinnedFiles.Block(carried, [.. pinnedAll.Notes, .. left]);
@@ -424,7 +426,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // internet is declared this turn (adr/0021); the calculator and the time stay.
         if (pinnedActive && definitions is not null)
         {
-            definitions = new JsonArray(definitions.Where(d => d?["function"]?["name"]?.GetValue<string>() is "calculate" or "get_current_time")
+            // Only the calculator: the time tool's declaration offers a city's time, which reaches the internet.
+            definitions = new JsonArray(definitions.Where(d => d?["function"]?["name"]?.GetValue<string>() is "calculate")
                 .Select(d => d!.DeepClone()).ToArray());
             if (definitions.Count == 0) definitions = null;
         }
@@ -449,12 +452,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             }
             folderTurn = new Folders.FolderTurn(chatVisit, temporary, options.AskFolder, options.ReviewPlan);
             definitions ??= [];
-            foreach (var d in folders.Definitions(temporary)) definitions.Add(d);
+            // With pinned files, only looking: changes aren't declared (and are refused).
+            foreach (var d in folders.Definitions(temporary || pinnedActive)) definitions.Add(d);
         }
         // The chat's project files (adr/0021): a kept chat in a project that has files. Once file text is read, nothing reaches the internet or an MCP server this turn.
         ProjectFiles.ProjectTurn? projectTurn = null;
         // Pinned text in the request counts as file text read: the barrier is down from the start.
         var projectText = pinnedActive;
+        // Text another tool returned this turn (not project_files' own listing): a pin is refused after it.
+        var otherText = false;
         if (!temporaryTurn && projectId is { } turnProject && projectSummary is { } summary && options.ProjectFiles is { } projectFiles && options.ProjectOfChat is not null)
         {
             projectTurn = new ProjectFiles.ProjectTurn(turnProject, options.ProjectOfChat, projectFiles, options.ContextTokens, options.Profile?.MaxTokens ?? 0)
@@ -565,7 +571,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
                         {
                             // Text from any other tool earlier in this turn: a pin now is refused.
-                            projectTurn.TextReturned |= outsideText || folderText;
+                            projectTurn.TextReturned |= otherText;
                             outcome = await ProjectFiles.ProjectFilesTool.RunAsync(call, projectTurn, RequestTokens(), token).ConfigureAwait(false);
                             // File text read (an error names files too): it stays on this PC for the rest of the turn.
                             projectText = outsideText = true;
@@ -580,7 +586,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             folderTurn.AfterRead = outsideText || folderText;
                             outcome = await options.Folders!.RunAsync(call, folderTurn, token).ConfigureAwait(false);
                             // What was read stays on this PC for the rest of the turn.
-                            if (!change && !outcome.Failed) folderText = outsideText = true;
+                            if (!change && !outcome.Failed) folderText = outsideText = otherText = true;
                         }
                         else if ((folderText || projectText) && (mcp is not null || (options.Tools is { } local && !local.IsLocal(call))))
                         {
@@ -592,7 +598,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         {
                             (outcome, var read) = await RunMcpAsync(mcp, call, options, answer, outsideText, deniedThisTurn, token).ConfigureAwait(false);
                             // Only text the server sent back counts as outside text (a denied call read none).
-                            if (read) outsideText = mcpText = true;
+                            if (read) outsideText = mcpText = otherText = true;
                         }
                         else if (mcpText && options.Tools is { } box && !box.IsLocal(call))
                         {
@@ -606,7 +612,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         else
                         {
                             outcome = await options.Tools.RunAsync(call, enabled, token).ConfigureAwait(false);
-                            if (!options.Tools.IsLocal(call)) outsideText = true;
+                            if (!options.Tools.IsLocal(call)) outsideText = otherText = true;
                         }
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested)

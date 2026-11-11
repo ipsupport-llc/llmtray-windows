@@ -13,7 +13,8 @@ public sealed partial class MainWindow
     static string ProjectFilesKey()
     {
         var app = App.Current;
-        return $"{app.Settings.ProjectFiles}|{app.Settings.PinShare}|{app.Embedder.IsInstalled}|{app.Downloads.State.Current?.Title}";
+        // Not the pin share: its slider writes it, and a redraw under the thumb would break the drag.
+        return $"{app.Settings.ProjectFiles}|{app.Embedder.IsInstalled}|{app.Downloads.State.Current?.Title}";
     }
 
     IEnumerable<UIElement> ProjectFilesSection()
