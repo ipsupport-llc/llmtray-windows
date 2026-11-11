@@ -20,12 +20,53 @@ public sealed class ChatStore(string folder)
         try
         {
             using var stream = File.OpenRead(PathOf(id));
-            return JsonSerializer.Deserialize(stream, ChatJson.Default.ChatSessionFile);
+            if (JsonSerializer.Deserialize(stream, ChatJson.Default.ChatSessionFile) is not { } file) return null;
+            // JSON nulls where a list or a text belongs (a hand edit, another app): read as empty, never a crash later.
+            return file with
+            {
+                Title = file.Title ?? "",
+                Messages = (file.Messages ?? []).Where(m => m is not null).Select(Whole).ToList(),
+            };
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
             return null;
         }
+    }
+
+    /// <summary>A message with every list and text present (JSON nulls read as empty).</summary>
+    static PersistedMessage Whole(PersistedMessage m) =>
+        m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
+            || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
+            ? m with
+            {
+                Role = m.Role ?? "user",
+                Content = m.Content ?? "",
+                Reasoning = m.Reasoning ?? "",
+                ImageFilenames = m.ImageFilenames ?? [],
+                ImageDurations = m.ImageDurations ?? [],
+                ImagePrompts = m.ImagePrompts ?? [],
+                Sources = m.Sources ?? [],
+                McpCalls = m.McpCalls ?? [],
+            }
+            : m;
+
+    /// <summary>
+    /// The chats present (what library.json is pruned by): every session
+    /// file's name, read or not, and the id inside each that reads (a file
+    /// copied in under another name is listed by that id).
+    /// </summary>
+    public IReadOnlySet<Guid> Present()
+    {
+        if (!Directory.Exists(Folder)) return new HashSet<Guid>();
+        var ids = Directory.EnumerateFiles(Folder, "*.json")
+            .Select(p => Guid.TryParse(Path.GetFileNameWithoutExtension(p), out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty).ToHashSet();
+        foreach (var name in ids.ToList())
+        {
+            if (Load(name) is { } file && file.Id != Guid.Empty) ids.Add(file.Id);
+        }
+        return ids;
     }
 
     /// <summary>Newest first. A file that doesn't read is left out (and left alone).</summary>
