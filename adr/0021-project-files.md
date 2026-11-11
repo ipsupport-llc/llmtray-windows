@@ -49,8 +49,11 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
     reader's 2 GB is never near. A page with no sane size isn't drawn.
   - The recognized text follows what little the page had, or replaces it
     when it already holds it (a footer drawn over the scan).
-  - Each page gets at most 30 s. A page that hangs, fails or runs out of
-    memory reads as no text, and the rest of the document goes on.
+  - Each page gets at most 30 s. A page that fails or runs out of memory
+    reads as no text, and the rest of the document goes on. One that hangs
+    can't be stopped in-process, so after it the document's remaining
+    scans read as no text rather than pile up beside it.
+  - At most 600 pages are tried.
   - More than 300 recognized pages fails the document ("split the PDF"),
     never a quietly cut one.
   - The reader's wait starts again with each page that comes, since a

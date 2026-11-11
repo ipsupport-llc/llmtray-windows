@@ -74,7 +74,8 @@ public static class ExtractProtocol
         using var handle = process.Handle;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(wallTime);
-        var started = DateTime.UtcNow;
+        // Monotonic: a clock set back or forward doesn't move the whole read's limit.
+        var started = System.Diagnostics.Stopwatch.StartNew();
         // Escaping can take six bytes a character; framing a little more.
         var maxBytes = limits.MaxTextChars * 6 + limits.MaxPages * 64L + 4096;
         var pages = new List<ExtractedPage>();
@@ -100,7 +101,7 @@ public static class ExtractProtocol
                     start = i + 1;
                     if (Line(line.ToArray(), pages, limits, ref chars) is { } done) return done ? pages : throw new ExtractException("the reader stopped");
                     // A page came: the wait starts again, up to the whole read's limit.
-                    var left = ChildProcessReader.MaxWallTime - (DateTime.UtcNow - started);
+                    var left = ChildProcessReader.MaxWallTime - started.Elapsed;
                     if (left <= TimeSpan.Zero) throw new OperationCanceledException();
                     timeout.CancelAfter(wallTime < left ? wallTime : left);
                     line.SetLength(0);
@@ -112,7 +113,7 @@ public static class ExtractProtocol
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new ExtractException("too slow: it took longer than " + (int)wallTime.TotalSeconds + " seconds");
+            throw new ExtractException("too slow: no page came in " + (int)wallTime.TotalSeconds + " seconds, or it took over " + (int)ChildProcessReader.MaxWallTime.TotalMinutes + " minutes in all");
         }
         catch (TimeoutException)
         {

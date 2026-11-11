@@ -26,13 +26,22 @@ static class PageOcr
     const double RenderSide = 3300;
     static OcrEngine? engine;
     static bool noEngine;
+    /// <summary>A page was given up while Windows still worked on it: no more pages are started beside it (they'd pile up).</summary>
+    static bool stalled;
 
     /// <summary>The <see cref="LLMTray.Core.ProjectFiles.PageRecognizer"/> the reader child runs with.</summary>
     public static string? Recognize(string path, int page)
     {
+        if (stalled) return null;
         try
         {
             return RecognizeAsync(path, page).WaitAsync(PageTime).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            // The rest of this document's scans read as no text: the stuck page's work can't be stopped, only not joined.
+            stalled = true;
+            return null;
         }
         catch (Exception)
         {
@@ -68,7 +77,7 @@ static class PageOcr
         using var pdfPage = open.GetPage((uint)(page - 1));
         var size = pdfPage.Size;
         // A page with no sane size reads as no text, before anything is drawn.
-        if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width < 10 || size.Height < 10 || Math.Max(size.Width, size.Height) / Math.Min(size.Width, size.Height) > 20)
+        if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width < 1 || size.Height < 1 || Math.Max(size.Width, size.Height) / Math.Min(size.Width, size.Height) > 100)
         {
             return null;
         }

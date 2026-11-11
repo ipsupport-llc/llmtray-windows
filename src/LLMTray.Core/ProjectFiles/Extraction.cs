@@ -267,6 +267,7 @@ public static class DocumentExtractor
     static IEnumerable<ExtractedPage> Pdf(string path, PageRecognizer? recognize)
     {
         var recognized = 0;
+        var attempts = 0;
         PdfDocument pdf;
         try
         {
@@ -295,8 +296,10 @@ public static class DocumentExtractor
                     text = "";
                 }
                 // A scan: next to no text and a picture. Its text is read from the picture, after what little the page had.
-                if (recognize is not null && text.Trim().Length < ScanTextBelow && HasPicture(pdf, i))
+                // Attempts are bounded too: a long PDF of blank or unreadable scans isn't drawn page after page.
+                if (recognize is not null && text.Trim().Length < ScanTextBelow && attempts < MaxRecognizedPages * 2 && HasPicture(pdf, i))
                 {
+                    attempts++;
                     string? read;
                     try
                     {
@@ -307,18 +310,21 @@ public static class DocumentExtractor
                         // A page that won't draw or read (even out of memory): no text for it; the rest goes on.
                         read = null;
                     }
-                    if (read is { Length: > 0 })
+                    if (!string.IsNullOrWhiteSpace(read))
                     {
                         if (++recognized > MaxRecognizedPages) throw new ExtractException($"more than {MaxRecognizedPages} scanned pages; split the PDF");
-                        // The picture holds the page's own words too (a footer drawn over the scan): not twice.
+                        // The picture holds the page's own words too (a footer drawn over the scan): not twice. Spacing and
+                        // case aside, and only for a few words or more (a bare "42" may be part of something else).
                         var had = text.Trim();
-                        text = had.Length == 0 || read.Contains(had, StringComparison.Ordinal) ? read : had + "\n" + read;
+                        text = had.Length == 0 || (had.Length >= 8 && Squeeze(read).Contains(Squeeze(had), StringComparison.Ordinal)) ? read : had + "\n" + read;
                     }
                 }
                 yield return new ExtractedPage(i, text);
             }
         }
     }
+
+    static string Squeeze(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
     static bool HasPicture(PdfDocument pdf, int page)
     {
