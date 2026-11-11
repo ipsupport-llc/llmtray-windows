@@ -167,11 +167,20 @@ public sealed class ProjectFilesService : IAsyncDisposable
         }
         catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // Not removed (the index busy): it stays listed, and the worker may take it again.
+            // Not removed (the index busy). Not yet marked removing: it stays listed and readable. Marked: the worker's
+            // FinishRemovals completes it whatever this set holds, so the mark can always go.
             lock (sync) removed.Remove((project, doc));
         }
         // A worker that skipped this document goes on with the next at once.
         Poke();
+        Changed?.Invoke(project);
+    }
+
+    /// <summary>Pins or unpins a file (the Files dialog, or the tool at the user's word); an open dialog hears of it.</summary>
+    public void SetPinned(Guid project, long doc, bool on)
+    {
+        if (Index(project) is not { } index) return;
+        index.SetPinned(doc, on);
         Changed?.Invoke(project);
     }
 
@@ -223,15 +232,21 @@ public sealed class ProjectFilesService : IAsyncDisposable
 
     void Finish(Guid project)
     {
-        try
+        // A step just cancelled may hold the index open a moment longer (Windows won't delete an open file): a few tries.
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            var folder = Folder(project);
-            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            File.Delete(DeletionMarker(project));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            // A file still open (a search in flight): the next launch finishes it.
+            try
+            {
+                var folder = Folder(project);
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                File.Delete(DeletionMarker(project));
+                return;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Still open: tried again shortly; after the last try the next launch finishes it.
+                Thread.Sleep(100);
+            }
         }
     }
 
@@ -309,6 +324,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     async Task<bool> StepAsync(Guid project, CancellationToken stop)
     {
         if (Index(project) is not { } index) return false;
+        // A removal cut short after it was marked: finished here.
+        if (index.FinishRemovals() > 0) Changed?.Invoke(project);
         using var work = CancellationTokenSource.CreateLinkedTokenSource(stop);
         lock (sync)
         {
@@ -452,7 +469,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
             }
         }
         var hits = await Task.Run(() => index.Search(query, vector, topK, doc), cancellationToken).ConfigureAwait(false);
-        return (hits, vector is null);
+        // By words only also when no hit came by meaning (vectors not made yet, or dropped by a re-read).
+        return (hits, vector is null || hits.All(h => h.WordsOnly));
     }
 
     public async ValueTask DisposeAsync()

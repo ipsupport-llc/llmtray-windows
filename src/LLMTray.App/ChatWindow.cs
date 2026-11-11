@@ -272,7 +272,11 @@ sealed partial class ChatWindow : Window
             // Project files (adr/0021): the chat's project as it is when each call runs (a move refuses the rest of the turn).
             ProjectFiles: app.ProjectFiles,
             ProjectOfChat: chat.Id is { } fileChat && !chat.Temporary ? () => app.ChatLibrary.ProjectOf(fileChat)?.Id : null,
-            ContextTokens: app.Host.ContextTokens);
+            // The running server's context, when it runs the model this message goes to; else unknown (the safe default).
+            ContextTokens: entry is not null && app.Host.State.Model?.FullPath == entry.FullPath ? app.Host.ContextTokens : 0,
+            PinShare: app.Settings.PinShare,
+            PinRatios: app.PinRatios,
+            ModelKey: entry?.FullPath);
     }
 
     /// <summary>
@@ -788,6 +792,18 @@ sealed partial class ChatWindow : Window
             you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
             if (PicturesView(message, HorizontalAlignment.Right) is { } pictures) you.Children.Add(pictures);
             if (message.Content.Length > 0) you.Children.Add(bubble);
+            if (message.ProjectFilesAdded.Count > 0)
+            {
+                // What the model was told came with this message (how many and which kinds; the names are for the user).
+                var names = string.Join(", ", message.ProjectFilesAdded.Take(LLMTray.Core.ProjectFiles.ProjectFilesNote.ShownNames).Select(LLMTray.Core.ProjectFiles.ProjectFilesNote.Clean))
+                    + (message.ProjectFilesAdded.Count > LLMTray.Core.ProjectFiles.ProjectFilesNote.ShownNames ? "…" : "");
+                var told = Ui.Caption(L.F("Told the model about new project files: {0}", names));
+                told.TextWrapping = TextWrapping.Wrap;
+                told.MaxLines = 2;
+                told.HorizontalAlignment = HorizontalAlignment.Right;
+                told.MaxWidth = 640;
+                you.Children.Add(told);
+            }
             return you;
         }
 

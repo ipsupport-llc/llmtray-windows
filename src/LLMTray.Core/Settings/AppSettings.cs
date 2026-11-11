@@ -38,6 +38,9 @@ public sealed record AppSettings
     /// <summary>Files in projects, searched by the chat (adr/0021): off until switched on; nothing is read or downloaded before.</summary>
     public bool ProjectFiles { get; init; }
 
+    /// <summary>How much of a model's context a project's pinned files may take together (10–90%).</summary>
+    public double PinShare { get; init; } = 0.5;
+
     /// <summary>
     /// Share anonymous usage statistics (adr/0019): on for a new install, never
     /// turned on by an update (null: an install from before that never chose).

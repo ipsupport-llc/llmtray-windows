@@ -42,7 +42,7 @@ public sealed class AddRefusedException(string reason) : Exception(reason);
 /// connection is opened per operation and closed after (no pooling: a held
 /// handle would keep a deleted project's folder on disk).
 /// </summary>
-public sealed class ProjectIndex
+public sealed partial class ProjectIndex
 {
     public const int Schema = 1;
     public const long MaxFileBytes = 256L << 20;
@@ -216,9 +216,10 @@ public sealed class ProjectIndex
         return Documents(db);
     }
 
-    static List<ProjectDocument> Documents(SqliteConnection db)
+    static List<ProjectDocument> Documents(SqliteConnection db, SqliteTransaction? tx = null)
     {
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT doc, rev, name, ext, format, sha256, bytes, added_at, status, pages, error, reindex FROM documents ORDER BY doc";
         using var r = cmd.ExecuteReader();
         var list = new List<ProjectDocument>();
@@ -347,6 +348,8 @@ public sealed class ProjectIndex
     /// <summary>The document's text, in one transaction: the new revision replaces the old.</summary>
     public void SaveExtraction(long doc, IReadOnlyList<ExtractedPage> pages)
     {
+        // Whatever the reader sent: no NUL or other control characters kept (SQLite's length() stops at NUL; sizes count the rest).
+        pages = pages.Select(p => p with { Text = DocumentExtractor.Clean(p.Text) }).ToList();
         var chunks = Chunker.Split(pages);
         var byNumber = pages.ToDictionary(p => p.Number);
         lock (writing)
@@ -425,6 +428,25 @@ public sealed class ProjectIndex
         }
     }
 
+    /// <summary>Documents left 'removing' by a removal that failed after marking them: their copies and rows go now. How many.</summary>
+    public int FinishRemovals()
+    {
+        List<ProjectDocument> left;
+        using (var db = Open()) left = Documents(db).Where(d => d.Status == DocumentStatus.Removing).ToList();
+        foreach (var d in left)
+        {
+            TryDelete(CopyPath(d.Doc, d.Ext));
+            lock (writing)
+            {
+                using var db = Open();
+                DeleteRows(db, d.Doc);
+                vectors = null;
+                vectorGeneration++;
+            }
+        }
+        return left.Count;
+    }
+
     static void DeleteDerived(SqliteConnection db, SqliteTransaction tx, long doc)
     {
         Exec(db, "DELETE FROM pages WHERE doc = $d", tx, ("$d", doc));
@@ -438,6 +460,7 @@ public sealed class ProjectIndex
         using var tx = db.BeginTransaction();
         DeleteDerived(db, tx, doc);
         Exec(db, "DELETE FROM documents WHERE doc = $d", tx, ("$d", doc));
+        Exec(db, "DELETE FROM meta WHERE key = 'pin:' || $d", tx, ("$d", doc));
         tx.Commit();
     }
 

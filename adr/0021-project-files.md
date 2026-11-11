@@ -98,12 +98,43 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   finished at the next launch if cut short; a folder without a record is
   never swept.
 
+- **Pinned files** (Mac adr/0012, "Pinned files"): a file pinned in the
+  Files dialog, or by the model at the user's word (`project_files(doc,
+  pin: true)`), goes whole into every request of the project's chats: in
+  the system prompt after the project's instructions, before the tool-use
+  policy (the stable prefix the server's cache keeps), framed as quoted
+  material, each page under its `[doc:page]`, so answers cite it. Stored as
+  `meta` rows `pin:<doc>` holding the pin's order; a removal drops it. All
+  pins together may take a share of the context (Settings, 10–90%, half by
+  default), never past what the answer's reserve and the 10% margin leave;
+  llama-server allocates its whole context up front, so the Mac's second,
+  memory-based limit doesn't apply. Files go in pin order while they fit
+  that and the request's room; each left out gets one line telling the
+  model to read it with the tool. Sizes are UTF-8 request bytes made tokens
+  at the model's ratio, learned from the server's counts (requests of
+  2,000+ prompt tokens without pictures; the lowest of the last five less
+  10%, within 2–6; 2 before any; a refused request carrying pins adds 2).
+  **Trust**: a turn whose request carries pinned text starts with the
+  barrier down: network tools and MCP servers aren't declared and are
+  refused, folder changes too, with their own text (unpinning lifts it). A
+  pin is refused once any tool returned text in the turn (project_files'
+  listing aside: the model lists the files to find the id of the one the
+  user named), so a tool's text can't pin a file; the pinned text alone
+  doesn't count, as on the Mac, else a project with a pin could never get
+  a second. Unpinning always works. Only looking at folders is declared.
+- **New files are said** (Mac, "New files are said"): the chat keeps its
+  project's file names as of its last message (`projectFilesSeen`); the
+  user's next message carries a note, before its text, saying how many
+  files of which kinds were added since and how to reach them, never their
+  names (names are file text, read only through the tool). The names are
+  kept on the message (`projectFilesAdded`) and shown under it. A chat's
+  first message only records them.
+
 ## Why
 
 The Mac is the spec; what differs is what Windows offers: SQLite from
 NuGet (Windows has no system SQLite to link), PdfPig and our own readers
 instead of PDFKit and the system importers, a Job Object instead of
 posix_spawn limits, and llama.cpp's bge-m3 GGUF already used by memory.
-Not built yet, on the map: pinned files, OCR (Windows.Media.Ocr), the
-legacy Office formats, linked folders, the "new files" note, the df gate
-and compaction of the index.
+Not built yet, on the map: OCR (Windows.Media.Ocr), the legacy Office
+formats, linked folders, the df gate and compaction of the index.

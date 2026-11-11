@@ -230,6 +230,48 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PinnedFilesGoInTheSystemPromptAndNewFilesAreSaid()
+    {
+        var project = Guid.NewGuid();
+        await using var files = new LLMTray.Core.ProjectFiles.ProjectFilesService(Path.Combine(root, "projects"), () => true, () => null,
+            new LLMTray.Core.ProjectFiles.InProcessReader(), () => false, start: false);
+        long Add(string name, string text)
+        {
+            var path = Path.Combine(root, name);
+            File.WriteAllText(path, text);
+            var doc = files.Add(project, [path]).Single().Doc!.Value;
+            files.Index(project)!.SaveExtraction(doc, [new LLMTray.Core.ProjectFiles.ExtractedPage(1, text)]);
+            return doc;
+        }
+        var terms = Add("terms.md", "Delivery within 30 days.");
+        files.Index(project)!.SetPinned(terms, true);
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var options = new ChatOptions(null, ProjectFiles: files, ProjectOfChat: () => project, ContextTokens: 32_000, ProjectInstructions: "Answer briefly.");
+        await chat.SendAsync("first", options);
+        var system = bodies.First(b => b["stream"]!.GetValue<bool>())["messages"]![0]!["content"]!.GetValue<string>();
+        // After the instructions: the framing, the file under its [doc:page], the closing line.
+        Assert.True(system.IndexOf("Answer briefly.", StringComparison.Ordinal) < system.IndexOf(LLMTray.Core.ProjectFiles.PinnedFiles.Framing, StringComparison.Ordinal));
+        Assert.Contains($"[{terms}:1]", system);
+        Assert.Contains("Delivery within 30 days.", system);
+        Assert.EndsWith(LLMTray.Core.ProjectFiles.PinnedFiles.Closing, system);
+        // The first message only records the files; one added later is said with the next message, by kind, not by name.
+        Assert.Empty(chat.Messages[0].ProjectFilesAdded);
+        Add("prices.csv", "tea | 1");
+        await chat.SendAsync("second", options);
+        var user = chat.Messages[^2];
+        Assert.Equal(["prices.csv"], user.ProjectFilesAdded);
+        var sent = bodies.Where(b => b["stream"]!.GetValue<bool>()).SelectMany(b => b["messages"]!.AsArray())
+            .Select(m => m!["content"]?.GetValue<string>() ?? "").Last(c => c.EndsWith("second", StringComparison.Ordinal));
+        Assert.StartsWith("[App note, not the user's words: 1 new file (csv)", sent);
+        Assert.EndsWith("second", sent);
+        Assert.DoesNotContain("prices", sent);
+        // Kept with the chat.
+        var again = new ChatClient(http, api, new ChatStore(root));
+        again.Load(chat.Id!.Value);
+        Assert.Equal(["prices.csv"], again.Messages[^2].ProjectFilesAdded);
+    }
+
+    [Fact]
     public async Task PicturesGoAsDataUrlsAndAreSavedBesideTheChat()
     {
         var store = new ChatStore(root);

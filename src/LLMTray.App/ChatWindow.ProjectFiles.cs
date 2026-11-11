@@ -59,6 +59,8 @@ sealed partial class ChatWindow
         var list = new StackPanel { Spacing = 6 };
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
+        var pinNote = Ui.Caption("");
+        pinNote.TextWrapping = TextWrapping.Wrap;
         Button add = null!;
         add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
         var intro = Ui.Caption(L.T("The chats of this project search these files and cite them by page. Drop files here or add them."));
@@ -88,10 +90,22 @@ sealed partial class ChatWindow
             await AddAsync(items.Select(i => i.Path).Where(p => p.Length > 0).ToList());
         };
 
+        body.Children.Insert(body.Children.IndexOf(summary) + 1, pinNote);
+
         void Render()
         {
             var index = app.ProjectFiles.Index(project.Id);
             var docs = index?.Documents().Where(d => d.Status != DocumentStatus.Removing).ToList() ?? [];
+            // Pinned files (Mac adr/0012), sized for the model loaded now.
+            var loaded = app.Host.State.Model;
+            var ratio = app.PinRatios.For(loaded?.FullPath);
+            var limit = PinnedFiles.LimitTokens(app.Host.ContextTokens, loaded is null ? 0 : app.Profiles.ResolvedFor(loaded.FullPath).MaxTokens, app.Settings.PinShare);
+            var pins = index?.Pins() ?? [];
+            var tokens = (index?.PinBytes() ?? []).ToDictionary(kv => kv.Key, kv => PinnedFiles.Tokens(kv.Value, ratio));
+            var used = pins.Sum(p => tokens.GetValueOrDefault(p));
+            pinNote.Visibility = pins.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            pinNote.Text = L.F("Pinned: {0} files, ≈{1} of {2} tokens. Their whole text goes with every message of this project's chats, and those chats don't use web tools, MCP servers or folder changes while any file is pinned.",
+                pins.Count, used, limit) + (used > limit ? " " + L.T("They don't all fit this model now: the ones past the limit are read with search instead.") : "");
             var s = app.ProjectFiles.Summary(project.Id);
             summary.Text = docs.Count == 0 ? L.T("No files yet.")
                 : s.Indexing ? L.F("{0} files · reading {1}", docs.Count, s.Waiting)
@@ -103,9 +117,24 @@ sealed partial class ChatWindow
                 var name = new TextBlock { Text = $"{d.Doc}. {d.Name}", TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
                 ToolTipService.SetToolTip(name, d.Name);
                 var pagesText = d.Pages == 1 ? L.T("1 page") : L.F("{0} pages", d.Pages);
-                var detail = Ui.Caption(d.Pages > 0 ? L.F("{0} · {1} · {2}", StatusText(d), pagesText, Size(d.Bytes)) : L.F("{0} · {1}", StatusText(d), Size(d.Bytes)));
+                var pinned = pins.Contains(d.Doc);
+                var status = pinned ? L.F("Pinned · ≈{0} tokens", tokens.GetValueOrDefault(d.Doc)) + " · " + StatusText(d) : StatusText(d);
+                var detail = Ui.Caption(d.Pages > 0 ? L.F("{0} · {1} · {2}", status, pagesText, Size(d.Bytes)) : L.F("{0} · {1}", status, Size(d.Bytes)));
                 detail.TextWrapping = TextWrapping.Wrap;
                 var open = IconButton("\uE8E5", L.T("Open"), d.Name, () => OpenCopy(project.Id, doc));
+                PinCheck check = pinned ? new PinCheck.AlreadyPinned() : PinnedFiles.Check(doc, docs, pins, tokens, limit);
+                var pin = IconButton(pinned ? "\uE77A" : "\uE718", pinned ? L.T("Unpin") : L.T("Pin"), d.Name, () =>
+                {
+                    app.ProjectFiles.SetPinned(project.Id, doc, !pinned);
+                });
+                pin.IsEnabled = check is PinCheck.Fits or PinCheck.AlreadyPinned;
+                ToolTipService.SetToolTip(pin, check switch
+                {
+                    PinCheck.AlreadyPinned => L.T("Unpin: read with search again"),
+                    PinCheck.Fits f => L.F("Pin: its whole text (≈{0} tokens) goes with every message of this project's chats", f.Tokens),
+                    PinCheck.TooLong t => L.F("Too long to pin with this model: ≈{0} tokens, ≈{1} of {2} taken", t.Tokens, t.Used, t.Limit),
+                    _ => L.T("Can be pinned once it's read"),
+                });
                 var again = IconButton("\uE72C", L.T("Read Again"), d.Name, () => app.ProjectFiles.Reindex(project.Id, doc));
                 again.IsEnabled = d.Status is not (DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
                 var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => app.ProjectFiles.Remove(project.Id, doc));
@@ -113,7 +142,7 @@ sealed partial class ChatWindow
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 var text = new StackPanel { Children = { name, detail } };
-                var buttons = Ui.Horizontal(open, again, remove);
+                var buttons = Ui.Horizontal(pin, open, again, remove);
                 Grid.SetColumn(buttons, 1);
                 row.Children.Add(text);
                 row.Children.Add(buttons);
@@ -165,8 +194,11 @@ sealed partial class ChatWindow
             Content = body,
             CloseButtonText = L.T("Done"),
         };
+        // A model loaded or switched meanwhile: the pins' sizes and limit are its.
+        void OnHost(LLMTray.Core.Runtime.HostState _) => Render();
         Render();
         app.ProjectFilesChanged += OnChanged;
+        app.HostChanged += OnHost;
         filesDialog = dialog;
         try
         {
@@ -179,6 +211,7 @@ sealed partial class ChatWindow
         {
             filesDialog = null;
             app.ProjectFilesChanged -= OnChanged;
+            app.HostChanged -= OnHost;
         }
     }
 
