@@ -61,14 +61,16 @@ sealed partial class ChatWindow
         var summary = Ui.Caption("");
         Button add = null!;
         add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
+        var intro = Ui.Caption(L.T("The chats of this project search these files and cite them by page. Drop files here or add them."));
+        intro.TextWrapping = TextWrapping.Wrap;
         var body = new StackPanel
         {
             Spacing = 10,
-            MinWidth = 520,
+            MinWidth = 480,
             AllowDrop = true,
             Children =
             {
-                Ui.Caption(L.T("The chats of this project search these files and cite them by page. Drop files here or add them.")),
+                intro,
                 add,
                 note,
                 summary,
@@ -100,13 +102,13 @@ sealed partial class ChatWindow
                 var doc = d.Doc;
                 var name = new TextBlock { Text = $"{d.Doc}. {d.Name}", TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
                 ToolTipService.SetToolTip(name, d.Name);
-                var detail = Ui.Caption(d.Pages > 0 ? L.F("{0} · {1} pages · {2}", StatusText(d), d.Pages, Size(d.Bytes)) : L.F("{0} · {1}", StatusText(d), Size(d.Bytes)));
+                var pagesText = d.Pages == 1 ? L.T("1 page") : L.F("{0} pages", d.Pages);
+                var detail = Ui.Caption(d.Pages > 0 ? L.F("{0} · {1} · {2}", StatusText(d), pagesText, Size(d.Bytes)) : L.F("{0} · {1}", StatusText(d), Size(d.Bytes)));
                 detail.TextWrapping = TextWrapping.Wrap;
-                var open = Ui.Button(L.T("Open"), () => OpenCopy(project.Id, doc));
-                var again = Ui.Button(L.T("Read Again"), () => app.ProjectFiles.Reindex(project.Id, doc));
+                var open = IconButton("\uE8E5", L.T("Open"), d.Name, () => OpenCopy(project.Id, doc));
+                var again = IconButton("\uE72C", L.T("Read Again"), d.Name, () => app.ProjectFiles.Reindex(project.Id, doc));
                 again.IsEnabled = d.Status is not (DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
-                var remove = Ui.Button(L.T("Remove"), () => app.ProjectFiles.Remove(project.Id, doc));
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(remove, L.F("Remove {0}", d.Name));
+                var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => app.ProjectFiles.Remove(project.Id, doc));
                 var row = new Grid { ColumnSpacing = 8 };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -158,6 +160,7 @@ sealed partial class ChatWindow
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
+            Resources = { ["ContentDialogMaxWidth"] = 720.0 },
             Title = L.F("Files of {0}", project.Name),
             Content = body,
             CloseButtonText = L.T("Done"),
@@ -216,6 +219,16 @@ sealed partial class ChatWindow
             await save(dialog, Path.Combine(folder, "project-files.png"));
             dialog.Hide();
         }
+    }
+
+    /// <summary>A small icon button with its action as tooltip and, for screen readers, "action file".</summary>
+    static Button IconButton(string glyph, string action, string file, Action click)
+    {
+        var button = new Button { Content = new FontIcon { Glyph = glyph, FontSize = 14 }, Padding = new Thickness(8, 6, 8, 6) };
+        ToolTipService.SetToolTip(button, action);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, L.F("{0} {1}", action, file));
+        button.Click += (_, _) => click();
+        return button;
     }
 
     static long FreeSpace(string folder)
