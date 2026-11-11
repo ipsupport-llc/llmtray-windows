@@ -170,6 +170,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
             // Not removed (the index busy): it stays listed, and the worker may take it again.
             lock (sync) removed.Remove((project, doc));
         }
+        // A worker that skipped this document goes on with the next at once.
+        Poke();
         Changed?.Invoke(project);
     }
 
