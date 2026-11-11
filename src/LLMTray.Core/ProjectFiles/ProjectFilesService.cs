@@ -386,8 +386,10 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public void DeleteProject(Guid project)
     {
         var folder = Folder(project);
-        // The pictures' lock too: an add that checked the project is alive finishes (or sees it gone) before this marks it.
-        lock (PictureLock(project))
+        // The record at once, so nothing new starts on it; then a picture add already under way is waited for
+        // (one that checks after this sees it gone) before the folder goes.
+        lock (sync) deleted.Add(project);
+        lock (PictureLock(project)) { }
         lock (sync)
         {
             // The record first, under the lock Index() and the worker's start check it with: nothing reopens

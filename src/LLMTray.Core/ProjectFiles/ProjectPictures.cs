@@ -68,7 +68,29 @@ public static class ProjectPictures
 
     /// <summary>A name the store itself gave: "&lt;UUID&gt;.&lt;ext&gt;" or its ".thumb.png" (never a path, never a link elsewhere).</summary>
     static bool IsStoredName(string? name) =>
-        name is not null && System.Text.RegularExpressions.Regex.IsMatch(name, "^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}\\.[a-z]{3,4}(\\.thumb\\.png)?$");
+        name is not null && System.Text.RegularExpressions.Regex.IsMatch(name, "\\A[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}\\.(?<ext>[a-z]{3,4})\\z")
+        && Path.GetExtension(name).TrimStart('.') is var ext && (Formats.Contains(ext) || ext == "img");
+
+    /// <summary>"p" and a number from 1: the ids the store gives.</summary>
+    internal static int IdNumber(string? id) =>
+        id is { Length: > 1 and <= 10 } && id[0] == 'p' && id[1] != '0' && id.Skip(1).All(char.IsAsciiDigit) && int.TryParse(id.AsSpan(1), out var n) ? n : 0;
+
+    /// <summary>
+    /// A manifest as the store writes it, or none: names it gave (a picture's "&lt;UUID&gt;.&lt;ext&gt;", its
+    /// thumbnail that name and ".thumb.png"), ids p1… each once, every number below "next".
+    /// </summary>
+    static bool IsWhole(PictureManifest manifest)
+    {
+        if (manifest.Pictures.Any(p => p is null || p.Name is null || !IsStoredName(p.File) || (p.Thumbnail is { } t && t != p.File + ".thumb.png")
+            || IdNumber(p.Id) == 0 || p.Width <= 0 || p.Height <= 0 || p.Bytes <= 0))
+        {
+            return false;
+        }
+        var numbers = manifest.Pictures.Select(p => IdNumber(p.Id)).ToList();
+        return numbers.Distinct().Count() == numbers.Count
+            && manifest.Pictures.Select(p => p.File).Distinct(StringComparer.OrdinalIgnoreCase).Count() == numbers.Count
+            && manifest.Next > (numbers.Count == 0 ? 0 : numbers.Max());
+    }
 
     public static bool IsPicture(string path) => Formats.Contains(Path.GetExtension(path).TrimStart('.'));
 
@@ -127,7 +149,7 @@ public static class ProjectPictures
                 }
             }
             var manifest = JsonSerializer.Deserialize<PictureManifest>(text, Json) ?? throw new JsonException("empty");
-            if (manifest.Pictures.Any(p => p is null || !IsStoredName(p.File) || (p.Thumbnail is { } t && !IsStoredName(t)) || p.Id is null || p.Name is null))
+            if (!IsWhole(manifest))
             {
                 throw new JsonException("a picture's entry is damaged");
             }
@@ -157,7 +179,23 @@ public static class ProjectPictures
 
     /// <summary>A picture's copy, only if the manifest lists it (by id).</summary>
     public static (ProjectPicture Picture, string Path)? FileOf(string id, string project) =>
-        Manifest(project).Pictures.FirstOrDefault(p => p.Id == id) is { } p ? (p, Path.Combine(Directory(project), p.File)) : null;
+        Manifest(project).Pictures.FirstOrDefault(p => p.Id == id) is { } p && Path.Combine(Directory(project), p.File) is var path && IsPlainFile(path)
+            ? (p, path)
+            : null;
+
+    /// <summary>There, and a file of its own: never a link or junction to something outside the store.</summary>
+    static bool IsPlainFile(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists && !info.Attributes.HasFlag(FileAttributes.ReparsePoint) && info.LinkTarget is null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>A picture's thumbnail file, if it has one.</summary>
     public static string? ThumbnailOf(ProjectPicture picture, string project) =>
@@ -207,8 +245,27 @@ public static class ProjectPictures
         var manifest = Load(project);
         if (manifest.Pictures.FirstOrDefault(p => p.Sha256 == hash) is { } same)
         {
-            // Already there, unless its copy went: then this add puts it back (a new entry; the stale one goes).
-            if (File.Exists(Path.Combine(Directory(project), same.File))) return (same, true);
+            if (File.Exists(Path.Combine(Directory(project), same.File)))
+            {
+                // Already there; a thumbnail that went is made again from this add.
+                if ((same.Thumbnail is null || !File.Exists(Path.Combine(Directory(project), same.Thumbnail))) && picture.Thumbnail is { Length: > 0 and <= 512 * 1024 } again)
+                {
+                    try
+                    {
+                        var name = same.File + ".thumb.png";
+                        File.WriteAllBytes(Path.Combine(Directory(project), name), again);
+                        var fixedUp = same with { Thumbnail = name };
+                        Save(manifest with { Pictures = [.. manifest.Pictures.Select(p => p.Id == same.Id ? fixedUp : p)] }, project);
+                        return (fixedUp, true);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                    }
+                }
+                return (same, true);
+            }
+            // Its copy went: this add puts it back (a new entry); the stale one goes, its thumbnail with it.
+            if (same.Thumbnail is { } stale) TryDelete(Path.Combine(Directory(project), stale));
             manifest = manifest with { Pictures = [.. manifest.Pictures.Where(p => p.Id != same.Id)] };
         }
         var stage = Staging(project);
@@ -265,6 +322,8 @@ public static class ProjectPictures
     {
         var folder = Directory(project);
         if (!System.IO.Directory.Exists(folder)) return (0, 0);
+        // The list first: a damaged one stops here, before anything (staging included) is deleted.
+        var manifest = Load(project);
         try
         {
             System.IO.Directory.Delete(Staging(project), recursive: true);
@@ -272,7 +331,6 @@ public static class ProjectPictures
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
         }
-        var manifest = Load(project);
         var kept = manifest.Pictures.Where(p => File.Exists(Path.Combine(folder, p.File))).ToList();
         var dropped = manifest.Pictures.Count - kept.Count;
         if (dropped > 0) Save(manifest with { Pictures = kept }, project);

@@ -1061,16 +1061,20 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         var card = new DocumentRef(Guid.NewGuid(), pdfName, thumbName, spec.Title, made.Pages, new DocumentSource(whole.ToJson(), project));
         bool kept;
+        // Checked again as the card goes in: a picture removed (or the chat moved) while the PDF was written isn't delivered.
+        var picturesGone = PicturesWentMeanwhile(pictures, project, files, projectOfChat);
         lock (sync)
         {
-            kept = mine == epoch && Id == chatId;
+            kept = mine == epoch && Id == chatId && !picturesGone;
             if (kept) answer.Documents.Add(card);
         }
         if (!kept)
         {
-            // Switched away while it was written: the files go, nothing lists them.
+            // Switched away while it was written, or its pictures aren't the chat's now: the files go, nothing lists them.
             DeleteFiles(chatId, pdfName, thumbName);
-            return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
+            return (Refused(Documents.DocumentTool.Failed(picturesGone
+                ? "the chat left its project, or a picture was removed, while it was made; make it again"
+                : "the chat was closed")), false);
         }
         Changed?.Invoke();
         return (new Tools.ToolOutcome(Documents.DocumentTool.Made(spec, made.Pages, request.FromTitle, page.Notes), null, false), true);
@@ -1174,6 +1178,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // Another chat (or this one opened again: new messages), or a turn started meanwhile: left as it was.
             var at = message.Documents.IndexOf(document);
             if (mine != epoch || Id != chatId || !Messages.Contains(message) || at < 0) stale = "the chat changed meanwhile";
+            else if (PicturesWentMeanwhile(pictures, document.Source.Project, files, projectOfChat)) stale = "the chat left its project, or a picture was removed, meanwhile";
             else if (Busy || Compacting) stale = "an answer started meanwhile";
             else message.Documents[at] = remade;
         }

@@ -97,6 +97,8 @@ static class PictureDecoding
         {
             var folder = Path.Combine(Path.GetTempPath(), "llmtray-decode-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder);
+            // The child's exit, once it's started: the folder goes after it (later, when it's slow to end).
+            Task exited = Task.CompletedTask;
             try
             {
                 var exe = Environment.ProcessPath ?? throw new PictureDecodeException("the app's path is unknown");
@@ -110,6 +112,7 @@ static class PictureDecoding
                 };
                 foreach (var a in new[] { ArgumentName, path, folder, side.ToString(System.Globalization.CultureInfo.InvariantCulture) }) info.ArgumentList.Add(a);
                 using var process = Process.Start(info) ?? throw new PictureDecodeException("the decoder didn't start");
+                exited = process.WaitForExitAsync();
                 IDisposable job;
                 try
                 {
@@ -136,7 +139,10 @@ static class PictureDecoding
                         var answer = JsonNode.Parse(line) as JsonObject ?? throw new PictureDecodeException("the decoder stopped");
                         if (answer["error"]?.GetValue<string>() is { } error) throw new PictureDecodeException(error);
                         var (width, height) = (answer["width"]!.GetValue<int>(), answer["height"]!.GetValue<int>());
-                        if (width is <= 0 or > 1_000_000 || height is <= 0 or > 1_000_000) throw new PictureDecodeException("the decoder's answer is wrong");
+                        if (width is <= 0 or > 1_000_000 || height is <= 0 or > 1_000_000 || (long)width * height > ProjectPictures.MaxMegapixels * 1_000_000L)
+                        {
+                            throw new PictureDecodeException("the decoder's answer is wrong");
+                        }
                         return new DecodedPicture(width, height, await ReadCappedAsync(Path.Combine(folder, "picture"), timeout.Token), answer["jpeg"]?.GetValue<bool>() == true);
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -155,26 +161,25 @@ static class PictureDecoding
                     finally
                     {
                         Kill(process);
-                        // Ended before its folder goes: a file it still held would stay behind.
-                        try
-                        {
-                            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
-                        }
-                        catch (Exception e) when (e is TimeoutException or InvalidOperationException)
-                        {
-                        }
                     }
                 }
             }
             finally
             {
-                try
-                {
-                    Directory.Delete(folder, recursive: true);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                }
+                // Never waited for here (a cancel stays prompt): the folder goes as soon as the child has ended.
+                if (exited.IsCompleted) DeleteFolder(folder);
+                else _ = exited.ContinueWith(_ => DeleteFolder(folder), TaskScheduler.Default);
+            }
+        }
+
+        static void DeleteFolder(string folder)
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
             }
         }
 

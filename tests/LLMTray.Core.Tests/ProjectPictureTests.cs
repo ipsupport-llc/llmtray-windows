@@ -146,4 +146,49 @@ public sealed class ProjectPictureTests : IAsyncDisposable
         chatProject = Guid.NewGuid();
         Assert.Empty(await ChatClient.DocumentPicturesAsync(spec, project, service, () => chatProject, default));
     }
+
+    [Fact]
+    public async Task OnlyAManifestAsTheStoreWritesItIsUsedAndTheListingPages()
+    {
+        for (var i = 0; i < 12; i++) await service.AddAsync(project, [File($"pic{i}.png", $"{100 + i} 100\n{new string('x', i + 1)}")]);
+        var folder = Path.Combine(root, "projects", project.ToString("D").ToUpperInvariant(), "pictures");
+        var manifest = Path.Combine(folder, "pictures.json");
+        var good = System.IO.File.ReadAllText(manifest);
+        var node = JsonNode.Parse(good)!;
+        // "next" set back (ids would be reused), a name with a newline after it, a duplicate id: each damaged.
+        foreach (var damage in new Action<JsonNode>[]
+        {
+            n => n["next"] = 1,
+            n => n["pictures"]![0]!["file"] = n["pictures"]![0]!["file"]!.GetValue<string>() + "\n",
+            n => n["pictures"]![1]!["id"] = "p1",
+            n => n["pictures"]![0]!["id"] = "",
+        })
+        {
+            var copy = node.DeepClone();
+            damage(copy);
+            System.IO.File.WriteAllText(manifest, copy.ToJsonString());
+            await using var fresh = new ProjectFilesService(Path.Combine(root, "projects"), () => true, () => null, new InProcessReader(), () => false, start: false, pictures: decoder);
+            Assert.Empty(fresh.Pictures(project));
+            Assert.False(fresh.RemovePicture(project, "p2"));
+        }
+        // Nothing was deleted meanwhile.
+        Assert.Equal(24, Directory.GetFiles(folder).Count(f => !f.EndsWith(".json", StringComparison.Ordinal)));
+        System.IO.File.WriteAllText(manifest, good);
+
+        // A small room: pages with a cursor that goes on where the last stopped, every picture once.
+        var turn = new ProjectTurn(project, () => chatProject, service, 2_000, 200);
+        var seen = new List<string>();
+        var cursor = "";
+        for (var page = 0; page < 20; page++)
+        {
+            var arguments = cursor.Length == 0 ? "{}" : $"{{\"cursor\":\"{cursor}\"}}";
+            var result = JsonNode.Parse((await ProjectFilesTool.RunAsync(new ToolCall { Name = ProjectFilesTool.Name, Arguments = arguments }, turn, 1_900, default)).Result)!;
+            seen.AddRange(result["pictures"]?.AsArray().Select(p => p!["id"]!.GetValue<string>()) ?? []);
+            cursor = result["pictures_next"]?.GetValue<string>() ?? "";
+            if (cursor.Length == 0) break;
+        }
+        Assert.Equal(Enumerable.Range(1, 12).Select(n => $"p{n}"), seen);
+        var bad = await ProjectFilesTool.RunAsync(new ToolCall { Name = ProjectFilesTool.Name, Arguments = "{\"cursor\":\"pictures:abc\"}" }, turn, 1_000, default);
+        Assert.True(bad.Failed);
+    }
 }
