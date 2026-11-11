@@ -53,16 +53,34 @@ static class DocumentPrinter
 {
     /// <summary>The address the page's resources live under (nothing is fetched from it: requests are answered from the table).</summary>
     public const string Base = "https://document.llmtray/";
+    const string PageName = "index.html";
     public const int MaxPages = 200;
     public const long MaxPdfBytes = 50L << 20;
     static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
 
     static CoreWebView2Environment? environment;
+    /// <summary>One print at a time (a turn's and a Make again's): one environment, made once.</summary>
+    static readonly SemaphoreSlim gate = new(1, 1);
 
     /// <param name="parent">A window to host the (hidden) view; nothing is shown in it.</param>
     /// <param name="resources">The page's resources by path under <see cref="Base"/>: bytes and content type.</param>
     /// <param name="paperInches">The paper's width and height.</param>
     public static async Task<PrintedDocument> PrintAsync(IntPtr parent, string dataFolder, string html,
+        IReadOnlyDictionary<string, (byte[] Bytes, string ContentType)> resources, string title, (double Width, double Height) paperInches,
+        CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await PrintLockedAsync(parent, dataFolder, html, resources, title, paperInches, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    static async Task<PrintedDocument> PrintLockedAsync(IntPtr parent, string dataFolder, string html,
         IReadOnlyDictionary<string, (byte[] Bytes, string ContentType)> resources, string title, (double Width, double Height) paperInches,
         CancellationToken cancellationToken)
     {
@@ -72,10 +90,16 @@ static class DocumentPrinter
             environment ??= await CoreWebView2Environment.CreateWithOptionsAsync(null, Path.Combine(dataFolder, "webview"), new CoreWebView2EnvironmentOptions());
             controller = await environment.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent));
         }
-        catch (Exception e) when (e is COMException or FileNotFoundException or WebView2RuntimeNotFoundException or InvalidOperationException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
+            // No runtime (an old Windows 10 without Edge's WebView2), or it wouldn't start.
             throw new DocumentPrintException("Microsoft Edge WebView2, which lays out the pages, isn't available on this PC");
         }
+        // The page itself is served from the table too: NavigateToString takes at most 2 MB, a page may be 8.
+        var pages = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources)
+        {
+            [PageName] = (System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
+        };
         var temp = Path.Combine(Path.GetTempPath(), "llmtray-document-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -93,11 +117,11 @@ static class DocumentPrinter
             settings.IsPasswordAutosaveEnabled = false;
 
             // Every request: the table's own resources, else refused (a remote image, file:, a CSS url() elsewhere).
-            view.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+            view.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
             view.WebResourceRequested += (_, e) =>
             {
                 var uri = e.Request.Uri;
-                if (uri.StartsWith(Base, StringComparison.Ordinal) && resources.TryGetValue(uri[Base.Length..], out var resource))
+                if (uri.StartsWith(Base, StringComparison.Ordinal) && pages.TryGetValue(uri[Base.Length..], out var resource))
                 {
                     var stream = new MemoryStream(resource.Bytes, writable: false).AsRandomAccessStream();
                     e.Response = environment.CreateWebResourceResponse(stream, 200, "OK",
@@ -110,7 +134,7 @@ static class DocumentPrinter
             var loaded = false;
             view.NavigationStarting += (_, e) =>
             {
-                if (loaded) e.Cancel = true;
+                if (loaded || e.Uri != Base + PageName) e.Cancel = true;
                 loaded = true;
             };
             view.NewWindowRequested += (_, e) => e.Handled = true;
@@ -121,7 +145,7 @@ static class DocumentPrinter
             timeout.CancelAfter(Timeout);
             var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             view.NavigationCompleted += (_, e) => done.TrySetResult(e.IsSuccess);
-            view.NavigateToString(html);
+            view.Navigate(Base + PageName);
             using (timeout.Token.Register(() => done.TrySetCanceled()))
             {
                 try

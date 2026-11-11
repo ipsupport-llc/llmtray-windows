@@ -90,8 +90,15 @@ public sealed record DocumentCall(
     static readonly string[] WrapperKeys = ["arguments", "parameters", "args", "input", "params", ToolName];
 
     /// <summary>The call's arguments text, read leniently (<see cref="LenientJson"/>).</summary>
+    /// <summary>
+    /// The longest arguments read: the content's 200,000 characters escaped (\uXXXX at worst) and the
+    /// charts' numbers fit well within; anything longer is refused before it's parsed.
+    /// </summary>
+    public const int MaxArgumentChars = 1_500_000;
+
     public static DocumentCallParse Parse(string argumentsJson)
     {
+        if (argumentsJson.Length > MaxArgumentChars) return new(null, Problem(["the arguments are far too long (the content may be 200,000 characters at most)"]));
         JsonNode? node;
         try
         {

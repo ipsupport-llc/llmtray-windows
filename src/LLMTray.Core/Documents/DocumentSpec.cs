@@ -354,7 +354,14 @@ public sealed record DocumentSpec(
         {
             // A quote's ">" markers off: a fence may be quoted too.
             var t = line.Trim();
-            while (t.StartsWith('>')) t = t[1..].TrimStart(' ');
+            // By index: a line of 200,000 ">" mustn't be copied once per marker.
+            var at = 0;
+            while (at < t.Length && t[at] == '>')
+            {
+                at++;
+                while (at < t.Length && t[at] == ' ') at++;
+            }
+            t = t[at..];
             if (fence is not null)
             {
                 if (t.StartsWith(fence, StringComparison.Ordinal)) fence = null;

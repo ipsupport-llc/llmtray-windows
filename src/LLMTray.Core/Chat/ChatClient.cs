@@ -286,8 +286,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Citations = [.. m.Citations ?? []],
                     ProjectFilesAdded = [.. m.ProjectFilesAdded ?? []],
                     Shared = [.. (m.Shared ?? []).Where(s => s is not null)],
-                    // A document whose PDF is gone isn't shown (Mac).
-                    Documents = [.. (m.Documents ?? []).Where(d => d is not null && store.MediaPath(file.Id, d.Filename) is { } pdf && File.Exists(pdf))],
+                    // Every card is kept, its PDF there or not (the card says it's gone): a save never forgets one.
+                    Documents = [.. (m.Documents ?? []).Where(d => d is not null)],
                     Images = images,
                     ImageFilenames = names,
                     Audios = audios,
@@ -1030,22 +1030,37 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
         if (printed.Problem is { } problem) return (Refused(problem), false);
         var (made, page) = (printed.Made!, printed.Page!);
-        DocumentRef card;
+        Guid chatId;
         lock (sync)
         {
             // Another chat on screen now: nothing is written into this one's folder.
             if (mine != epoch) return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
             Id ??= Guid.NewGuid();
-            try
-            {
-                var (pdf, thumbnail) = store.SaveDocument(Id.Value, Documents.DocumentFileName.Sanitize(spec.Title), made.Pdf, made.Thumbnail);
-                card = new DocumentRef(Guid.NewGuid(), pdf, thumbnail, spec.Title, made.Pages, new DocumentSource(whole.ToJson(), project));
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                return (Refused($"{Documents.DocumentTool.Name}: the PDF couldn't be saved ({e.Message}). Tell the user. Nothing was made -- don't tell the user it was made."), false);
-            }
-            answer.Documents.Add(card);
+            chatId = Id.Value;
+        }
+        // Written outside the lock (a PDF can be 50 MB): Stop and a chat switch don't wait for the disk.
+        string pdfName;
+        string? thumbName;
+        try
+        {
+            (pdfName, thumbName) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), made.Pdf, made.Thumbnail);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return (Refused($"{Documents.DocumentTool.Name}: the PDF couldn't be saved ({e.Message}). Tell the user. Nothing was made -- don't tell the user it was made."), false);
+        }
+        var card = new DocumentRef(Guid.NewGuid(), pdfName, thumbName, spec.Title, made.Pages, new DocumentSource(whole.ToJson(), project));
+        bool kept;
+        lock (sync)
+        {
+            kept = mine == epoch && Id == chatId;
+            if (kept) answer.Documents.Add(card);
+        }
+        if (!kept)
+        {
+            // Switched away while it was written: the files go, nothing lists them.
+            DeleteFiles(chatId, pdfName, thumbName);
+            return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
         }
         Changed?.Invoke();
         return (new Tools.ToolOutcome(Documents.DocumentTool.Made(spec, made.Pages, request.FromTitle, page.Notes), null, false), true);
@@ -1076,39 +1091,68 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// </summary>
     public async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document, Documents.IDocumentPrinter printer, CancellationToken token = default)
     {
-        if (document.Source is null || Id is not { } chatId || Temporary) return "it can't be made again";
+        int mine;
+        Guid chatId;
+        lock (sync)
+        {
+            if (document.Source is null || Id is not { } id || Temporary) return "it can't be made again";
+            // Its save would race the answer's.
+            if (Busy || Compacting) return "wait until the answer is done";
+            if (!Messages.Contains(message) || !message.Documents.Contains(document)) return "the document is gone";
+            (mine, chatId) = (epoch, id);
+        }
         var parsed = Documents.DocumentSpec.Parse(document.Source.Arguments);
         if (parsed.Spec is not { } spec) return parsed.Refusal ?? "its saved call can't be read";
         var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
         if (printed.Problem is { } problem) return problem;
+        string pdfName;
+        string? thumbName;
+        try
+        {
+            (pdfName, thumbName) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), printed.Made!.Pdf, printed.Made.Thumbnail);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return e.Message;
+        }
+        var remade = document with { Id = Guid.NewGuid(), Filename = pdfName, Thumbnail = thumbName, Title = spec.Title, Pages = printed.Made.Pages };
+        string? stale = null;
         lock (sync)
         {
-            if (Id != chatId) return "another chat is open";
+            // Another chat (or this one opened again: new messages), or a turn started meanwhile: left as it was.
             var at = message.Documents.IndexOf(document);
-            if (at < 0) return "the document is gone";
+            if (mine != epoch || Id != chatId || !Messages.Contains(message) || at < 0) stale = "the chat changed meanwhile";
+            else if (Busy || Compacting) stale = "an answer started meanwhile";
+            else message.Documents[at] = remade;
+        }
+        if (stale is not null)
+        {
+            DeleteFiles(chatId, pdfName, thumbName);
+            return stale;
+        }
+        // The old files go only once the chat file names the new ones: a failed save keeps both.
+        Save();
+        if (store.Load(chatId)?.Messages.Any(m => m.Documents?.Any(d => d.Filename == pdfName) == true) == true)
+        {
+            DeleteFiles(chatId, document.Filename, document.Thumbnail);
+        }
+        Changed?.Invoke();
+        return null;
+    }
+
+    /// <summary>Removes a chat's files by name, as far as it can (one open in a viewer stays).</summary>
+    void DeleteFiles(Guid chatId, params string?[] names)
+    {
+        foreach (var name in names)
+        {
             try
             {
-                var (pdf, thumbnail) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), printed.Made!.Pdf, printed.Made.Thumbnail);
-                message.Documents[at] = document with { Id = Guid.NewGuid(), Filename = pdf, Thumbnail = thumbnail, Title = spec.Title, Pages = printed.Made.Pages };
+                if (store.MediaPath(chatId, name) is { } path) File.Delete(path);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                return e.Message;
-            }
-            foreach (var old in new[] { document.Filename, document.Thumbnail })
-            {
-                try
-                {
-                    if (store.MediaPath(chatId, old) is { } path) File.Delete(path);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                }
             }
         }
-        SaveNow();
-        Changed?.Invoke();
-        return null;
     }
 
     /// <summary>Removes a last answer that failed (before compacting and asking again).</summary>

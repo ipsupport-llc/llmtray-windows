@@ -39,6 +39,7 @@ public sealed class ChatStore(string folder)
         m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
             || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
             || m.AudioFilenames is null || m.AudioPrompts is null || m.AudioDurations is null
+            || m.Documents?.Any(d => d?.Filename is null || d.Title is null) == true
             ? m with
             {
                 Role = m.Role ?? "user",
@@ -49,6 +50,7 @@ public sealed class ChatStore(string folder)
                 ImagePrompts = m.ImagePrompts ?? [],
                 Sources = m.Sources ?? [],
                 McpCalls = m.McpCalls ?? [],
+                Documents = m.Documents?.Where(d => d is { Filename: not null }).Select(d => d.Title is null ? d with { Title = "Document" } : d).ToList(),
                 AudioFilenames = m.AudioFilenames ?? [],
                 AudioPrompts = m.AudioPrompts ?? [],
                 AudioDurations = m.AudioDurations ?? [],
@@ -143,7 +145,9 @@ public sealed class ChatStore(string folder)
 
     /// <summary>A file of a chat's folder by its saved name, or null when the name points elsewhere.</summary>
     public string? MediaPath(Guid id, string? name) =>
-        string.IsNullOrEmpty(name) || name.Contains('\0') || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)
+        // One name in the folder: no separator, not "." or "..", nothing Windows can't name ("1..2.pdf" is fine).
+        string.IsNullOrEmpty(name) || name != Path.GetFileName(name) || name.Trim('.').Length == 0
+            || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':']) >= 0
             ? null
             : Path.Combine(ImagesFolder(id), name);
 
@@ -155,33 +159,43 @@ public sealed class ChatStore(string folder)
     {
         var folder = ImagesFolder(id);
         Directory.CreateDirectory(folder);
+        // Written whole under a temporary name first: a full disk leaves no half PDF under the real one.
+        var temp = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
         string name;
-        for (var n = 1; ; n++)
+        try
         {
-            name = (n == 1 ? baseName : $"{baseName} {n}") + ".pdf";
-            try
+            File.WriteAllBytes(temp, pdf);
+            for (var n = 1; ; n++)
             {
-                using var file = new FileStream(Path.Combine(folder, name), FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                file.Write(pdf);
-                break;
+                name = (n == 1 ? baseName : $"{baseName} {n}") + ".pdf";
+                try
+                {
+                    // Never over a file: a taken name gets the next number.
+                    File.Move(temp, Path.Combine(folder, name), overwrite: false);
+                    break;
+                }
+                catch (IOException) when (File.Exists(Path.Combine(folder, name)) && n < 1000)
+                {
+                }
             }
-            catch (IOException) when (File.Exists(Path.Combine(folder, name)) && n < 1000)
-            {
-                // Taken: the next number.
-            }
+        }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
         }
         string? thumb = null;
         if (thumbnail is { Length: > 0 and <= 512 * 1024 })
         {
+            var thumbName = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".thumb.png";
             try
             {
-                thumb = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".thumb.png";
-                using var file = new FileStream(Path.Combine(folder, thumb), FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                file.Write(thumbnail);
+                File.WriteAllBytes(Path.Combine(folder, thumbName), thumbnail);
+                thumb = thumbName;
             }
             catch (IOException)
             {
-                thumb = null;
+                // No thumbnail: the card shows an icon. Nothing half-written stays.
+                try { File.Delete(Path.Combine(folder, thumbName)); } catch (IOException) { }
             }
         }
         return (name, thumb);

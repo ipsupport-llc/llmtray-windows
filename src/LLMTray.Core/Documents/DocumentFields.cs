@@ -121,6 +121,20 @@ static class FieldReader
         return values;
     }
 
+    /// <summary>
+    /// A list longer than any limit could take (charts, series, points, labels, changes all cap far below):
+    /// refused whole before its items are read, so a million-item array costs nothing but the parse.
+    /// </summary>
+    public const int MaxListItems = 2_000;
+
+    /// <summary>Problems kept at most: the model reads the first few anyway.</summary>
+    public const int MaxProblems = 50;
+
+    static void Problem(List<string> problems, string text)
+    {
+        if (problems.Count < MaxProblems) problems.Add(text);
+    }
+
     static object? Coerce(JsonNode node, DocumentField field, string path, List<string> problems)
     {
         switch (field.Kind)
@@ -134,6 +148,11 @@ static class FieldReader
                         JsonObject => [node],
                         _ => null,
                     };
+                    if (items is { Count: > MaxListItems })
+                    {
+                        Problem(problems, $"\"{path}\" has {items.Count} items, far over the limit");
+                        return null;
+                    }
                     if (items is null || items.Any(i => i is not JsonObject))
                     {
                         problems.Add($"\"{path}\" must be a {field.TypeName}, not {ShortText(node)}");
@@ -152,6 +171,11 @@ static class FieldReader
                         return null;
                     }
                     var items = node is JsonArray a ? a.ToList() : [node];
+                    if (items.Count > MaxListItems)
+                    {
+                        Problem(problems, $"\"{path}\" has {items.Count} items, far over the limit");
+                        return null;
+                    }
                     var element = field with { Kind = field.Kind == FieldKind.Strings ? FieldKind.String : FieldKind.Number };
                     if (field.Kind == FieldKind.Strings)
                     {
@@ -169,7 +193,7 @@ static class FieldReader
                     {
                         if (items[i] is null)
                         {
-                            problems.Add($"\"{path}[{i}]\" must be a number, not null");
+                            Problem(problems, $"\"{path}[{i}]\" must be a number, not null");
                             continue;
                         }
                         if (Coerce(items[i]!, element, $"{path}[{i}]", problems) is double d) numbers.Add(d);

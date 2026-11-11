@@ -473,9 +473,11 @@ public static class ChartSvg
         {
             var first = Math.Ceiling(Min / Step - 1e-9);
             var last = Math.Floor(Max / Step + 1e-9);
-            for (var k = first; k <= last && k - first <= 50; k++)
+            // Counted by an integer: at a huge first index (a range far from zero, a tiny step) k + 1 == k.
+            for (var i = 0; i <= 50 && first + i <= last; i++)
             {
-                var t = k * Step;
+                var t = (first + i) * Step;
+                if (i > 0 && t <= (first + i - 1) * Step) yield break;
                 yield return Math.Abs(t) < Step * 1e-9 ? 0 : t;
             }
         }

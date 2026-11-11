@@ -238,6 +238,33 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public void AnOddDocumentCardNeverMakesAChatUnreadable()
+    {
+        var store = new ChatStore(root);
+        var id = Guid.NewGuid();
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, id.ToString("D").ToUpperInvariant() + ".json"), $$"""
+            {"id":"{{id}}","title":"T","createdAt":"2026-11-01T00:00:00Z","updatedAt":"2026-11-01T00:00:00Z","messages":[
+              {"role":"assistant","content":"Here.","reasoning":"","isSummary":false,"documents":[
+                {"id":"not-a-uuid","filename":"Plan 1..2.pdf","title":"Plan","pages":1,"source":{"arguments":"{}","project":"nope"},"future":1},
+                {"id":"{{Guid.NewGuid()}}","filename":"x.pdf","title":null,"pages":1}]}]}
+            """);
+        var file = store.Load(id);
+        Assert.NotNull(file);
+        var documents = file!.Messages[0].Documents!;
+        Assert.Equal(2, documents.Count);
+        Assert.Equal("Document", documents[1].Title);
+        Assert.Null(documents[0].Source!.Project);
+        // A name with dots inside is a name, not a way out; one with a separator is.
+        Assert.NotNull(store.MediaPath(id, "Plan 1..2.pdf"));
+        Assert.Null(store.MediaPath(id, "..\\x.pdf"));
+        Assert.Null(store.MediaPath(id, ".."));
+        // A field a newer Mac app wrote stays.
+        store.Save(file);
+        Assert.Contains("\"future\"", File.ReadAllText(Path.Combine(root, id.ToString("D").ToUpperInvariant() + ".json")));
+    }
+
+    [Fact]
     public async Task ATemporaryChatMakesNoDocumentAndAFailureIsTold()
     {
         var store = new ChatStore(root);

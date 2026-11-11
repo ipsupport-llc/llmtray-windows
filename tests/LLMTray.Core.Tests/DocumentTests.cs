@@ -388,4 +388,24 @@ public sealed class DocumentToolTests
         Assert.Equal(DocumentProblem.Changes, DocumentTool.Prepare("""{"title": "x", "changes": [{"content": "y"}]}""", []).Problem);
         Assert.EndsWith(DocumentTool.NotMade, DocumentTool.Prepare("""{"title": "x", "changes": [{"content": "y"}]}""", []).Refusal);
     }
+
+    [Fact]
+    public void HostileInputStaysBounded()
+    {
+        // A range far from zero with a tiny step: the axis' ticks end (k + 1 == k at that size).
+        var far = DocumentSpec.Parse("""{"title":"T","content":"x","charts":[{"id":"c","series":[{"formula":"1"}],"range":["100000000000000","100000000000000.02"]}]}""");
+        if (far.Spec is { } spec) Assert.Contains("<svg", ChartSvg.Render(spec.Charts[0]));
+        // 200,000 quote markers: read in linear time.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        DocumentSpec.Parse("""{"title":"T","content":""" + "\"" + new string('>', 199_999) + "x\"}");
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        // A million-item list is refused before it's read; arguments past the cap before they're parsed.
+        var huge = "{\"title\":\"T\",\"content\":\"x\",\"charts\":[{\"id\":\"c\",\"series\":[{\"values\":[" + string.Join(",", Enumerable.Repeat("null", 100_000)) + "]}]}]}";
+        Assert.NotNull(DocumentCall.Parse(huge).Refusal);
+        Assert.NotNull(DocumentCall.Parse(new string(' ', DocumentCall.MaxArgumentChars + 1)).Refusal);
+        // One chart placed 5,000 times: shown a bounded number of times, the rest as alt text.
+        var many = DocumentSpec.Parse("{\"title\":\"T\",\"content\":\"" + string.Concat(Enumerable.Repeat("![x](chart:c)\\n", 5000)) + "\",\"charts\":[{\"id\":\"c\",\"type\":\"bar\",\"series\":[{\"values\":[1]}]}]}");
+        var page = DocumentHtml.Build(many.Spec!, DocumentPaper.A4, "https://document.llmtray/");
+        Assert.True(System.Text.RegularExpressions.Regex.Matches(page.Html, "<img ").Count <= 60);
+    }
 }

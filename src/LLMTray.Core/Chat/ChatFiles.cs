@@ -58,19 +58,29 @@ public sealed record AnswerStats
 }
 
 /// <summary>The call a document came from (Mac DocumentSource): what Make again renders again, and the project its pictures belong to.</summary>
-public sealed record DocumentSource(string Arguments, [property: JsonConverter(typeof(UpperGuidNullableConverter))] Guid? Project = null);
+public sealed record DocumentSource(string Arguments, [property: JsonConverter(typeof(UpperGuidNullableConverter))] Guid? Project = null)
+{
+    /// <summary>What a newer Mac app writes here: kept when this app saves.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Other { get; set; }
+}
 
 /// <summary>
 /// A document a message made (Mac DocumentRef, adr/0024): metadata only. The PDF (up to 50 MB) and its
 /// thumbnail are files in the chat's images folder, read only to show, open or save them.
 /// </summary>
 public sealed record DocumentRef(
-    [property: JsonConverter(typeof(UpperGuidConverter))] Guid Id,
+    [property: JsonConverter(typeof(LenientGuidConverter))] Guid Id,
     string Filename,
     string? Thumbnail,
     string Title,
     int Pages,
-    DocumentSource? Source = null);
+    DocumentSource? Source = null)
+{
+    /// <summary>What a newer Mac app writes here: kept when this app saves.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Other { get; set; }
+}
 
 /// <summary>One message of a saved chat (the Mac app's PersistedMessage; fields it has that this app doesn't use yet stay as they are read).</summary>
 public sealed record PersistedMessage
@@ -147,10 +157,30 @@ sealed class UpperGuidConverter : JsonConverter<Guid>
     public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString("D").ToUpperInvariant());
 }
 
+/// <summary>A document's id: one that isn't a UUID reads as empty, so one odd card can't make the whole chat unreadable.</summary>
+sealed class LenientGuidConverter : JsonConverter<Guid>
+{
+    public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String && Guid.TryParse(reader.GetString(), out var id) ? id : Skip(ref reader);
+
+    static Guid Skip(ref Utf8JsonReader reader)
+    {
+        reader.Skip();
+        return Guid.Empty;
+    }
+
+    public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString("D").ToUpperInvariant());
+}
+
+/// <summary>A document's project: one that isn't a UUID reads as none (its pictures are left out).</summary>
 sealed class UpperGuidNullableConverter : JsonConverter<Guid?>
 {
-    public override Guid? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        reader.TokenType == JsonTokenType.Null ? null : Guid.TryParse(reader.GetString(), out var id) ? id : throw new JsonException("not a UUID");
+    public override Guid? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String && Guid.TryParse(reader.GetString(), out var id)) return id;
+        reader.Skip();
+        return null;
+    }
     public override void Write(Utf8JsonWriter writer, Guid? value, JsonSerializerOptions options)
     {
         if (value is { } id) writer.WriteStringValue(id.ToString("D").ToUpperInvariant());

@@ -193,6 +193,12 @@ public static class DocumentHtml
     internal sealed class Converter(Func<ImageRef, string?> resolve)
     {
         public readonly List<ImageRef> Placed = [];
+
+        /// <summary>
+        /// Figures a page shows at most: every chart and picture once and a few again. One chart placed
+        /// 5,000 times would make thousands of pages before the page limit could say no; past this, alt text.
+        /// </summary>
+        public const int MaxFigures = 60;
         public readonly List<(int Level, string Text)> Headings = [];
         /// <summary>Nesting of quotes and lists: a hostile input can't recurse deep.</summary>
         int depth;
@@ -448,7 +454,7 @@ public static class DocumentHtml
         {
             if (!trimmed.StartsWith("![", StringComparison.Ordinal) || !trimmed.EndsWith(')')) return null;
             if (Bracketed(trimmed, 1) is not { } b || b.End != trimmed.Length || ImageRefOf(b.Target) is not { } r) return null;
-            if (resolve(r) is not { } address) return null;
+            if (Placed.Count >= MaxFigures || resolve(r) is not { } address) return null;
             Placed.Add(r);
             return Figure(address, b.Label);
         }
@@ -500,7 +506,7 @@ public static class DocumentHtml
                     if (c == '!' && i + 1 < chars.Length && chars[i + 1] == '[' && Bracketed(chars, i + 1) is { } image)
                     {
                         FlushPlain();
-                        if (ImageRefOf(image.Target) is { } r && resolve(r) is { } address)
+                        if (Placed.Count < MaxFigures && ImageRefOf(image.Target) is { } r && resolve(r) is { } address)
                         {
                             Placed.Add(r);
                             output.Append($"<img src=\"{Escape(address)}\" alt=\"{Escape(image.Label)}\">");
