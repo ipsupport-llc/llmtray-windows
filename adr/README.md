@@ -21,6 +21,7 @@ and why.
 | [0021](0021-project-files.md) | Project files (Mac adr/0012): copies, a confined reader process, SQLite FTS5 + bge-m3 hybrid search, one `project_files` tool, citations (accepted) |
 | [0022](0022-show-a-window.md) | Showing the model a window or the screen (Mac adr/0030): the system capture picker, one frame, OCR for models that don't see; the chat's network tools off after (accepted) |
 | [0023](0023-spoken-messages.md) | Spoken messages for models that hear (Mac adr/0023): a microphone by Send, 16 kHz WAV in memory, `input_audio`, the latest eight clips (accepted) |
+| [0024](0024-documents.md) | Documents (Mac adr/0020): `make_document` to a PDF with charts and math; Core converter and SVG charts, WebView2 prints with nothing loaded or run (accepted) |
 | [0016](0016-folder-tools.md) | Folder tools (Mac adr/0014): granted folders only, every change approved item by item, Recycle Bin, journal and Undo (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.

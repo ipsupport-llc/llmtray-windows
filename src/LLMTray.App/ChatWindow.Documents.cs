@@ -12,6 +12,15 @@ namespace LLMTray.App;
 /// </summary>
 sealed partial class ChatWindow
 {
+    Interop.WindowDocumentPrinter? printer;
+    Interop.WindowDocumentPrinter Printer => printer ??= new Interop.WindowDocumentPrinter(this, App.Current.DataFolder);
+
+    async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document)
+    {
+        var problem = await chat.RemakeDocumentAsync(message, document, Printer);
+        return problem is null ? null : L.F("It couldn't be made again: {0}", problem);
+    }
+
     UIElement? DocumentsView(ChatMessage message)
     {
         if (message.Documents.Count == 0 || chat.Id is not { } chatId) return null;
@@ -164,5 +173,32 @@ sealed partial class ChatWindow
         var refused = results.FirstOrDefault(r => r.Refused is not null);
         say(refused is null ? L.T("Added to the project.") : L.F("Not added: {0}", L.T(refused.Refused!)));
         RenderChats();
+    }
+
+    /// <summary>
+    /// For <c>--screenshots</c> only: a report with a table, two charts and a formula printed by the real
+    /// printer (WebView2), its first page kept as a picture and what came out written beside it.
+    /// </summary>
+    internal async Task DocumentScreenshotsAsync(string folder)
+    {
+        const string arguments = """
+            {"title":"Quarterly costs","style":"report","content":"# Summary\n\nCosts rose **12%** in the quarter, mostly rent. The share of energy is $\\frac{e}{t} \\approx 0.18$.\n\n## Table\n\n| Month | Rent | Energy |\n|---|--:|--:|\n| July | 1,200 | 240 |\n| August | 1,250 | 260 |\n| September | 1,400 | 250 |\n\n## Charts\n\n![Costs by month](chart:costs)\n\n![A sine](chart:wave)\n\nSee [the source](https://example.com/costs).","charts":[{"id":"costs","type":"stacked","title":"Costs by month","labels":["July","August","September"],"series":[{"name":"Rent","values":[1200,1250,1400]},{"name":"Energy","values":[240,260,250]}],"unit":"USD"},{"id":"wave","type":"line","title":"sin(x)","series":[{"name":"sin","formula":"sin(x)"}],"range":[0,"2*pi"]}]}
+            """;
+        string report;
+        try
+        {
+            var parsed = LLMTray.Core.Documents.DocumentSpec.Parse(arguments);
+            if (parsed.Spec is not { } spec) throw new InvalidOperationException(parsed.Refusal);
+            var page = LLMTray.Core.Documents.DocumentHtml.Build(spec, Printer.Paper, Printer.BaseUrl);
+            var made = await Printer.PrintAsync(page, spec.Title, CancellationToken.None);
+            await File.WriteAllBytesAsync(Path.Combine(folder, "document.pdf"), made.Pdf);
+            if (made.Thumbnail is { } thumb) await File.WriteAllBytesAsync(Path.Combine(folder, "document-page1.png"), thumb);
+            report = $"printed: {made.Pages} pages, {made.Pdf.Length} bytes, paper {Printer.Paper}; notes: {string.Join(" ", page.Notes)}";
+        }
+        catch (Exception e)
+        {
+            report = "failed: " + e;
+        }
+        await File.WriteAllTextAsync(Path.Combine(folder, "documents.txt"), report + Environment.NewLine);
     }
 }

@@ -112,7 +112,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     ProjectFiles.PinTokenRatios? PinRatios = null,
     string? ModelKey = null,
     bool? SeesPictures = null,
-    bool? Hears = null);
+    bool? Hears = null,
+    Documents.IDocumentPrinter? Documents = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -529,6 +530,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             definitions ??= [];
             definitions.Add(ProjectFiles.ProjectFilesTool.Definition(listingOnly: summary.Ready + summary.WordsOnly == 0));
         }
+        // Documents (adr/0024): a kept chat only (a temporary one writes nothing). Ordinary trust: it sends nothing
+        // anywhere and changes no file, so it stays with pinned files and after file text (Mac adr/0020, Hardening 5).
+        var documents = temporaryTurn ? null : options.Documents;
+        var madeDocument = false;
+        if (documents is not null)
+        {
+            definitions ??= [];
+            definitions.Add(Documents.DocumentTool.Definition());
+        }
         // What the last request weighed and what the server counted for it: the next one's size is estimated from them.
         long lastRequestBytes = 0;
         int RequestTokens()
@@ -623,7 +633,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
+                        if (mcp is null && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            (outcome, var made) = await MakeDocumentAsync(call.Arguments, documents, temporaryTurn, madeDocument, projectId, answer, mine, token).ConfigureAwait(false);
+                            madeDocument |= made;
+                        }
+                        else if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
                         {
                             // Text from any other tool earlier in this turn: a pin now is refused.
                             projectTurn.TextReturned |= otherText;
@@ -992,6 +1007,108 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         Save();
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// <c>make_document</c> (adr/0024): the call to a spec (changes applied to an earlier document of
+    /// this chat), the page built, printed by the app, the PDF written beside the chat and its card put
+    /// under the answer. One a turn. The model hears the title and page count, never a path.
+    /// </summary>
+    async Task<(Tools.ToolOutcome Outcome, bool Made)> MakeDocumentAsync(string arguments, Documents.IDocumentPrinter? printer, bool temporary,
+        bool madeThisTurn, Guid? project, ChatMessage answer, int mine, CancellationToken token)
+    {
+        static Tools.ToolOutcome Refused(string text) => new(text, null, true);
+        if (temporary) return (Refused(Documents.DocumentTool.TemporaryChat), false);
+        if (printer is null) return (Refused(Documents.DocumentTool.TurnedOff), false);
+        List<Documents.EarlierDocument> earlier;
+        lock (sync)
+        {
+            earlier = [.. Messages.SelectMany(m => m.Documents).Where(d => d.Source is not null).Select(d => new Documents.EarlierDocument(d.Title, d.Source!.Arguments))];
+        }
+        var request = Documents.DocumentTool.Prepare(arguments, earlier, madeThisTurn);
+        if (request.Refusal is { } refusal || request.Spec is not { } spec || request.Call is not { } whole) return (Refused(request.Refusal ?? Documents.DocumentTool.NotMade.Trim()), false);
+        var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
+        if (printed.Problem is { } problem) return (Refused(problem), false);
+        var (made, page) = (printed.Made!, printed.Page!);
+        DocumentRef card;
+        lock (sync)
+        {
+            // Another chat on screen now: nothing is written into this one's folder.
+            if (mine != epoch) return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
+            Id ??= Guid.NewGuid();
+            try
+            {
+                var (pdf, thumbnail) = store.SaveDocument(Id.Value, Documents.DocumentFileName.Sanitize(spec.Title), made.Pdf, made.Thumbnail);
+                card = new DocumentRef(Guid.NewGuid(), pdf, thumbnail, spec.Title, made.Pages, new DocumentSource(whole.ToJson(), project));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return (Refused($"{Documents.DocumentTool.Name}: the PDF couldn't be saved ({e.Message}). Tell the user. Nothing was made -- don't tell the user it was made."), false);
+            }
+            answer.Documents.Add(card);
+        }
+        Changed?.Invoke();
+        return (new Tools.ToolOutcome(Documents.DocumentTool.Made(spec, made.Pages, request.FromTitle, page.Notes), null, false), true);
+    }
+
+    /// <summary>The page built and printed, within the limits; or why not, as the model reads it.</summary>
+    static async Task<(Documents.PrintedDocument? Made, Documents.DocumentPage? Page, string? Problem)> PrintDocumentAsync(
+        Documents.DocumentSpec spec, Documents.IDocumentPrinter printer, CancellationToken token)
+    {
+        var page = Documents.DocumentHtml.Build(spec, printer.Paper, printer.BaseUrl);
+        if (page.TooLarge) return (null, page, Documents.DocumentTool.TooLarge);
+        try
+        {
+            var made = await printer.PrintAsync(page, spec.Title, token).ConfigureAwait(false);
+            if (made.Pdf.Length > Documents.DocumentTool.Limits.PdfBytes) return (null, page, Documents.DocumentTool.Failed("the PDF would be over 50 MB; make it shorter"));
+            if (made.Pages > Documents.DocumentTool.Limits.Pages) return (null, page, Documents.DocumentTool.Failed($"it would be {made.Pages} pages, over {Documents.DocumentTool.Limits.Pages}; make it shorter"));
+            return (made, page, null);
+        }
+        catch (Documents.DocumentPrintException e)
+        {
+            return (null, page, Documents.DocumentTool.Failed(e.Message));
+        }
+    }
+
+    /// <summary>
+    /// Make again (Mac): the document laid out again from its saved call, the model not asked. The new
+    /// PDF takes the card's place and the old files go. Null when done, else what went wrong.
+    /// </summary>
+    public async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document, Documents.IDocumentPrinter printer, CancellationToken token = default)
+    {
+        if (document.Source is null || Id is not { } chatId || Temporary) return "it can't be made again";
+        var parsed = Documents.DocumentSpec.Parse(document.Source.Arguments);
+        if (parsed.Spec is not { } spec) return parsed.Refusal ?? "its saved call can't be read";
+        var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
+        if (printed.Problem is { } problem) return problem;
+        lock (sync)
+        {
+            if (Id != chatId) return "another chat is open";
+            var at = message.Documents.IndexOf(document);
+            if (at < 0) return "the document is gone";
+            try
+            {
+                var (pdf, thumbnail) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), printed.Made!.Pdf, printed.Made.Thumbnail);
+                message.Documents[at] = document with { Id = Guid.NewGuid(), Filename = pdf, Thumbnail = thumbnail, Title = spec.Title, Pages = printed.Made.Pages };
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return e.Message;
+            }
+            foreach (var old in new[] { document.Filename, document.Thumbnail })
+            {
+                try
+                {
+                    if (store.MediaPath(chatId, old) is { } path) File.Delete(path);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        SaveNow();
+        Changed?.Invoke();
+        return null;
     }
 
     /// <summary>Removes a last answer that failed (before compacting and asking again).</summary>

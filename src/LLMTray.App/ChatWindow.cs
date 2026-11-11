@@ -283,7 +283,9 @@ sealed partial class ChatWindow : Window
             // A model that doesn't see gets the text of what was shown, also in earlier messages.
             SeesPictures: entry is null ? null : entry.ProjectorPath is not null,
             // A model that hears gets the recordings (adr/0023); one that doesn't, "(audio)".
-            Hears: entry is null ? null : ModelHears());
+            Hears: entry is null ? null : ModelHears(),
+            // Documents (adr/0024): when switched on; the chat client leaves them out of a temporary chat.
+            Documents: app.Settings.Documents ? Printer : null);
     }
 
     /// <summary>

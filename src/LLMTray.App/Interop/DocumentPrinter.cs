@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices.WindowsRuntime;
+using LLMTray.Core.Documents;
 using Microsoft.Web.WebView2.Core;
 using Windows.Data.Pdf;
 using Windows.Storage;
@@ -6,11 +7,37 @@ using Windows.Storage.Streams;
 
 namespace LLMTray.App.Interop;
 
-/// <summary>A printed document: the PDF, its page count and a thumbnail of the first page (PNG, at most 400 px).</summary>
-sealed record PrintedDocument(byte[] Pdf, int Pages, byte[]? Thumbnail);
+/// <summary>
+/// The app's <see cref="IDocumentPrinter"/>: prints on the UI thread (WebView2 lives there), hosted by the chat window.
+/// </summary>
+sealed class WindowDocumentPrinter(Microsoft.UI.Xaml.Window window, string dataFolder) : IDocumentPrinter
+{
+    public string BaseUrl => DocumentPrinter.Base;
+    public DocumentPaper Paper => DocumentPrinter.UsesLetter ? DocumentPaper.Letter : DocumentPaper.A4;
 
-/// <summary>The document couldn't be printed; the reason is told to the model and the user.</summary>
-sealed class DocumentPrintException(string reason) : Exception(reason);
+    public Task<PrintedDocument> PrintAsync(DocumentPage page, string title, CancellationToken cancellationToken)
+    {
+        var done = new TaskCompletionSource<PrintedDocument>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var paper = Paper == DocumentPaper.Letter ? (8.5, 11.0) : (8.27, 11.69);
+        var resources = page.Resources.ToDictionary(r => r.Key, r => (r.Value.Bytes, r.Value.ContentType));
+        if (!window.DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                done.TrySetResult(await DocumentPrinter.PrintAsync(WinRT.Interop.WindowNative.GetWindowHandle(window), dataFolder, page.Html,
+                    resources, title, paper, cancellationToken));
+            }
+            catch (Exception e)
+            {
+                done.TrySetException(e is DocumentPrintException or OperationCanceledException ? e : new DocumentPrintException(e.Message));
+            }
+        }))
+        {
+            done.TrySetException(new DocumentPrintException("the app is closing"));
+        }
+        return done.Task;
+    }
+}
 
 /// <summary>
 /// Prints a document's page to PDF (adr/0024, Mac adr/0020) with WebView2,

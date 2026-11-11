@@ -115,6 +115,18 @@ public sealed class ChatClientTests : IAsyncDisposable
             }
             context.Response.ContentType = "text/event-stream";
             var lastRole = body["messages"]!.AsArray()[^1]!["role"]!.GetValue<string>();
+            if (body["tools"] is JsonArray asked && lastRole == "user" && body["tool_choice"] is null
+                && asked.Any(t => t!["function"]!["name"]!.GetValue<string>() == "make_document"))
+            {
+                var call = new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["delta"] = new JsonObject { ["tool_calls"] = new JsonArray(new JsonObject
+                {
+                    ["index"] = 0, ["id"] = "d1", ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = "make_document", ["arguments"] = documentArguments },
+                }) } }) };
+                await context.Response.WriteAsync("data: " + call.ToJsonString() + "\n\n");
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
             if (body["tools"] is JsonArray offered && lastRole == "user" && body["tool_choice"] is null
                 && offered.Any(t => t!["function"]!["name"]!.GetValue<string>() == "fake_echo"))
             {
@@ -168,6 +180,82 @@ public sealed class ChatClientTests : IAsyncDisposable
         await app.StopAsync();
         await app.DisposeAsync();
         Directory.Delete(root, recursive: true);
+    }
+
+    string documentArguments = "{}";
+
+    sealed class FakePrinter : LLMTray.Core.Documents.IDocumentPrinter
+    {
+        public string BaseUrl => "https://document.llmtray/";
+        public LLMTray.Core.Documents.DocumentPaper Paper => LLMTray.Core.Documents.DocumentPaper.A4;
+        public List<LLMTray.Core.Documents.DocumentPage> Printed { get; } = [];
+        public string? Fail { get; set; }
+
+        public Task<LLMTray.Core.Documents.PrintedDocument> PrintAsync(LLMTray.Core.Documents.DocumentPage page, string title, CancellationToken cancellationToken)
+        {
+            if (Fail is { } why) throw new LLMTray.Core.Documents.DocumentPrintException(why);
+            Printed.Add(page);
+            return Task.FromResult(new LLMTray.Core.Documents.PrintedDocument("%PDF-1.7 fake"u8.ToArray(), 2, [1, 2, 3]));
+        }
+    }
+
+    [Fact]
+    public async Task AMadeDocumentIsSavedBesideTheChatAndCanBeMadeAgain()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        var printer = new FakePrinter();
+        documentArguments = """{"title":"Costs: Q3","content":"# Costs\n\nRent went up.\n\n![chart](chart:c)","charts":[{"id":"c","type":"bar","labels":["Jul","Aug"],"series":[{"name":"Rent","values":[1,2]}]}]}""";
+        await chat.SendAsync("make a report", new ChatOptions(null, Documents: printer));
+        var answer = chat.Messages[^1];
+        var card = Assert.Single(answer.Documents);
+        Assert.Equal("Costs: Q3", card.Title);
+        Assert.Equal(2, card.Pages);
+        // The file name has no colon; the PDF and thumbnail are beside the chat.
+        Assert.Equal("Costs Q3.pdf", card.Filename);
+        Assert.Equal("%PDF-1.7 fake"u8.ToArray(), File.ReadAllBytes(store.MediaPath(chat.Id!.Value, card.Filename)!));
+        Assert.True(File.Exists(store.MediaPath(chat.Id!.Value, card.Thumbnail)));
+        // The page loads only its own resources: the stylesheet and the chart.
+        Assert.Contains("chart/c.svg", printer.Printed[0].Resources.Keys);
+        // The model hears it was made, with no path.
+        Assert.StartsWith("Tool said ", answer.Content);
+        Assert.Contains("Costs: Q3", answer.Content);
+        Assert.DoesNotContain(root, answer.Content);
+
+        // Saved in the Mac's shape and read back.
+        var again = new ChatClient(http, api, store);
+        again.Load(chat.Id!.Value);
+        var loaded = Assert.Single(again.Messages[^1].Documents);
+        Assert.Equal(card with { }, loaded);
+        Assert.Contains("\"documents\"", File.ReadAllText(Path.Combine(root, chat.Id!.Value.ToString("D").ToUpperInvariant() + ".json")));
+
+        // Make again: a new file takes the card's place, the old one goes.
+        Assert.Null(await again.RemakeDocumentAsync(again.Messages[^1], loaded, printer));
+        var remade = Assert.Single(again.Messages[^1].Documents);
+        Assert.NotEqual(loaded.Filename, remade.Filename);
+        Assert.False(File.Exists(store.MediaPath(chat.Id!.Value, loaded.Filename)));
+        Assert.True(File.Exists(store.MediaPath(chat.Id!.Value, remade.Filename)));
+    }
+
+    [Fact]
+    public async Task ATemporaryChatMakesNoDocumentAndAFailureIsTold()
+    {
+        var store = new ChatStore(root);
+        var printer = new FakePrinter();
+        documentArguments = """{"title":"Plan","content":"Do it."}""";
+        var temporary = new ChatClient(http, api, store);
+        temporary.New(temporary: true);
+        await temporary.SendAsync("make a pdf", new ChatOptions(null, Documents: printer));
+        // Not even declared there.
+        Assert.DoesNotContain("make_document", bodies.Last(b => b["stream"]!.GetValue<bool>()).ToJsonString());
+        Assert.Empty(printer.Printed);
+
+        printer.Fail = "it took over a minute";
+        var chat = new ChatClient(http, api, store);
+        await chat.SendAsync("make a pdf", new ChatOptions(null, Documents: printer));
+        Assert.Empty(chat.Messages[^1].Documents);
+        Assert.Contains("Nothing was made", chat.Messages[^1].Content);
+        Assert.Contains("over a minute", chat.Messages[^1].Content);
     }
 
     [Fact]
