@@ -96,6 +96,19 @@ public sealed class ChatLibraryTests : IDisposable
     }
 
     [Fact]
+    public void ChatsWithNullsReadAsEmptyAndCount()
+    {
+        Directory.CreateDirectory(root);
+        var name = Guid.NewGuid();
+        var inside = Guid.NewGuid();
+        File.WriteAllText(Path.Combine(root, name.ToString("D").ToUpperInvariant() + ".json"),
+            $$"""{ "id": "{{inside}}", "title": null, "messages": null, "createdAt": "2026-11-01T00:00:00Z", "updatedAt": "2026-11-01T00:00:00Z" }""");
+        var store = new ChatStore(root);
+        Assert.Equal(new HashSet<Guid> { name, inside }, store.Present().ToHashSet());
+        Assert.Equal("New chat", Assert.Single(store.List()).Title);
+    }
+
+    [Fact]
     public void AnUnreadableFileIsNeverOverwritten()
     {
         Directory.CreateDirectory(root);

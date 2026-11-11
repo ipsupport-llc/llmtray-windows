@@ -99,19 +99,28 @@ sealed partial class ChatWindow : Window
         chats.IsItemClickEnabled = true;
         chats.ItemClick += (_, e) =>
         {
-            switch (e.ClickedItem)
+            // A row added as its own container may be reported as itself or as its content.
+            var clicked = e.ClickedItem as ListViewItem ?? chats.Items.OfType<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Content, e.ClickedItem));
+            switch (clicked)
             {
                 case ListViewItem { Tag: ChatProject project }:
                     // A project's row opens or closes its chats; it keeps the focus.
                     if (!collapsed.Remove(project.Id)) collapsed.Add(project.Id);
                     RenderChats();
+                    // The row is new: focused once it's in the window, so Enter and the arrows go on from it.
                     if (chats.Items.OfType<ListViewItem>().FirstOrDefault(i => i.Tag is ChatProject p && p.Id == project.Id) is { } row)
                     {
-                        row.Focus(FocusState.Keyboard);
+                        void Focus(object sender, RoutedEventArgs _)
+                        {
+                            row.Loaded -= Focus;
+                            row.Focus(FocusState.Keyboard);
+                        }
+                        if (row.IsLoaded) row.Focus(FocusState.Keyboard);
+                        else row.Loaded += Focus;
                     }
                     break;
                 case ListViewItem { Tag: "new-project" }:
-                    _ = NewProjectAsync(null);
+                    _ = NewFromRowAsync();
                     break;
             }
         };
@@ -1486,6 +1495,13 @@ sealed partial class ChatWindow : Window
         {
             return null;
         }
+    }
+
+    async Task NewFromRowAsync()
+    {
+        await NewProjectAsync(null);
+        // Made or cancelled, the selection goes back to the open chat.
+        RenderChatsSelection();
     }
 
     /// <summary>A new project; <paramref name="moving"/>: a chat that goes into it.</summary>

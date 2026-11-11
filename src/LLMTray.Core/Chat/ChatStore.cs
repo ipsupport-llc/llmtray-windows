@@ -20,7 +20,14 @@ public sealed class ChatStore(string folder)
         try
         {
             using var stream = File.OpenRead(PathOf(id));
-            return JsonSerializer.Deserialize(stream, ChatJson.Default.ChatSessionFile);
+            if (JsonSerializer.Deserialize(stream, ChatJson.Default.ChatSessionFile) is not { } file) return null;
+            // JSON nulls where a list or a text belongs (a hand edit, another app): read as empty, never a crash later.
+            return file with
+            {
+                Title = file.Title ?? "",
+                Messages = (file.Messages ?? []).Where(m => m is not null)
+                    .Select(m => m.Role is null || m.Content is null ? m with { Role = m.Role ?? "user", Content = m.Content ?? "" } : m).ToList(),
+            };
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -39,7 +46,10 @@ public sealed class ChatStore(string folder)
         var ids = Directory.EnumerateFiles(Folder, "*.json")
             .Select(p => Guid.TryParse(Path.GetFileNameWithoutExtension(p), out var id) ? id : Guid.Empty)
             .Where(id => id != Guid.Empty).ToHashSet();
-        ids.UnionWith(List().Select(c => c.Id));
+        foreach (var name in ids.ToList())
+        {
+            if (Load(name) is { } file && file.Id != Guid.Empty) ids.Add(file.Id);
+        }
         return ids;
     }
 
