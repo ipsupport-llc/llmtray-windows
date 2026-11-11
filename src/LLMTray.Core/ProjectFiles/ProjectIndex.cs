@@ -42,7 +42,7 @@ public sealed class AddRefusedException(string reason) : Exception(reason);
 /// connection is opened per operation and closed after (no pooling: a held
 /// handle would keep a deleted project's folder on disk).
 /// </summary>
-public sealed class ProjectIndex
+public sealed partial class ProjectIndex
 {
     public const int Schema = 1;
     public const long MaxFileBytes = 256L << 20;
@@ -438,6 +438,7 @@ public sealed class ProjectIndex
         using var tx = db.BeginTransaction();
         DeleteDerived(db, tx, doc);
         Exec(db, "DELETE FROM documents WHERE doc = $d", tx, ("$d", doc));
+        Exec(db, "DELETE FROM meta WHERE key = 'pin:' || $d", tx, ("$d", doc));
         tx.Commit();
     }
 

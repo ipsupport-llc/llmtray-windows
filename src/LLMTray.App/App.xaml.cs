@@ -76,6 +76,9 @@ public partial class App : Application
     /// <summary>Project files (adr/0021): copies, their index and the background reading.</summary>
     public LLMTray.Core.ProjectFiles.ProjectFilesService ProjectFiles { get; private set; } = null!;
 
+    /// <summary>Each model's bytes a token, learned from the server's counts: what sizes pinned files.</summary>
+    public LLMTray.Core.ProjectFiles.PinTokenRatios PinRatios { get; private set; } = null!;
+
     /// <summary>A project's files changed (added, read, embedded, removed), on the UI thread.</summary>
     public event Action<Guid>? ProjectFilesChanged;
     public event Action? FoldersChanged;
@@ -284,6 +287,7 @@ public partial class App : Application
             () => Embedder.IsInstalled ? Embedder : null,
             new LLMTray.Core.ProjectFiles.ChildProcessReader(Interop.ReaderProcesses.Start), () => background.IsForegroundActive);
         ProjectFiles.Changed += project => dispatcher.TryEnqueue(() => ProjectFilesChanged?.Invoke(project));
+        PinRatios = new LLMTray.Core.ProjectFiles.PinTokenRatios(Path.Combine(DataFolder, "pin-ratios.json"));
         Downloads.Completed += _ => ProjectFiles.Poke();
 
         Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),

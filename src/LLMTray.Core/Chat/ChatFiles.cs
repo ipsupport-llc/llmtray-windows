@@ -77,6 +77,8 @@ public sealed record PersistedMessage
     public List<McpCallRecord> McpCalls { get; init; } = [];
     /// <summary>Project files the answer cites (the Mac's citations).</summary>
     public List<ProjectFiles.Citation>? Citations { get; init; }
+    /// <summary>Files added to the project before this user message, as the model was told (the Mac's projectFilesAdded).</summary>
+    public List<string>? ProjectFilesAdded { get; init; }
     public AnswerStats? AnswerStats { get; init; }
     public int? Seq { get; init; }
     public DateTimeOffset? SentAt { get; init; }
@@ -105,6 +107,9 @@ public sealed record ChatSessionFile
 
     /// <summary>The memory block this chat got (adr/0018); a name of its own, apart from the Mac's memorySnapshot.</summary>
     public Memory.MemorySnapshot? WindowsMemorySnapshot { get; init; }
+
+    /// <summary>The project's file names as of the chat's last message (the Mac's projectFilesSeen); null: never recorded.</summary>
+    public List<string>? ProjectFilesSeen { get; init; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Other { get; set; }
