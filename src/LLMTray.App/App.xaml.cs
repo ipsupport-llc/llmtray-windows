@@ -72,6 +72,12 @@ public partial class App : Application
 
     /// <summary>The chat's folder tools (adr/0016).</summary>
     public LLMTray.Core.Folders.FolderTools Folders { get; private set; } = null!;
+
+    /// <summary>Project files (adr/0021): copies, their index and the background reading.</summary>
+    public LLMTray.Core.ProjectFiles.ProjectFilesService ProjectFiles { get; private set; } = null!;
+
+    /// <summary>A project's files changed (added, read, embedded, removed), on the UI thread.</summary>
+    public event Action<Guid>? ProjectFilesChanged;
     public event Action? FoldersChanged;
     public string DataFolder { get; private set; } = "";
 
@@ -271,6 +277,14 @@ public partial class App : Application
         Memory.Changed += () => dispatcher.TryEnqueue(() => MemoryChanged?.Invoke());
         Downloads.Completed += _ => Memory.Poke();
         Host.StateChanged += _ => Memory.Poke();
+
+        // Project files (adr/0021): read by the app's own exe in a confined process, embedded on the same CPU embedder,
+        // waiting while a request runs.
+        ProjectFiles = new LLMTray.Core.ProjectFiles.ProjectFilesService(Path.Combine(DataFolder, "projects"), () => Settings.ProjectFiles,
+            () => Embedder.IsInstalled ? Embedder : null,
+            new LLMTray.Core.ProjectFiles.ChildProcessReader(Interop.ReaderProcesses.Start), () => background.IsForegroundActive);
+        ProjectFiles.Changed += project => dispatcher.TryEnqueue(() => ProjectFilesChanged?.Invoke(project));
+        Downloads.Completed += _ => ProjectFiles.Poke();
 
         Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),
             () => Settings is { ShareUsage: true, UsageId: not null }, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
@@ -552,6 +566,15 @@ public partial class App : Application
         return tools;
     }
 
+    public void SetProjectFiles(bool on)
+    {
+        if (Settings.ProjectFiles != on) UpdateSettings(Settings with { ProjectFiles = on });
+        // The embedder is what makes search by meaning; words work without it.
+        if (on && !Embedder.IsInstalled) DownloadEmbedder();
+        ProjectFiles.Poke();
+        FoldersChanged?.Invoke();
+    }
+
     public void SetFolderTools(bool on)
     {
         if (Settings.FolderTools != on) UpdateSettings(Settings with { FolderTools = on });
@@ -670,6 +693,7 @@ public partial class App : Application
             if (proxy is not null) await proxy.DisposeAsync();
             if (Telemetry is not null) await Telemetry.DisposeAsync();
             if (Memory is not null) await Memory.DisposeAsync();
+            if (ProjectFiles is not null) await ProjectFiles.DisposeAsync();
             if (Embedder is not null) await Embedder.DisposeAsync();
             await Host.DisposeAsync();
             // Servers are asked to end; the job ends whatever doesn't.

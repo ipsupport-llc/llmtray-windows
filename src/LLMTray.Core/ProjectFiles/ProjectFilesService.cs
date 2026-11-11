@@ -1,0 +1,380 @@
+using LLMTray.Core.Runtime;
+
+namespace LLMTray.Core.ProjectFiles;
+
+/// <summary>A project's files at a glance: the sidebar's progress and the Files window's summary.</summary>
+public sealed record ProjectFilesSummary(int Total, int Ready, int WordsOnly, int Waiting, int Failed, string? Activity)
+{
+    public static readonly ProjectFilesSummary None = new(0, 0, 0, 0, 0, null);
+    public bool Indexing => Waiting > 0;
+}
+
+/// <summary>What happened to each file of an add: added, or refused with the reason.</summary>
+public sealed record AddResult(string Name, long? Doc, string? Refused);
+
+/// <summary>
+/// Project files (adr/0021): one <see cref="ProjectIndex"/> per project
+/// under <c>projects/&lt;id&gt;</c>, and the background work that reads
+/// new files (in the reader process) and embeds their chunks (bge-m3 on
+/// the shared CPU embedder), pausing while a chat or API request runs.
+/// Off until turned on in Settings: nothing is read or embedded then.
+/// </summary>
+public sealed class ProjectFilesService : IAsyncDisposable
+{
+    readonly string root;
+    readonly Func<bool> enabled;
+    readonly Func<IEmbedder?> embedder;
+    readonly IDocumentReader reader;
+    readonly Func<bool> foreground;
+    readonly Dictionary<Guid, ProjectIndex> open = [];
+    readonly Dictionary<Guid, string> activity = [];
+    readonly object sync = new();
+    readonly SemaphoreSlim poke = new(0, int.MaxValue);
+    readonly CancellationTokenSource stopping = new();
+    readonly Task worker;
+    CancellationTokenSource? current;
+    Guid? currentProject;
+
+    /// <summary>Embedding batches: small, so a search's query embeds between them.</summary>
+    public const int EmbedBatch = 16;
+
+    /// <param name="foreground">True while a chat or API request runs: embedding waits (the reader still runs).</param>
+    public ProjectFilesService(string root, Func<bool> enabled, Func<IEmbedder?> embedder, IDocumentReader reader, Func<bool> foreground, bool start = true)
+    {
+        this.root = root;
+        this.enabled = enabled;
+        this.embedder = embedder;
+        this.reader = reader;
+        this.foreground = foreground;
+        FinishDeletions();
+        worker = start ? Task.Run(RunAsync) : Task.CompletedTask;
+    }
+
+    /// <summary>Raised on any thread after a change: an add, a document read or embedded, a removal.</summary>
+    public event Action<Guid>? Changed;
+
+    public bool Enabled => enabled();
+
+    string Folder(Guid project) => Path.Combine(root, project.ToString("D").ToUpperInvariant());
+
+    /// <summary>The project's index, opened once (made on first use when <paramref name="create"/>).</summary>
+    public ProjectIndex? Index(Guid project, bool create = false)
+    {
+        lock (sync)
+        {
+            if (open.TryGetValue(project, out var index)) return index;
+            var folder = Folder(project);
+            if (!create && !File.Exists(Path.Combine(folder, "index.sqlite"))) return null;
+            if (File.Exists(DeletionMarker(project))) return null;
+            index = new ProjectIndex(folder);
+            open[project] = index;
+            return index;
+        }
+    }
+
+    public ProjectFilesSummary Summary(Guid project)
+    {
+        if (Index(project) is not { } index) return ProjectFilesSummary.None;
+        var docs = index.Documents();
+        string? doing;
+        lock (sync) doing = activity.GetValueOrDefault(project);
+        return new ProjectFilesSummary(docs.Count,
+            docs.Count(d => d.Status == DocumentStatus.Embedded),
+            docs.Count(d => d.Status == DocumentStatus.Searchable),
+            docs.Count(d => d.Status is DocumentStatus.Staged or DocumentStatus.Extracting || d.Reindex),
+            docs.Count(d => d.Status is DocumentStatus.Failed or DocumentStatus.Unsupported),
+            doing);
+    }
+
+    /// <summary>Copies the files in (each refused by name when it can't be), then wakes the reader.</summary>
+    public IReadOnlyList<AddResult> Add(Guid project, IEnumerable<string> paths, Func<string, long>? freeSpace = null)
+    {
+        var index = Index(project, create: true)!;
+        var results = new List<AddResult>();
+        foreach (var path in paths)
+        {
+            var name = Path.GetFileName(path);
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    results.Add(new AddResult(name, null, "folders can't be added; add the files in it"));
+                    continue;
+                }
+                var format = DocumentFormats.Detect(path);
+                if (format is DocumentFormat.Unsupported or DocumentFormat.Legacy)
+                {
+                    results.Add(new AddResult(name, null, DocumentFormats.Describe(format)));
+                    continue;
+                }
+                results.Add(new AddResult(name, index.Add(path, format, freeSpace), null));
+            }
+            catch (AddRefusedException e)
+            {
+                results.Add(new AddResult(name, null, e.Message));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                results.Add(new AddResult(name, null, "couldn't be read: " + e.Message));
+            }
+        }
+        Changed?.Invoke(project);
+        Poke();
+        return results;
+    }
+
+    public void Remove(Guid project, long doc)
+    {
+        if (Index(project) is not { } index) return;
+        Cancel(project);
+        index.Remove(doc);
+        Changed?.Invoke(project);
+    }
+
+    public void Reindex(Guid project, long doc)
+    {
+        if (Index(project) is not { } index) return;
+        index.RequestReindex(doc);
+        Changed?.Invoke(project);
+        Poke();
+    }
+
+    /// <summary>Wakes the background work (after an add, a re-index, the embedder installed, the feature turned on).</summary>
+    public void Poke() => poke.Release();
+
+    string DeletionMarker(Guid project) => Path.Combine(root, ".deleting-" + project.ToString("D").ToUpperInvariant());
+
+    /// <summary>
+    /// The project's files and index go: a deletion record first, then the
+    /// folder, then the record (an interrupted delete is finished at the next
+    /// launch). Never on a guess: only for a project the user deleted.
+    /// </summary>
+    public void DeleteProject(Guid project)
+    {
+        Cancel(project);
+        lock (sync) open.Remove(project);
+        var folder = Folder(project);
+        if (!Directory.Exists(folder)) return;
+        Directory.CreateDirectory(root);
+        File.WriteAllText(DeletionMarker(project), "");
+        Finish(project);
+    }
+
+    void FinishDeletions()
+    {
+        if (!Directory.Exists(root)) return;
+        foreach (var marker in Directory.EnumerateFiles(root, ".deleting-*"))
+        {
+            if (Guid.TryParse(Path.GetFileName(marker)["deleting-".Length..].TrimStart('-'), out var id)) Finish(id);
+        }
+    }
+
+    void Finish(Guid project)
+    {
+        try
+        {
+            var folder = Folder(project);
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            File.Delete(DeletionMarker(project));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // A file still open (a search in flight): the next launch finishes it.
+        }
+    }
+
+    /// <summary>The work running in <paramref name="project"/> stops (its document removed, the project deleted); the loop goes on.</summary>
+    void Cancel(Guid project)
+    {
+        lock (sync)
+        {
+            if (currentProject == project) current?.Cancel();
+        }
+    }
+
+    /// <summary>The projects that have an index on disk.</summary>
+    IEnumerable<Guid> Projects()
+    {
+        if (!Directory.Exists(root)) return [];
+        return Directory.EnumerateDirectories(root)
+            .Select(d => Guid.TryParse(Path.GetFileName(d), out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty && File.Exists(Path.Combine(Folder(id), "index.sqlite")) && !File.Exists(DeletionMarker(id)));
+    }
+
+    async Task RunAsync()
+    {
+        var token = stopping.Token;
+        while (!token.IsCancellationRequested)
+        {
+            var didWork = false;
+            if (enabled())
+            {
+                foreach (var project in Projects().ToList())
+                {
+                    if (token.IsCancellationRequested) break;
+                    try
+                    {
+                        didWork |= await StepAsync(project, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        // The document was removed or the project deleted meanwhile.
+                        didWork = true;
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+                    {
+                        // The project's folder is unavailable now: tried again later.
+                        SetActivity(project, null);
+                    }
+                }
+            }
+            if (didWork) continue;
+            try
+            {
+                await poke.WaitAsync(TimeSpan.FromSeconds(30), token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>One document read or one batch embedded in <paramref name="project"/>; false when it has nothing to do now.</summary>
+    async Task<bool> StepAsync(Guid project, CancellationToken stop)
+    {
+        if (Index(project) is not { } index) return false;
+        using var work = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        lock (sync)
+        {
+            current = work;
+            currentProject = project;
+        }
+        try
+        {
+            if (index.NextToExtract() is { } doc)
+            {
+                SetActivity(project, "reading");
+                index.MarkExtracting(doc.Doc);
+                var path = index.CopyPath(doc.Doc, doc.Ext);
+                try
+                {
+                    var format = Enum.TryParse<DocumentFormat>(doc.Format, out var f) ? f : DocumentFormats.Detect(path);
+                    var pages = await reader.ReadAsync(path, format, work.Token).ConfigureAwait(false);
+                    index.SaveExtraction(doc.Doc, pages);
+                }
+                catch (ExtractException e)
+                {
+                    index.Fail(doc.Doc, DocumentStatus.Failed, e.Message);
+                }
+                Changed?.Invoke(project);
+                return true;
+            }
+            if (embedder() is not { } embed || foreground())
+            {
+                SetActivity(project, null);
+                return false;
+            }
+            var set = index.VectorSet(embed.Id, EmbedModel.Dimensions);
+            if (index.NextToEmbed(set, EmbedBatch) is not { } batch)
+            {
+                bool was;
+                lock (sync) was = activity.ContainsKey(project);
+                if (was)
+                {
+                    SetActivity(project, null);
+                    index.Tidy();
+                }
+                return false;
+            }
+            SetActivity(project, "embedding");
+            float[][] vectors;
+            try
+            {
+                vectors = await embed.EmbedAsync(batch.Chunks.Select(c => c.Text).ToList(), work.Token).ConfigureAwait(false);
+            }
+            catch (Exception e) when (e is InvalidOperationException or HttpRequestException or System.Text.Json.JsonException)
+            {
+                // The embedder can't run now: words-only search meanwhile, tried again later.
+                SetActivity(project, null);
+                return false;
+            }
+            if (vectors.Length > 0 && vectors[0].Length != EmbedModel.Dimensions)
+            {
+                set = index.VectorSet(embed.Id, vectors[0].Length);
+            }
+            index.SaveVectors(set, batch.Doc, batch.Rev, batch.Chunks.Select(c => c.Id).ToList(), vectors.Select(Normalized).ToList());
+            Changed?.Invoke(project);
+            return true;
+        }
+        finally
+        {
+            lock (sync)
+            {
+                current = null;
+                currentProject = null;
+            }
+        }
+    }
+
+    void SetActivity(Guid project, string? what)
+    {
+        bool changed;
+        lock (sync)
+        {
+            changed = activity.GetValueOrDefault(project) != what;
+            if (what is null) activity.Remove(project);
+            else activity[project] = what;
+        }
+        if (changed) Changed?.Invoke(project);
+    }
+
+    static float[] Normalized(float[] v)
+    {
+        double sum = 0;
+        foreach (var x in v) sum += x * x;
+        var norm = (float)Math.Sqrt(sum);
+        return norm > 0 ? v.Select(x => x / norm).ToArray() : v;
+    }
+
+    /// <summary>
+    /// A search from the tool: the query embedded (15 s at most; else words
+    /// only, and said so) and the hybrid search.
+    /// </summary>
+    public async Task<(List<SearchHit> Hits, bool WordsOnly)> SearchAsync(Guid project, string query, long? doc, int topK, CancellationToken cancellationToken)
+    {
+        if (Index(project) is not { } index) return ([], true);
+        float[]? vector = null;
+        if (embedder() is { } embed && index.ActiveModel() == embed.Id && query.Trim().Length > 0)
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(TimeSpan.FromSeconds(15));
+            try
+            {
+                vector = Normalized((await embed.EmbedAsync([query], limit.Token).ConfigureAwait(false))[0]);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception e) when (e is InvalidOperationException or HttpRequestException or System.Text.Json.JsonException)
+            {
+            }
+        }
+        var hits = await Task.Run(() => index.Search(query, vector, topK, doc), cancellationToken).ConfigureAwait(false);
+        return (hits, vector is null);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        stopping.Cancel();
+        lock (sync) current?.Cancel();
+        try
+        {
+            await worker.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        stopping.Dispose();
+    }
+}

@@ -260,6 +260,8 @@ jobs:
           while (-not (Test-Path (Join-Path $shots 'about.png')) -and -not (Test-Path (Join-Path $shots 'screenshots-failed.txt')) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
           Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
           if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }
+          # Project files (adr/0021): what the reader process made of the demo files.
+          if (Test-Path (Join-Path $shots 'project-files.txt')) { Get-Content (Join-Path $shots 'project-files.txt') }
           Stop-Process -Name LLMTray -Force
           # The bad command's exit code 2 is still in $LASTEXITCODE: the step itself passed.
           exit 0

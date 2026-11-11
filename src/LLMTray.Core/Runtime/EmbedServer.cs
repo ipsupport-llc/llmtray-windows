@@ -23,6 +23,7 @@ public static class EmbedModel
     public const string Id = "bge-m3-q8_0@9eba04c5";
     public const string FileName = "bge-m3-q8_0.gguf";
     public const long Size = 634_553_760;
+    public const int Dimensions = 1024;
     public const string Sha256 = "aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173";
     public static readonly Uri Url = new("https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/9eba04c5d75ba5a1595e45de734d36bef4e5cb98/bge-m3-q8_0.gguf");
 }

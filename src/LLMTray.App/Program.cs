@@ -18,6 +18,12 @@ public static class Program
     [STAThread]
     static int Main()
     {
+        // The project files reader (adr/0021): a child of the app, no window, no single-instance check.
+        var args = Environment.GetCommandLineArgs();
+        if (args.Length == 4 && args[1] == LLMTray.Core.ProjectFiles.ExtractProtocol.ArgumentName)
+        {
+            return LLMTray.Core.ProjectFiles.ExtractProtocol.RunChild(args[2], args[3], Console.In, Console.OpenStandardOutput());
+        }
         using var instance = new Mutex(initiallyOwned: true, InstanceMutexName, out var first);
         if (!first)
         {

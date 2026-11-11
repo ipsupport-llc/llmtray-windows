@@ -54,6 +54,9 @@ public sealed class ChatMessage
     /// <summary>The MCP calls this answer made or was refused, as approved.</summary>
     public List<McpCallRecord> McpCalls { get; init; } = [];
 
+    /// <summary>The project files this answer cites as [doc:page] (adr/0021), resolved in the project it was made in.</summary>
+    public List<ProjectFiles.Citation> Citations { get; init; } = [];
+
     /// <summary>What the Mac app wrote and this app doesn't show yet: saved back as it was.</summary>
     public PersistedMessage? Original { get; init; }
 }
@@ -71,7 +74,10 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null,
     Action<string, string?>? Count = null,
     string? ProjectInstructions = null,
-    Memory.MemoryService? Memory = null);
+    Memory.MemoryService? Memory = null,
+    ProjectFiles.ProjectFilesService? ProjectFiles = null,
+    Func<Guid?>? ProjectOfChat = null,
+    int ContextTokens = 0);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -235,6 +241,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Model = m.Model,
                     Sources = [.. m.Sources],
                     McpCalls = [.. m.McpCalls],
+                    Citations = [.. m.Citations ?? []],
                     Images = images,
                     ImageFilenames = names,
                     IsSummary = m.IsSummary,
@@ -356,6 +363,27 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             definitions ??= [];
             foreach (var d in folders.Definitions(temporary)) definitions.Add(d);
         }
+        // The chat's project files (adr/0021): a kept chat in a project that has files. Once file text is read, nothing reaches the internet or an MCP server this turn.
+        ProjectFiles.ProjectTurn? projectTurn = null;
+        var projectText = false;
+        if (!temporaryTurn && options.ProjectFiles is { Enabled: true } projectFiles && options.ProjectOfChat?.Invoke() is { } projectId
+            && projectFiles.Summary(projectId) is { Total: > 0 } summary)
+        {
+            projectTurn = new ProjectFiles.ProjectTurn(projectId, options.ProjectOfChat, projectFiles, options.ContextTokens, options.Profile?.MaxTokens ?? 0);
+            definitions ??= [];
+            definitions.Add(ProjectFiles.ProjectFilesTool.Definition(listingOnly: summary.Ready + summary.WordsOnly == 0));
+        }
+        // What the last request weighed and what the server counted for it: the next one's size is estimated from them.
+        long lastRequestBytes = 0;
+        int RequestTokens()
+        {
+            var bytes = (long)Encoding.UTF8.GetByteCount(history.ToJsonString()) + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString()));
+            if (requests.Count > 0 && requests[^1].PromptTokens is int counted && lastRequestBytes > 0)
+            {
+                return (int)Math.Min(int.MaxValue, counted + Math.Max(0, bytes - lastRequestBytes) / ProjectFiles.ProjectFilesTool.BytesPerToken);
+            }
+            return (int)Math.Min(int.MaxValue, bytes / ProjectFiles.ProjectFilesTool.BytesPerToken);
+        }
         var rounds = options.Profile?.ToolRounds ?? 10;
         var ran = new Dictionary<string, string>(StringComparer.Ordinal);
         try
@@ -381,6 +409,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 // stays cached) but none may be called.
                 var last = round >= rounds;
                 var body = Body(history, options, stream: true, definitions, toolChoiceNone: last);
+                lastRequestBytes = (long)Encoding.UTF8.GetByteCount(history.ToJsonString()) + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString()));
                 var (calls, request, content) = await StreamAsync(body, answer, mine, token).ConfigureAwait(false);
                 requests.Add(request);
                 if (calls.Count == 0 || answer.Error is not null) break;
@@ -428,14 +457,20 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        if (folderTurn is not null && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var change))
+                        if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
+                        {
+                            outcome = await ProjectFiles.ProjectFilesTool.RunAsync(call, projectTurn, RequestTokens(), token).ConfigureAwait(false);
+                            // File text read: it stays on this PC for the rest of the turn.
+                            if (!outcome.Failed) projectText = outsideText = true;
+                        }
+                        else if (folderTurn is not null && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var change))
                         {
                             folderTurn.AfterRead = outsideText || folderText;
                             outcome = await options.Folders!.RunAsync(call, folderTurn, token).ConfigureAwait(false);
                             // What was read stays on this PC for the rest of the turn.
                             if (!change && !outcome.Failed) folderText = outsideText = true;
                         }
-                        else if (folderText && (mcp is not null || (options.Tools is { } local && !local.IsLocal(call))))
+                        else if ((folderText || projectText) && (mcp is not null || (options.Tools is { } local && !local.IsLocal(call))))
                         {
                             outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(
                                 "refused: this turn read the user's files; tools that reach the internet or other servers wait for the user's next message"), null, true);
@@ -506,6 +541,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             answer.Content = answer.Content.TrimEnd();
             lock (sync)
             {
+                // The [doc:page] marks that point at text this turn returned (the rest stay plain text).
+                if (projectTurn is not null) answer.Citations.AddRange(ProjectFiles.ProjectFilesTool.Cited(answer.Content, projectTurn));
                 Busy = false;
                 turn?.Dispose();
                 turn = null;
@@ -1133,6 +1170,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Model = m.Model,
                     Sources = [.. m.Sources],
                     McpCalls = [.. m.McpCalls],
+                    Citations = m.Citations.Count > 0 ? [.. m.Citations] : null,
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],

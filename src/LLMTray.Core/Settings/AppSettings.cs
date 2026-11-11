@@ -35,6 +35,9 @@ public sealed record AppSettings
     /// <summary>The chat may work in folders the user grants (adr/0016): off until switched on.</summary>
     public bool FolderTools { get; init; }
 
+    /// <summary>Files in projects, searched by the chat (adr/0021): off until switched on; nothing is read or downloaded before.</summary>
+    public bool ProjectFiles { get; init; }
+
     /// <summary>
     /// Share anonymous usage statistics (adr/0019): on for a new install, never
     /// turned on by an update (null: an install from before that never chose).

@@ -18,6 +18,7 @@ and why.
 | [0018](0018-memory.md) | Memory between chats (Mac adr/0024): learned notes, background reading preempted by any request, bge-m3 on a CPU llama-server (accepted) |
 | [0019](0019-telemetry.md) | Anonymous daily usage statistics (Mac adr/0015): on for new installs only, what's sent shown, Reset ID (accepted) |
 | [0020](0020-projects.md) | Projects, pins and project instructions in the Mac's `library.json` (Mac adr/0006, adr/0012) (accepted) |
+| [0021](0021-project-files.md) | Project files (Mac adr/0012): copies, a confined reader process, SQLite FTS5 + bge-m3 hybrid search, one `project_files` tool, citations (accepted) |
 | [0016](0016-folder-tools.md) | Folder tools (Mac adr/0014): granted folders only, every change approved item by item, Recycle Bin, journal and Undo (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.
