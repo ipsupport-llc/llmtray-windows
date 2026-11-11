@@ -19,6 +19,7 @@ and why.
 | [0019](0019-telemetry.md) | Anonymous daily usage statistics (Mac adr/0015): on for new installs only, what's sent shown, Reset ID (accepted) |
 | [0020](0020-projects.md) | Projects, pins and project instructions in the Mac's `library.json` (Mac adr/0006, adr/0012) (accepted) |
 | [0021](0021-project-files.md) | Project files (Mac adr/0012): copies, a confined reader process, SQLite FTS5 + bge-m3 hybrid search, one `project_files` tool, citations (accepted) |
+| [0022](0022-show-a-window.md) | Showing the model a window or the screen (Mac adr/0030): the system capture picker, one frame, OCR for models that don't see; the chat's network tools off after (accepted) |
 | [0016](0016-folder-tools.md) | Folder tools (Mac adr/0014): granted folders only, every change approved item by item, Recycle Bin, journal and Undo (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.

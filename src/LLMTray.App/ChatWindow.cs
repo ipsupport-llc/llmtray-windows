@@ -500,13 +500,15 @@ sealed partial class ChatWindow : Window
         // While the chat is being compacted nothing is sent: the draft stays.
         if (chat.Compacting) return;
         var text = input.Text;
-        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0) return;
         input.Text = "";
         var images = pending.ToList();
+        var shared = pendingShared.Select(s => s.Shared).ToList();
         pending.Clear();
+        pendingShared.Clear();
         RenderAttachments();
         follow = true;
-        _ = chat.SendAsync(text, Options(), images);
+        _ = chat.SendAsync(text, Options(), images, shared);
     }
 
     // MARK: Layout
@@ -792,6 +794,16 @@ sealed partial class ChatWindow : Window
             you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
             if (PicturesView(message, HorizontalAlignment.Right) is { } pictures) you.Children.Add(pictures);
             if (message.Content.Length > 0) you.Children.Add(bubble);
+            foreach (var shown in message.Shared)
+            {
+                // What the user showed the model with this message (Mac adr/0030).
+                var showed = Ui.Caption(L.F("Showed the model: {0}", shown.Heading));
+                showed.HorizontalAlignment = HorizontalAlignment.Right;
+                showed.TextTrimming = TextTrimming.CharacterEllipsis;
+                showed.MaxWidth = 640;
+                if (shown.Text is { } seen) ToolTipService.SetToolTip(showed, seen.Length > 600 ? seen[..600] + "…" : seen);
+                you.Children.Add(showed);
+            }
             if (message.ProjectFilesAdded.Count > 0)
             {
                 // What the model was told came with this message (how many and which kinds; the names are for the user).

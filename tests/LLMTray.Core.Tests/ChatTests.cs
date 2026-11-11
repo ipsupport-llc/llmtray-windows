@@ -272,6 +272,40 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AShownWindowGoesAsAMarkedBlockAndTurnsTheNetworkOff()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        var shown = SharedContext.Make(SharedKind.Window, "Account settings", "Edge", "Sign in\n\n\n  Password   reset", hasPicture: false);
+        var tools = new LLMTray.Core.Tools.ToolBox(LLMTray.Core.Tools.ToolCatalog.MakeTools(), enabled =>
+            new LLMTray.Core.Tools.ToolContext(enabled, new LLMTray.Core.Tools.WebFetch(http, "test"), "UTC", null, false));
+        var profile = LLMTray.Core.Profiles.ProfileResolver.Resolve(null, LLMTray.Core.Profiles.ProfileStore.NewDefault());
+        await chat.SendAsync("why can't I log in?", new ChatOptions(null, Profile: profile, Tools: tools), shared: [shown]);
+        var first = bodies.First(b => b["stream"]!.GetValue<bool>());
+        var user = first["messages"]!.AsArray().Last(m => m!["role"]!.GetValue<string>() == "user")!["content"]!.GetValue<string>();
+        Assert.StartsWith("[The user is showing you this. Window: Edge — Account settings]\nText recognized in it", user);
+        Assert.Contains("Sign in\n\nPassword reset", user);
+        Assert.EndsWith("[End of what the user is showing]\n\nwhy can't I log in?", user);
+        // Only the calculator is declared from then on: the time tool can reach the internet.
+        Assert.Equal(["calculate"], first["tools"]!.AsArray().Select(t => t!["function"]!["name"]!.GetValue<string>()));
+        // Kept with the chat, in the Mac's shape.
+        var saved = store.Load(chat.Id!.Value)!.Messages[0].Shared!.Single();
+        Assert.Equal(("Edge", SharedKind.Window), (saved.Source, saved.Kind));
+        Assert.Contains("\"kind\": \"window\"", File.ReadAllText(Path.Combine(root, chat.Id!.Value.ToString("D").ToUpperInvariant() + ".json")));
+    }
+
+    [Fact]
+    public void AShownItemsTextGoesOnlyToAModelThatDoesntSeeIt()
+    {
+        var picture = SharedContext.Make(SharedKind.Screen, "", "", "OK  Cancel", hasPicture: true);
+        Assert.DoesNotContain("OK Cancel", picture.NoteForModel(seesPicture: true));
+        Assert.Contains("OK Cancel", picture.NoteForModel(seesPicture: false));
+        var big = SharedContext.Make(SharedKind.Window, "t", "a", new string('x', SharedContext.MaxText + 10), hasPicture: false);
+        Assert.True(big.Truncated);
+        Assert.Contains("(cut here", big.NoteForModel(false));
+    }
+
+    [Fact]
     public async Task PicturesGoAsDataUrlsAndAreSavedBesideTheChat()
     {
         var store = new ChatStore(root);

@@ -17,6 +17,20 @@ public sealed partial class MainWindow
         return $"{app.Settings.ProjectFiles}|{app.Embedder.IsInstalled}|{app.Downloads.State.Current?.Title}";
     }
 
+    /// <summary>Settings › Tools › Windows and screen (adr/0022): the switch.</summary>
+    IEnumerable<UIElement> ShowWindowsSection()
+    {
+        var app = App.Current;
+        yield return Ui.Section(L.T("Windows and screen"));
+        yield return Ui.Card(Ui.Row(L.T("Show the model a window or the screen"),
+            L.T("The attach button can capture a window or a screen you pick in Windows' own picker: one picture, taken when you click, never again later. A model that doesn't see pictures gets the text read from it on this PC. A chat that showed something doesn't use web tools, MCP servers or folder changes from then on."),
+            Ui.Toggle(app.Settings.ShowWindows, on =>
+            {
+                app.UpdateSettings(app.Settings with { ShowWindows = on });
+                RenderPage();
+            }, L.T("Show the model a window or the screen"))));
+    }
+
     IEnumerable<UIElement> ProjectFilesSection()
     {
         var app = App.Current;
