@@ -637,8 +637,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         if (mcp is null && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
                         {
+                            // The project the turn started in: a chat moved meanwhile gets no pictures (never the new project's p1).
                             (outcome, var made) = await MakeDocumentAsync(call.Arguments, documents, temporaryTurn, madeDocument,
-                                options.ProjectOfChat?.Invoke(), options.ProjectFiles, options.ProjectOfChat, answer, mine, token).ConfigureAwait(false);
+                                projectId, options.ProjectFiles, options.ProjectOfChat, answer, mine, token).ConfigureAwait(false);
                             madeDocument |= made;
                         }
                         else if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
@@ -1034,6 +1035,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var pictures = await DocumentPicturesAsync(spec, project, files, projectOfChat, token).ConfigureAwait(false);
         var printed = await PrintDocumentAsync(spec, printer, pictures, token).ConfigureAwait(false);
         if (printed.Problem is { } problem) return (Refused(problem), false);
+        if (PicturesWentMeanwhile(pictures, project, files, projectOfChat))
+        {
+            return (Refused(Documents.DocumentTool.Failed("the chat left its project, or a picture was removed, while it was made; make it again")), false);
+        }
         var (made, page) = (printed.Made!, printed.Page!);
         Guid chatId;
         lock (sync)
@@ -1149,6 +1154,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var pictures = await DocumentPicturesAsync(spec, document.Source.Project, files, projectOfChat, token).ConfigureAwait(false);
         var printed = await PrintDocumentAsync(spec, printer, pictures, token).ConfigureAwait(false);
         if (printed.Problem is { } problem) return problem;
+        if (PicturesWentMeanwhile(pictures, document.Source.Project, files, projectOfChat)) return "the chat left its project, or a picture was removed, meanwhile";
+        // What it left out (a picture removed since, the chat in another project now): said, not silent.
+        var leftOut = printed.Page!.Notes.Count > 0 ? string.Join(" ", printed.Page.Notes) : null;
         string pdfName;
         string? thumbName;
         try
@@ -1199,8 +1207,16 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             return "it was made, but the chat couldn't be saved yet";
         }
         Changed?.Invoke();
-        return null;
+        return leftOut is null ? null : "made again, but " + leftOut;
     }
+
+    /// <summary>
+    /// The pictures a page carries are no longer the chat's to show: it left the project, or one was removed,
+    /// while the page printed (the check before printing is only good until then).
+    /// </summary>
+    static bool PicturesWentMeanwhile(Dictionary<string, (string Key, Documents.DocumentResource Resource)> pictures, Guid? project,
+        ProjectFiles.ProjectFilesService? files, Func<Guid?>? projectOfChat) =>
+        pictures.Count > 0 && (project is not { } p || files is null || projectOfChat?.Invoke() != p || pictures.Keys.Any(id => files.PictureFile(p, id) is null));
 
     /// <summary>Removes a chat's files by name, as far as it can (one open in a viewer stays).</summary>
     void DeleteFiles(Guid chatId, params string?[] names)

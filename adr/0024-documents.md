@@ -98,7 +98,9 @@ unchanged.
   - A picture is copied privately with the cap checked while copying,
     measured by the decoder, and stored from that same copy.
   - It is refused when it isn't a picture or has more than 100 megapixels.
-  - The same bytes twice are "already in the project".
+  - The same bytes twice are "already in the project", unless the earlier
+    copy has gone; then the add puts it back.
+  - A copy stalled for a minute (a share gone away) is given up.
   - The Files window shows pictures apart, with a thumbnail, name, size
     and Remove.
 - **The decoder is a confined child**: `LLMTray.exe --decode-picture`, in
@@ -112,6 +114,13 @@ unchanged.
   - writes the picture again with a new encoder, so none of the original
     metadata (GPS, camera) comes along. A photo stays JPEG; anything else
     becomes PNG.
+
+  The child is killed and waited for before its output is read, through
+  one handle and capped. Its one-line answer must be whole, with sane
+  sizes. Like the reader process (adr/0021), the job bounds memory, time
+  and children and contains a crash. It is not a privilege boundary: the
+  child runs as the user. An AppContainer for the decoder and the reader
+  is a later step.
 - **What the model sees.** `project_files`' listing ends with the
   pictures: id, name and size, never their pixels. When `make_document` is
   declared, the listing also says how to use one. A project with pictures
@@ -123,7 +132,18 @@ unchanged.
   never another project's `p1`. A document uses at most 30 pictures and
   60 MB of them. The pictures are decoded before printing and served from
   the page's table as `image/<id>.jpg|png`. A missing or failed picture
-  is left out with a note to the model.
+  is left out with a note to the model. Make again tells the user what it
+  left out.
+  - The project is the one the turn started in.
+  - If the chat leaves the project, or a picture is removed, while the
+    page prints, the PDF is discarded and the model is told to make it
+    again.
+- **The listing is budgeted** like the files: as many pictures as fit, then
+  a `pictures:N` cursor. In a pictures-only project, a search, read or pin
+  is told there are only pictures.
+- **A damaged manifest is never taken for empty.** If it is `{}`, is
+  missing its list, or has a name the store didn't give (a path, `..`),
+  nothing is changed or deleted until it is fixed.
 
 Not in this step:
 - **`load_tools`** and tool groups. The tool is declared in every saved

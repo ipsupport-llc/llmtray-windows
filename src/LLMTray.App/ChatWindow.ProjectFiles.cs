@@ -174,7 +174,12 @@ sealed partial class ChatWindow
                     var name = new TextBlock { Text = $"{picture.Id}. {picture.Name}", TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
                     ToolTipService.SetToolTip(name, picture.Name);
                     var detail = Ui.Caption(L.F("{0} × {1} · {2}", picture.Width, picture.Height, Size(picture.Bytes)));
-                    var remove = IconButton("\uE74D", L.T("Remove"), picture.Name, () => app.ProjectFiles.RemovePicture(project.Id, id));
+                    var remove = IconButton("\uE74D", L.T("Remove"), picture.Name, () =>
+                    {
+                        if (app.ProjectFiles.RemovePicture(project.Id, id)) return;
+                        note.Text = L.F("{0} couldn't be removed now: the project's list of pictures can't be changed.", picture.Name);
+                        note.Visibility = Visibility.Visible;
+                    });
                     var row = new Grid { ColumnSpacing = 8 };
                     row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                     row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -196,7 +201,15 @@ sealed partial class ChatWindow
             add.IsEnabled = false;
             note.Text = L.T("Copying…");
             note.Visibility = Visibility.Visible;
-            var results = await app.ProjectFiles.AddAsync(project.Id, paths, FreeSpace);
+            IReadOnlyList<AddResult> results;
+            try
+            {
+                results = await app.ProjectFiles.AddAsync(project.Id, paths, FreeSpace);
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                results = [.. paths.Select(p => new AddResult(Path.GetFileName(p), null, "couldn't be added: " + e.Message))];
+            }
             add.IsEnabled = true;
             var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!))).ToList();
             note.Text = refused.Count == 0 ? "" : L.T("Not added:") + "\n" + string.Join("\n", refused.Take(12));

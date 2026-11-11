@@ -95,8 +95,12 @@ public sealed class ProjectPictureTests : IAsyncDisposable
         Assert.Null(service.Index(project));
         Assert.Equal(1, service.Summary(project).Pictures);
         var turn = new ProjectTurn(project, () => chatProject, service, 32_000, 1_000);
-        var list = JsonNode.Parse((await ProjectFilesTool.RunAsync(new ToolCall { Name = ProjectFilesTool.Name, Arguments = "{\"query\":\"cat\"}" }, turn, 1_000, default)).Result)!;
+        var list = JsonNode.Parse((await ProjectFilesTool.RunAsync(new ToolCall { Name = ProjectFilesTool.Name, Arguments = "{}" }, turn, 1_000, default)).Result)!;
         Assert.Equal("p1", list["pictures"]![0]!["id"]!.GetValue<string>());
+        // A search there is told there's nothing to search, not answered with a listing it might take for results.
+        var search = await ProjectFilesTool.RunAsync(new ToolCall { Name = ProjectFilesTool.Name, Arguments = "{\"query\":\"cat\"}" }, turn, 1_000, default);
+        Assert.True(search.Failed);
+        Assert.Contains("only pictures", search.Result);
         // Without documents on, nothing about documents.
         Assert.Null(list["pictures_use"]);
 
@@ -124,6 +128,19 @@ public sealed class ProjectPictureTests : IAsyncDisposable
         var page = DocumentHtml.Build(spec, DocumentPaper.A4, "https://document.llmtray/", pictures.ToDictionary(p => p.Key, p => p.Value.Key));
         Assert.Contains("src=\"https://document.llmtray/image/p1.jpg\"", page.Html);
         Assert.Contains(page.Notes, n => n.Contains("p9"));
+
+        // A damaged list ("{}" or a name that leads elsewhere) is never taken for empty: nothing is deleted.
+        var folder = Path.Combine(root, "projects", project.ToString("D").ToUpperInvariant(), "pictures");
+        var manifest = Path.Combine(folder, "pictures.json");
+        var good = System.IO.File.ReadAllText(manifest);
+        System.IO.File.WriteAllText(manifest, "{}");
+        await using (var fresh = new ProjectFilesService(Path.Combine(root, "projects"), () => true, () => null, new InProcessReader(), () => false, start: false, pictures: decoder))
+        {
+            Assert.Empty(fresh.Pictures(project));
+            Assert.False(fresh.RemovePicture(project, "p1"));
+        }
+        Assert.Equal(2, Directory.GetFiles(folder).Count(f => !f.EndsWith(".json", StringComparison.Ordinal)));
+        System.IO.File.WriteAllText(manifest, good);
 
         // A chat moved out of the project: none of its pictures.
         chatProject = Guid.NewGuid();

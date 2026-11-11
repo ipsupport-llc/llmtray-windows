@@ -213,18 +213,23 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public string? PictureThumbnail(Guid project, ProjectPicture picture) =>
         LiveFolder(project) is { } folder ? ProjectPictures.ThumbnailOf(picture, folder) : null;
 
-    public void RemovePicture(Guid project, string id)
+    /// <summary>False when it couldn't be removed now (the list unreadable or unwritable).</summary>
+    public bool RemovePicture(Guid project, string id)
     {
-        if (LiveFolder(project) is not { } folder) return;
         try
         {
-            lock (PictureLock(project)) ProjectPictures.Remove(id, folder);
+            lock (PictureLock(project))
+            {
+                if (LiveFolder(project) is not { } folder) return true;
+                ProjectPictures.Remove(id, folder);
+            }
         }
         catch (Exception e) when (e is PictureStoreException or IOException or UnauthorizedAccessException)
         {
-            return;
+            return false;
         }
         Changed?.Invoke(project);
+        return true;
     }
 
     /// <summary>A picture decoded for a document (at most 2,400 px, no metadata); null when it can't be.</summary>
@@ -235,8 +240,9 @@ public sealed class ProjectFilesService : IAsyncDisposable
         {
             return await pictures.DecodeAsync(file.Path, ProjectPictures.DocumentSide, cancellationToken).ConfigureAwait(false);
         }
-        catch (PictureDecodeException)
+        catch (Exception e) when (e is not (OperationCanceledException or OutOfMemoryException))
         {
+            // Any failure of the decoder (it wouldn't start, a temp folder): the picture is left out, the document still made.
             return null;
         }
     }
@@ -274,7 +280,18 @@ public sealed class ProjectFilesService : IAsyncDisposable
             if (new FileInfo(path).Length > ProjectPictures.MaxBytes) return new AddResult(name, null, "too large");
             if (freeSpace is not null && freeSpace(root) < new FileInfo(path).Length + (100L << 20)) return new AddResult(name, null, "not enough disk space");
             Directory.CreateDirectory(temp);
-            var copy = await Task.Run(() => ProjectPictures.PrivateCopy(path, temp), cancellationToken).ConfigureAwait(false);
+            // A copy that stalls (a share gone away) gives up after a minute.
+            using var copying = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            copying.CancelAfter(TimeSpan.FromMinutes(1));
+            string copy;
+            try
+            {
+                copy = await ProjectPictures.PrivateCopyAsync(path, temp, copying.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return new AddResult(name, null, "couldn't be read: it took over a minute");
+            }
             DecodedPicture decoded;
             try
             {
@@ -283,6 +300,10 @@ public sealed class ProjectFilesService : IAsyncDisposable
             catch (PictureDecodeException e)
             {
                 return new AddResult(name, null, e.Message);
+            }
+            catch (Exception e) when (e is not (OperationCanceledException or OutOfMemoryException))
+            {
+                return new AddResult(name, null, "couldn't be checked: " + e.Message);
             }
             var check = new ProjectPictures.Checked(copy, name, decoded.Width, decoded.Height, decoded.Data);
             (ProjectPicture Picture, bool Duplicate) stored;
@@ -365,6 +386,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public void DeleteProject(Guid project)
     {
         var folder = Folder(project);
+        // The pictures' lock too: an add that checked the project is alive finishes (or sees it gone) before this marks it.
+        lock (PictureLock(project))
         lock (sync)
         {
             // The record first, under the lock Index() and the worker's start check it with: nothing reopens

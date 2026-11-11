@@ -128,26 +128,41 @@ static class PictureDecoding
                     {
                         await process.StandardInput.WriteLineAsync("go".AsMemory(), timeout.Token);
                         await process.StandardInput.FlushAsync(timeout.Token);
-                        var line = await ReadLineAsync(process.StandardOutput.BaseStream, timeout.Token);
+                        var line = await ReadLineAsync(process.StandardOutput.BaseStream, timeout.Token)
+                            ?? throw new PictureDecodeException("the decoder stopped");
+                        // The child is gone before its file is read: nothing can swap it between the size check and the read.
+                        Kill(process);
+                        await process.WaitForExitAsync(timeout.Token);
                         var answer = JsonNode.Parse(line) as JsonObject ?? throw new PictureDecodeException("the decoder stopped");
                         if (answer["error"]?.GetValue<string>() is { } error) throw new PictureDecodeException(error);
-                        var picture = Path.Combine(folder, "picture");
-                        var size = new FileInfo(picture).Length;
-                        if (size > MaxOutputBytes) throw new PictureDecodeException("the picture came out too large");
-                        return new DecodedPicture(answer["width"]!.GetValue<int>(), answer["height"]!.GetValue<int>(),
-                            await File.ReadAllBytesAsync(picture, timeout.Token), answer["jpeg"]?.GetValue<bool>() == true);
+                        var (width, height) = (answer["width"]!.GetValue<int>(), answer["height"]!.GetValue<int>());
+                        if (width is <= 0 or > 1_000_000 || height is <= 0 or > 1_000_000) throw new PictureDecodeException("the decoder's answer is wrong");
+                        return new DecodedPicture(width, height, await ReadCappedAsync(Path.Combine(folder, "picture"), timeout.Token), answer["jpeg"]?.GetValue<bool>() == true);
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
                         throw new PictureDecodeException("decoding took longer than 10 seconds");
                     }
-                    catch (Exception e) when (e is IOException or System.Text.Json.JsonException or InvalidOperationException or NullReferenceException)
+                    catch (PictureDecodeException)
                     {
+                        throw;
+                    }
+                    catch (Exception e) when (e is not (OperationCanceledException or OutOfMemoryException))
+                    {
+                        // A damaged answer (a duplicate key, a wrong type) or a decoder that died.
                         throw new PictureDecodeException("the decoder failed (too much memory, or a damaged picture)");
                     }
                     finally
                     {
                         Kill(process);
+                        // Ended before its folder goes: a file it still held would stay behind.
+                        try
+                        {
+                            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                        }
+                        catch (Exception e) when (e is TimeoutException or InvalidOperationException)
+                        {
+                        }
                     }
                 }
             }
@@ -163,18 +178,35 @@ static class PictureDecoding
             }
         }
 
-        /// <summary>One line of at most 4 KB.</summary>
-        static async Task<string> ReadLineAsync(Stream output, CancellationToken token)
+        /// <summary>One whole line of at most 4 KB; null for one cut short or too long.</summary>
+        static async Task<string?> ReadLineAsync(Stream output, CancellationToken token)
         {
             var buffer = new byte[4096];
             var length = 0;
             while (length < buffer.Length)
             {
                 var n = await output.ReadAsync(buffer.AsMemory(length, 1), token);
-                if (n == 0 || buffer[length] == (byte)'\n') break;
+                if (n == 0) return null;
+                if (buffer[length] == (byte)'\n') return System.Text.Encoding.UTF8.GetString(buffer, 0, length).Trim();
                 length++;
             }
-            return System.Text.Encoding.UTF8.GetString(buffer, 0, length).Trim();
+            return null;
+        }
+
+        /// <summary>The picture, read through one handle and never past <see cref="MaxOutputBytes"/> whatever its size said.</summary>
+        static async Task<byte[]> ReadCappedAsync(string path, CancellationToken token)
+        {
+            await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None, 1 << 16, useAsync: true);
+            using var memory = new MemoryStream();
+            var buffer = new byte[1 << 16];
+            int n;
+            while ((n = await file.ReadAsync(buffer, token)) > 0)
+            {
+                if (memory.Length + n > MaxOutputBytes) throw new PictureDecodeException("the picture came out too large");
+                memory.Write(buffer, 0, n);
+            }
+            if (memory.Length == 0) throw new PictureDecodeException("the decoder wrote nothing");
+            return memory.ToArray();
         }
 
         static void Kill(Process process)

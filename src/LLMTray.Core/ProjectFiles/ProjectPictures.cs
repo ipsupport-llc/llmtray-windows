@@ -66,6 +66,10 @@ public static class ProjectPictures
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    /// <summary>A name the store itself gave: "&lt;UUID&gt;.&lt;ext&gt;" or its ".thumb.png" (never a path, never a link elsewhere).</summary>
+    static bool IsStoredName(string? name) =>
+        name is not null && System.Text.RegularExpressions.Regex.IsMatch(name, "^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}\\.[a-z]{3,4}(\\.thumb\\.png)?$");
+
     public static bool IsPicture(string path) => Formats.Contains(Path.GetExtension(path).TrimStart('.'));
 
     static string Directory(string project) => Path.Combine(project, "pictures");
@@ -92,12 +96,44 @@ public static class ProjectPictures
     static PictureManifest Load(string project)
     {
         var path = ManifestPath(project);
-        if (!File.Exists(path)) return new PictureManifest();
+        string text;
         try
         {
-            return JsonSerializer.Deserialize<PictureManifest>(File.ReadAllText(path), Json) ?? throw new PictureStoreException("the pictures' list is empty");
+            text = File.ReadAllText(path);
         }
-        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (FileNotFoundException)
+        {
+            return new PictureManifest();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new PictureManifest();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // There but not readable: never taken for empty.
+            throw new PictureStoreException("the project's list of pictures can't be read");
+        }
+        try
+        {
+            // Whole and well-formed, or nothing: "{}" or a hand-edited name must not make reconciling delete pictures,
+            // nor a name lead anywhere but this folder.
+            using (var check = JsonDocument.Parse(text))
+            {
+                if (check.RootElement.ValueKind != JsonValueKind.Object || !check.RootElement.TryGetProperty("pictures", out var list)
+                    || list.ValueKind != JsonValueKind.Array || !check.RootElement.TryGetProperty("next", out _))
+                {
+                    throw new JsonException("not a list of pictures");
+                }
+            }
+            var manifest = JsonSerializer.Deserialize<PictureManifest>(text, Json) ?? throw new JsonException("empty");
+            if (manifest.Pictures.Any(p => p is null || !IsStoredName(p.File) || (p.Thumbnail is { } t && !IsStoredName(t)) || p.Id is null || p.Name is null))
+            {
+                throw new JsonException("a picture's entry is damaged");
+            }
+            return manifest;
+        }
+        catch (JsonException)
         {
             throw new PictureStoreException("the project's list of pictures can't be read");
         }
@@ -131,20 +167,20 @@ public static class ProjectPictures
     /// A private copy of <paramref name="source"/> in <paramref name="folder"/>: its bytes read with a cap, never
     /// past <see cref="MaxBytes"/> (a file that grows while it's copied included).
     /// </summary>
-    public static string PrivateCopy(string source, string folder)
+    public static async Task<string> PrivateCopyAsync(string source, string folder, CancellationToken cancellationToken)
     {
         var copy = Path.Combine(folder, "picture" + Path.GetExtension(source).ToLowerInvariant());
-        using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
-        using (var output = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, useAsync: true);
+        await using (var output = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, useAsync: true))
         {
             var buffer = new byte[1 << 20];
             long total = 0;
             int n;
-            while ((n = input.Read(buffer, 0, buffer.Length)) > 0)
+            while ((n = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
             {
                 total += n;
                 if (total > MaxBytes) throw new PictureStoreException("too large");
-                output.Write(buffer, 0, n);
+                await output.WriteAsync(buffer.AsMemory(0, n), cancellationToken).ConfigureAwait(false);
             }
         }
         return copy;
@@ -169,7 +205,12 @@ public static class ProjectPictures
         if (bytes <= 0 || bytes > MaxBytes) throw new PictureStoreException("too large");
         var hash = Sha256(picture.Copy);
         var manifest = Load(project);
-        if (manifest.Pictures.FirstOrDefault(p => p.Sha256 == hash) is { } same) return (same, true);
+        if (manifest.Pictures.FirstOrDefault(p => p.Sha256 == hash) is { } same)
+        {
+            // Already there, unless its copy went: then this add puts it back (a new entry; the stale one goes).
+            if (File.Exists(Path.Combine(Directory(project), same.File))) return (same, true);
+            manifest = manifest with { Pictures = [.. manifest.Pictures.Where(p => p.Id != same.Id)] };
+        }
         var stage = Staging(project);
         System.IO.Directory.CreateDirectory(stage);
         var ext = Path.GetExtension(picture.Copy).TrimStart('.').ToLowerInvariant();
