@@ -112,7 +112,7 @@ static class ScreenCapture
             try
             {
                 var iid = IdxgiDevice;
-                Marshal.ThrowExceptionForHR(Marshal.QueryInterface(d3d, ref iid, out var dxgi));
+                Marshal.ThrowExceptionForHR(Marshal.QueryInterface(d3d, in iid, out var dxgi));
                 try
                 {
                     Marshal.ThrowExceptionForHR(CreateDirect3D11DeviceFromDXGIDevice(dxgi, out var inspectable));
