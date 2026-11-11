@@ -1137,7 +1137,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var saved = store.Load(chatId)?.Messages.Any(m => m.Documents?.Any(d => d.Id == remade.Id) == true) == true;
         if (saved)
         {
-            DeleteFiles(chatId, [.. new[] { document.Filename, document.Thumbnail }.Where(n => n != pdfName && n != thumbName)]);
+            // Windows names are case-blind: "Report.pdf" is the "report.pdf" just written.
+            DeleteFiles(chatId, [.. new[] { document.Filename, document.Thumbnail }
+                .Where(n => !string.Equals(n, pdfName, StringComparison.OrdinalIgnoreCase) && !string.Equals(n, thumbName, StringComparison.OrdinalIgnoreCase))]);
         }
         else
         {
@@ -1149,7 +1151,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 DeleteFiles(chatId, pdfName, thumbName);
                 return "the chat changed meanwhile";
             }
-            // A save that failed (a full disk) keeps both; the next save writes the new card.
+            // A save that failed (a full disk): both kept, the next save writes the new card; the user hears it.
+            Changed?.Invoke();
+            return "it was made, but the chat couldn't be saved yet";
         }
         Changed?.Invoke();
         return null;

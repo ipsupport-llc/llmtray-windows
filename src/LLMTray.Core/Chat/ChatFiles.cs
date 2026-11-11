@@ -176,7 +176,7 @@ sealed class DocumentListConverter : JsonConverter<List<DocumentRef>?>
             {
                 if (item.Deserialize(ChatJson.Default.DocumentRef) is { } card) list.Add(card);
             }
-            catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+            catch (Exception e) when (e is not OutOfMemoryException)
             {
             }
         }

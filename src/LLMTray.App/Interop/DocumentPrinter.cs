@@ -72,18 +72,18 @@ static class DocumentPrinter
         await gate.WaitAsync(cancellationToken);
         try
         {
-            // The whole of it bounded too (WebView2 starting, Windows reading the PDF): a stalled print never holds the next one.
-            var work = PrintLockedAsync(parent, dataFolder, html, resources, title, paperInches, cancellationToken);
-            var finished = await Task.WhenAny(work, Task.Delay(Timeout + TimeSpan.FromSeconds(30), cancellationToken).ContinueWith(_ => { }, TaskScheduler.Default));
-            if (finished != work)
+            // The whole of it bounded (WebView2 starting, Windows reading the PDF): every wait inside gives up at the deadline,
+            // so the print has ended, its view closed, before the next one may start.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(Timeout + TimeSpan.FromSeconds(30));
+            try
             {
-                // Left to end on its own; the next print starts a fresh environment.
-                environment = null;
-                _ = work.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new DocumentPrintException("it took over a minute");
+                return await PrintLockedAsync(parent, dataFolder, html, resources, title, paperInches, deadline.Token);
             }
-            return await work;
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new DocumentPrintException("it took over a minute and a half");
+            }
         }
         finally
         {
@@ -96,10 +96,18 @@ static class DocumentPrinter
         CancellationToken cancellationToken)
     {
         CoreWebView2Controller controller;
+        // This print's own environment, used throughout (its handlers too): never a field another print may change.
+        CoreWebView2Environment env;
         try
         {
-            environment ??= await CoreWebView2Environment.CreateWithOptionsAsync(null, Path.Combine(dataFolder, "webview"), new CoreWebView2EnvironmentOptions());
-            controller = await environment.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent));
+            env = environment ??= await CoreWebView2Environment.CreateWithOptionsAsync(null, Path.Combine(dataFolder, "webview"), new CoreWebView2EnvironmentOptions())
+                .AsTask().WaitAsync(cancellationToken);
+            controller = await env.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent))
+                .AsTask().WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
@@ -107,7 +115,7 @@ static class DocumentPrinter
             throw new DocumentPrintException($"Microsoft Edge WebView2, which lays out the pages, couldn't start ({e.Message})");
         }
         // The page itself is served from the table too: NavigateToString takes at most 2 MB, a page may be 8.
-        var served = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources)
+        var served = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources, StringComparer.OrdinalIgnoreCase)
         {
             [PageName] = (System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
         };
@@ -135,11 +143,11 @@ static class DocumentPrinter
                 if (uri.StartsWith(Base, StringComparison.Ordinal) && served.TryGetValue(uri[Base.Length..], out var resource))
                 {
                     var stream = new MemoryStream(resource.Bytes, writable: false).AsRandomAccessStream();
-                    e.Response = environment.CreateWebResourceResponse(stream, 200, "OK",
+                    e.Response = env.CreateWebResourceResponse(stream, 200, "OK",
                         $"Content-Type: {resource.ContentType}\r\nAccess-Control-Allow-Origin: *");
                     return;
                 }
-                e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
+                e.Response = env.CreateWebResourceResponse(null, 403, "Forbidden", "");
             };
             // The page itself is the only navigation; a refresh, a link or a new window goes nowhere.
             var loaded = false;
@@ -175,7 +183,7 @@ static class DocumentPrinter
 
             Directory.CreateDirectory(temp);
             var path = Path.Combine(temp, "document.pdf");
-            var print = environment.CreatePrintSettings();
+            var print = env.CreatePrintSettings();
             print.Orientation = CoreWebView2PrintOrientation.Portrait;
             print.PageWidth = paperInches.Width;
             print.PageHeight = paperInches.Height;
@@ -186,17 +194,20 @@ static class DocumentPrinter
             print.ShouldPrintHeaderAndFooter = true;
             print.HeaderTitle = title;
             print.FooterUri = " ";
-            var printing = view.PrintToPdfAsync(path, print).AsTask();
-            if (await Task.WhenAny(printing, Task.Delay(Timeout, timeout.Token).ContinueWith(_ => false, TaskScheduler.Default)) != printing)
+            bool printed;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                printed = await view.PrintToPdfAsync(path, print).AsTask().WaitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
                 throw new DocumentPrintException("it took over a minute");
             }
-            if (!await printing) throw new DocumentPrintException("printing to PDF failed");
+            if (!printed) throw new DocumentPrintException("printing to PDF failed");
             var size = new FileInfo(path).Length;
             if (size > MaxPdfBytes) throw new DocumentPrintException("the PDF would be over 50 MB; make it shorter");
             var pdf = await File.ReadAllBytesAsync(path, cancellationToken);
-            var (pages, thumbnail) = await InspectAsync(path);
+            var (pages, thumbnail) = await InspectAsync(path).WaitAsync(cancellationToken);
             if (pages == 0) throw new DocumentPrintException("no pages came out");
             if (pages > MaxPages) throw new DocumentPrintException($"it would be {pages} pages, over {MaxPages}; make it shorter");
             return new PrintedDocument(pdf, pages, thumbnail);
