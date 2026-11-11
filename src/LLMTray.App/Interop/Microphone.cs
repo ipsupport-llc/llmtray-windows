@@ -111,7 +111,7 @@ sealed class Microphone : IDisposable
     bool DrainLocked(bool requeue)
     {
         var any = false;
-        for (var n = 0; n < Buffers && !full; n++)
+        for (var n = 0; n < Buffers && pcm.Length < MaxBytes; n++)
         {
             var header = headers[next];
             if ((Marshal.ReadInt32(header, FlagsOffset) & Done) == 0) break;
@@ -122,7 +122,7 @@ sealed class Microphone : IDisposable
             var peak = 0;
             for (var i = 0; i + 1 < bytes; i += 2) peak = Math.Max(peak, Math.Abs((int)BitConverter.ToInt16(chunk, i)));
             level = Math.Min(1f, peak / 32768f);
-            full = pcm.Length >= MaxBytes;
+            if (pcm.Length >= MaxBytes) full = true;
             // Clear the flag first: a buffer not handed back isn't read twice.
             Marshal.WriteInt32(header, FlagsOffset, Marshal.ReadInt32(header, FlagsOffset) & ~Done);
             // A buffer the driver won't take back ends the recording here (the queue order needs every one).
