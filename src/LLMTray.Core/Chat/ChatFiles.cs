@@ -73,6 +73,11 @@ public sealed record PersistedMessage
     public List<double> ImageDurations { get; init; } = [];
     public List<string> ImagePrompts { get; init; } = [];
     public List<string> Sources { get; init; } = [];
+    /// <summary>Recordings (a user message's, adr/0023) and the Mac's music: files beside the pictures.</summary>
+    public List<string> AudioFilenames { get; init; } = [];
+    /// <summary>Lined up with <see cref="AudioFilenames"/>: "Recording" for a spoken message, a song's prompt.</summary>
+    public List<string> AudioPrompts { get; init; } = [];
+    public List<double> AudioDurations { get; init; } = [];
     /// <summary>MCP calls under an answer (the Mac's mcpCalls).</summary>
     public List<McpCallRecord> McpCalls { get; init; } = [];
     /// <summary>Project files the answer cites (the Mac's citations).</summary>

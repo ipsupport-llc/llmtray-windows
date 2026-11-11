@@ -27,10 +27,29 @@ public sealed class LicenseTests : IDisposable
             {
                 case string s: w.Write(8u); Str(s); break;
                 case uint u: w.Write(4u); w.Write(u); break;
+                case bool b: w.Write(7u); w.Write(b); break;
                 case string[] arr: w.Write(9u); w.Write(8u); w.Write((ulong)arr.Length); foreach (var a in arr) Str(a); break;
             }
         }
         return ms.ToArray();
+    }
+
+    [Fact]
+    public void AProjectorSaysWhetherItSeesAndHears()
+    {
+        ModelEntry With(byte[] projector, string name)
+        {
+            var path = Path.Combine(root, name);
+            File.WriteAllBytes(path, projector);
+            return new ModelEntry("m", "m.gguf", Path.Combine(root, "m.gguf"), path, 1);
+        }
+        var audio = ProjectorAbilities.Of(With(Gguf(("general.architecture", "clip"), ("clip.has_vision_encoder", true), ("clip.has_audio_encoder", true)), "mmproj-a.gguf"));
+        Assert.Equal(new ProjectorAbilities(true, true), audio);
+        var hearsOnly = ProjectorAbilities.Of(With(Gguf(("clip.has_audio_encoder", true), ("clip.has_vision_encoder", false)), "mmproj-b.gguf"));
+        Assert.Equal(new ProjectorAbilities(false, true), hearsOnly);
+        // An old projector that says neither: it sees, as before.
+        Assert.Equal(new ProjectorAbilities(true, false), ProjectorAbilities.Of(With(Gguf(("general.name", "x")), "mmproj-c.gguf")));
+        Assert.Equal(ProjectorAbilities.None, ProjectorAbilities.Of(new ModelEntry("m", "m.gguf", "m.gguf", null, 1)));
     }
 
     [Fact]

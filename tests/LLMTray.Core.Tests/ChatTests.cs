@@ -315,6 +315,95 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.True(range is null || messages.Take(range.Value.End).Skip(range.Value.Start).All(m => m.Shared.Count == 0));
     }
 
+    [Fact]
+    public async Task RecordingsGoToAModelThatHearsAndAreSavedBesideTheChat()
+    {
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        var wav = Wav.FromPcm16(new byte[Wav.BytesPerSecond * 2]);
+        Assert.Equal(2, Wav.Seconds(wav));
+        await chat.SendAsync("", new ChatOptions(null, Hears: true), audios: [wav]);
+        var sent = bodies.First(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray()[^1]!["content"]!.AsArray();
+        var part = Assert.Single(sent);
+        Assert.Equal("input_audio", part!["type"]!.GetValue<string>());
+        Assert.Equal("wav", part["input_audio"]!["format"]!.GetValue<string>());
+        Assert.Equal(wav, Convert.FromBase64String(part["input_audio"]!["data"]!.GetValue<string>()));
+        // The title request carries no audio.
+        Assert.DoesNotContain("input_audio", bodies.First(b => !b["stream"]!.GetValue<bool>()).ToJsonString());
+
+        // Saved beside the pictures, as the Mac names it, and read back.
+        var saved = store.Load(chat.Id!.Value)!.Messages[0];
+        var name = Assert.Single(saved.AudioFilenames);
+        Assert.EndsWith(".wav", name);
+        Assert.Equal(["Recording"], saved.AudioPrompts);
+        var again = new ChatClient(http, api, store);
+        again.Load(chat.Id!.Value);
+        Assert.Equal(wav, Assert.Single(again.Messages[0].Audios));
+
+        // A model that doesn't hear gets "(audio)" for a message that was only a recording.
+        bodies.Clear();
+        await again.SendAsync("and?", new ChatOptions(null, Hears: false));
+        var messages = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray();
+        Assert.Equal("(audio)", messages[0]!["content"]!.GetValue<string>());
+        Assert.DoesNotContain("input_audio", messages.ToJsonString());
+
+        // A recording whose file is gone: the message still reads "(audio)", also to a model that hears, and keeps its name.
+        File.Delete(Path.Combine(store.ImagesFolder(chat.Id!.Value), name));
+        var third = new ChatClient(http, api, store);
+        third.Load(chat.Id!.Value);
+        Assert.Empty(third.Messages[0].Audios);
+        bodies.Clear();
+        await third.SendAsync("still there?", new ChatOptions(null, Hears: true));
+        Assert.Equal("(audio)", bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]![0]!["content"]!.GetValue<string>());
+        Assert.Equal([name], store.Load(chat.Id!.Value)!.Messages[0].AudioFilenames);
+    }
+
+    [Fact]
+    public async Task OnlyTheLatestEightRecordingsAreHeard()
+    {
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var wav = Wav.FromPcm16(new byte[320]);
+        var options = new ChatOptions(null, Hears: true);
+        await chat.SendAsync("one", options, audios: [wav, wav, wav]);
+        await chat.SendAsync("two", options, audios: [wav, wav, wav]);
+        await chat.SendAsync("three", options, audios: [wav, wav, wav]);
+        var messages = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray();
+        // The first message's three would make nine: it goes as its text.
+        Assert.Equal("one", messages[0]!["content"]!.GetValue<string>());
+        Assert.Equal(6, messages.ToJsonString().Split("\"input_audio\":").Length - 1);
+    }
+
+    [Fact]
+    public void ARecordingCountsByItsLength()
+    {
+        // 30 s at 25 soft tokens a second, plus begin and end; longer input is cut to 30 s.
+        var wav = Wav.FromPcm16(new byte[Wav.BytesPerSecond * 40]);
+        Assert.Equal(Wav.MaxSeconds, Wav.Seconds(wav));
+        Assert.Equal(752, Wav.Tokens(wav.Length));
+        Assert.Equal("0:07", Wav.Clock(7.2));
+        Assert.False(Wav.IsWav([1, 2, 3]));
+        var history = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray { new JsonObject { ["type"] = "input_audio", ["input_audio"] = new JsonObject { ["data"] = Convert.ToBase64String(wav), ["format"] = "wav" } } },
+            },
+        };
+        var bytes = ChatClient.MeasureBytes(history, null);
+        Assert.InRange(bytes, 752L * LLMTray.Core.ProjectFiles.ProjectFilesTool.BytesPerToken, 752L * LLMTray.Core.ProjectFiles.ProjectFilesTool.BytesPerToken + 200);
+        // The history itself is left as it was.
+        Assert.Contains("data", history.ToJsonString());
+    }
+
+    [Fact]
+    public void TheServerSaysWhetherItHears()
+    {
+        var (context, hears) = LLMTray.Core.Runtime.ModelHost.ParseProps(JsonNode.Parse("""{"default_generation_settings":{"n_ctx":8192},"modalities":{"vision":true,"audio":true}}"""));
+        Assert.Equal((8192, (bool?)true), (context, hears));
+        Assert.Null(LLMTray.Core.Runtime.ModelHost.ParseProps(JsonNode.Parse("""{"n_ctx":4096}""")).Hears);
+    }
+
     static byte[] PngBytes() => Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==");
 
     [Fact]

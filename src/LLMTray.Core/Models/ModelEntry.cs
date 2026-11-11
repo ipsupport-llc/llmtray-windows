@@ -20,3 +20,39 @@ public sealed record ModelEntry(string Name, string RelativePath, string FullPat
         }
     }
 }
+
+/// <summary>What a model's projector takes (llama.cpp's mmproj header: clip.has_vision_encoder, clip.has_audio_encoder).</summary>
+public sealed record ProjectorAbilities(bool Sees, bool Hears)
+{
+    public static readonly ProjectorAbilities None = new(false, false);
+
+    static readonly Dictionary<(string, DateTime, long), ProjectorAbilities> cache = [];
+
+    /// <summary>
+    /// A model's projector, read once per file (it's read again when it changes). A projector whose
+    /// header says neither (an old one) is taken to see, as it was before this was read.
+    /// </summary>
+    public static ProjectorAbilities Of(ModelEntry model)
+    {
+        if (model.ProjectorPath is not { } path) return None;
+        try
+        {
+            var info = new FileInfo(path);
+            var key = (path, info.LastWriteTimeUtc, info.Exists ? info.Length : -1);
+            lock (cache)
+            {
+                if (cache.TryGetValue(key, out var known)) return known;
+            }
+            var read = Licenses.GgufMetadata.ReadBools(path, ["clip.has_vision_encoder", "clip.has_audio_encoder"]);
+            var abilities = new ProjectorAbilities(
+                read.TryGetValue("clip.has_vision_encoder", out var sees) ? sees : !read.ContainsKey("clip.has_audio_encoder"),
+                read.TryGetValue("clip.has_audio_encoder", out var hears) && hears);
+            lock (cache) cache[key] = abilities;
+            return abilities;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new(true, false);
+        }
+    }
+}

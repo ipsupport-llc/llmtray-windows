@@ -38,6 +38,7 @@ public sealed class ChatStore(string folder)
     static PersistedMessage Whole(PersistedMessage m) =>
         m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
             || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
+            || m.AudioFilenames is null || m.AudioPrompts is null || m.AudioDurations is null
             ? m with
             {
                 Role = m.Role ?? "user",
@@ -48,6 +49,9 @@ public sealed class ChatStore(string folder)
                 ImagePrompts = m.ImagePrompts ?? [],
                 Sources = m.Sources ?? [],
                 McpCalls = m.McpCalls ?? [],
+                AudioFilenames = m.AudioFilenames ?? [],
+                AudioPrompts = m.AudioPrompts ?? [],
+                AudioDurations = m.AudioDurations ?? [],
             }
             : m;
 
@@ -124,7 +128,20 @@ public sealed class ChatStore(string folder)
         return name;
     }
 
-    /// <summary>A saved picture, or null when it's gone or the name points elsewhere.</summary>
+    /// <summary>Writes a recording (WAV) of a chat; its file name, for the chat's audioFilenames.</summary>
+    public string SaveAudio(Guid id, byte[] wav)
+    {
+        var folder = ImagesFolder(id);
+        Directory.CreateDirectory(folder);
+        var name = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".wav";
+        var path = Path.Combine(folder, name);
+        var temp = path + ".tmp";
+        File.WriteAllBytes(temp, wav);
+        File.Move(temp, path, overwrite: true);
+        return name;
+    }
+
+    /// <summary>A saved picture (or recording), or null when it's gone or the name points elsewhere.</summary>
     public byte[]? ReadImage(Guid id, string? name)
     {
         if (string.IsNullOrEmpty(name) || name.Contains('\0') || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)) return null;

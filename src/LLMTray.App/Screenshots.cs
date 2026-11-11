@@ -28,6 +28,8 @@ static class Screenshots
                 await SaveAsync(chat, Path.Combine(folder, "chat.png"));
                 // A demo project with files (adr/0021): the sidebar, the Files dialog, and the reader process run for real.
                 await chat.ProjectScreenshotsAsync(folder, SaveElementAsync);
+                // Spoken messages (adr/0023): the composer's microphone, a clip, the recording bar.
+                await chat.VoiceScreenshotsAsync(folder, SaveElementAsync);
             }
             app.ShowSettings();
             foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })

@@ -58,6 +58,38 @@ public static class GgufMetadata
         return found;
     }
 
+    /// <summary>The bool values among <paramref name="keys"/> in a GGUF header (type 7); the ones missing or unreadable are absent.</summary>
+    public static IReadOnlyDictionary<string, bool> ReadBools(string path, IReadOnlyCollection<string> keys)
+    {
+        var found = new Dictionary<string, bool>(StringComparer.Ordinal);
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+            using var reader = new BinaryReader(stream, Encoding.UTF8);
+            if (reader.ReadUInt32() != 0x46554747) return found; // "GGUF"
+            if (reader.ReadUInt32() < 2) return found;
+            reader.ReadUInt64(); // tensors
+            var count = reader.ReadUInt64();
+            for (ulong i = 0; i < count && found.Count < keys.Count; i++)
+            {
+                var key = ReadString(reader);
+                var type = reader.ReadUInt32();
+                if (type == 7 && keys.Contains(key))
+                {
+                    found[key] = reader.ReadByte() != 0;
+                }
+                else
+                {
+                    Skip(reader, type);
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or EndOfStreamException or InvalidDataException)
+        {
+        }
+        return found;
+    }
+
     static string ReadString(BinaryReader reader)
     {
         var length = reader.ReadUInt64();

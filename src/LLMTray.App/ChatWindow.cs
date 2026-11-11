@@ -84,6 +84,7 @@ sealed partial class ChatWindow : Window
 
         Content = Layout();
         SetUpPictures((UIElement)Content);
+        SetUpVoice();
         Size(1100, 760);
 
         search.TextChanged += (_, _) => RenderChats();
@@ -134,6 +135,7 @@ sealed partial class ChatWindow : Window
             RenderStatus();
             RenderAttachNote();
             RenderThinking();
+            RenderMic();
         };
         regenerate.Click += (_, _) => _ = chat.RegenerateAsync(Options());
         ToolTipService.SetToolTip(compact, L.T("Replace the middle of this chat with a summary the model writes, to save context"));
@@ -162,7 +164,7 @@ sealed partial class ChatWindow : Window
             efforts.Items.Add(item);
         }
         thinking.Flyout = efforts;
-        App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); };
+        App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); RenderMic(); RenderAttachNote(); };
         App.Current.ModelsChanged += RenderStatus;
         App.Current.ModelsChanged += () => { RenderModels(); RenderThinking(); };
         App.Current.ThinkingStylesChanged += RenderThinking;
@@ -181,7 +183,8 @@ sealed partial class ChatWindow : Window
         AddKey(VirtualKey.F, VirtualKeyModifiers.Control, () => search.Focus(FocusState.Keyboard));
         // Ctrl+, Settings, as on the Mac (⌘,).
         AddKey((VirtualKey)0xBC, VirtualKeyModifiers.Control, () => App.Current.ShowSettings());
-        AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, () => { if (chat.Busy) chat.Stop(); });
+        // Esc drops a recording under way first (adr/0023).
+        AddKey(VirtualKey.Escape, VirtualKeyModifiers.None, () => { if (!DropRecording() && chat.Busy) chat.Stop(); });
         Activated += (_, e) =>
         {
             foreground = e.WindowActivationState != WindowActivationState.Deactivated;
@@ -278,7 +281,9 @@ sealed partial class ChatWindow : Window
             PinRatios: app.PinRatios,
             ModelKey: entry?.FullPath,
             // A model that doesn't see gets the text of what was shown, also in earlier messages.
-            SeesPictures: entry is null ? null : entry.ProjectorPath is not null);
+            SeesPictures: entry is null ? null : entry.ProjectorPath is not null,
+            // A model that hears gets the recordings (adr/0023); one that doesn't, "(audio)".
+            Hears: entry is null ? null : ModelHears());
     }
 
     /// <summary>
@@ -502,14 +507,17 @@ sealed partial class ChatWindow : Window
         // While the chat is being compacted nothing is sent: the draft stays.
         if (chat.Compacting) return;
         var text = input.Text;
-        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0) return;
+        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0 && pendingAudio.Count == 0 && recorder is null) return;
+        // Send stops a recording still going and sends it too.
+        var audios = TakeAudio();
+        if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0 && audios.Count == 0) return;
         input.Text = "";
         var images = pending.ToList();
         var shared = TakeShared(images);
         pending.Clear();
         RenderAttachments();
         follow = true;
-        _ = chat.SendAsync(text, Options(), images, shared);
+        _ = chat.SendAsync(text, Options(), images, shared, audios);
     }
 
     // MARK: Layout
@@ -635,7 +643,7 @@ sealed partial class ChatWindow : Window
         tools.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         tools.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         tools.Children.Add(attach);
-        var right = Ui.Horizontal(thinking, send);
+        var right = Ui.Horizontal(thinking, mic, send);
         right.Spacing = 6;
         Grid.SetColumn(right, 1);
         tools.Children.Add(right);
@@ -643,6 +651,7 @@ sealed partial class ChatWindow : Window
         var card = new StackPanel { Spacing = 4 };
         card.Children.Add(attachments);
         card.Children.Add(attachNote);
+        card.Children.Add(recordingBar);
         card.Children.Add(input);
         card.Children.Add(tools);
         var frame = new Border
@@ -794,6 +803,7 @@ sealed partial class ChatWindow : Window
             var you = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Right };
             you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
             if (PicturesView(message, HorizontalAlignment.Right) is { } pictures) you.Children.Add(pictures);
+            if (AudioView(message, HorizontalAlignment.Right) is { } spoken) you.Children.Add(spoken);
             if (message.Content.Length > 0) you.Children.Add(bubble);
             foreach (var shown in message.Shared)
             {
@@ -882,6 +892,7 @@ sealed partial class ChatWindow : Window
         }
 
         if (PicturesView(message, HorizontalAlignment.Left) is { } made) stack.Children.Add(made);
+        if (AudioView(message, HorizontalAlignment.Left) is { } music) stack.Children.Add(music);
 
         if (message.Activity is { } activity)
         {
