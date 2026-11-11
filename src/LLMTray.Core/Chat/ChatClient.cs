@@ -402,8 +402,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 var room = context - reserve - context / 10 - ProjectFiles.PinnedFiles.DeclarationsAllowance
                     - (int)Math.Min(int.MaxValue, MeasureBytes(history, null) / ProjectFiles.ProjectFilesTool.BytesPerToken);
                 var (carried, left) = ProjectFiles.PinnedFiles.Select(pinnedAll.Files, pinLimit, pinRatio, room, pinnedAll.Notes);
-                pinnedSent = carried;
                 var pinnedBlock = ProjectFiles.PinnedFiles.Block(carried, [.. pinnedAll.Notes, .. left]);
+                // Not even the lines fit (a long conversation, a small model): nothing pinned this turn; project_files still reads them.
+                if (ProjectFiles.PinnedFiles.Tokens(ProjectFiles.PinnedFiles.JsonBytes(pinnedBlock), 2) > room) (pinnedBlock, carried) = ("", []);
+                pinnedSent = carried;
                 pinnedActive = pinnedBlock.Length > 0;
                 history = History(Messages, options, block?.Text, pinnedBlock);
             }

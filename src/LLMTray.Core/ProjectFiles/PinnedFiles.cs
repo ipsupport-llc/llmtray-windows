@@ -90,7 +90,7 @@ public static class PinnedFiles
         var used = 0;
         // Kept before any file goes in: the framing and closing, the lines of files without text, and a line for
         // every file (any may be left out), at the estimator's low rate. A few tokens too many, never too few.
-        var overhead = Tokens(JsonBytes(Framing + "\n\n" + Closing), 2)
+        var overhead = Tokens(JsonBytes(Framing + "\n\n\n" + Closing), 2)
             + (notes ?? []).Sum(n => Tokens(JsonBytes(Line(n) + "\n"), 2))
             + files.Sum(f => Tokens(JsonBytes(Line(new PinnedFileNote(f.Doc, f.Name, TooLong: true)) + "\n"), 2));
         foreach (var f in files)

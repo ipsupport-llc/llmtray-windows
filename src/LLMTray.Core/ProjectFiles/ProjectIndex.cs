@@ -348,6 +348,8 @@ public sealed partial class ProjectIndex
     /// <summary>The document's text, in one transaction: the new revision replaces the old.</summary>
     public void SaveExtraction(long doc, IReadOnlyList<ExtractedPage> pages)
     {
+        // Whatever the reader sent: no NUL or other control characters kept (SQLite's length() stops at NUL; sizes count the rest).
+        pages = pages.Select(p => p with { Text = DocumentExtractor.Clean(p.Text) }).ToList();
         var chunks = Chunker.Split(pages);
         var byNumber = pages.ToDictionary(p => p.Number);
         lock (writing)

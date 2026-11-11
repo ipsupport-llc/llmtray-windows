@@ -181,6 +181,7 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
         {
             var (inRoom, outRoom) = PinnedFiles.Select([one, two], 500, 2, room, [new PinnedFileNote(3, "gone.md", TooLong: false)]);
             var rendered = PinnedFiles.Block(inRoom, [new PinnedFileNote(3, "gone.md", TooLong: false), .. outRoom]);
+            // Files chosen: the block fits. None: the caller sends nothing when even the lines don't fit.
             if (inRoom.Count > 0) Assert.True(PinnedFiles.Tokens(PinnedFiles.JsonBytes(rendered), 2) <= room, $"room {room}");
         }
         // The limit: a share of the context, never past what the answer and the margin leave.
