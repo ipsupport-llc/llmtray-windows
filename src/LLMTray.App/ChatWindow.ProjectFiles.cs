@@ -59,6 +59,8 @@ sealed partial class ChatWindow
         var list = new StackPanel { Spacing = 6 };
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
+        var pinNote = Ui.Caption("");
+        pinNote.TextWrapping = TextWrapping.Wrap;
         Button add = null!;
         add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
         var intro = Ui.Caption(L.T("The chats of this project search these files and cite them by page. Drop files here or add them."));
@@ -88,8 +90,6 @@ sealed partial class ChatWindow
             await AddAsync(items.Select(i => i.Path).Where(p => p.Length > 0).ToList());
         };
 
-        var pinNote = Ui.Caption("");
-        pinNote.TextWrapping = TextWrapping.Wrap;
         body.Children.Insert(body.Children.IndexOf(summary) + 1, pinNote);
 
         void Render()
