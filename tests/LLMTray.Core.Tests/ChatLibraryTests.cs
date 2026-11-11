@@ -35,6 +35,21 @@ public sealed class ChatLibraryTests : IDisposable
     }
 
     [Fact]
+    public void BadEntriesDropThemselvesAndDuplicateKeysAreUnreadable()
+    {
+        var id = Guid.NewGuid();
+        var lib = ChatLibrary.Parse($$"""
+            { "projects": [ { "id": "{{id}}", "name": "A" }, { "id": "{{id}}", "name": "again" },
+                            { "id": "{{Guid.NewGuid()}}", "name": "B", "createdAt": "not a date" }, { "id": 5 } ] }
+            """);
+        Assert.Equal("A", Assert.Single(lib.Projects).Name);
+        Assert.Throws<System.Text.Json.JsonException>(() => ChatLibrary.Parse("""{ "projects": [], "projects": [] }"""));
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "library.json"), """{ "pinned": [], "pinned": [] }""");
+        Assert.True(new ChatLibraryStore(root).Unreadable);
+    }
+
+    [Fact]
     public void ReadsTheFlatPairs()
     {
         var chat = Guid.NewGuid();

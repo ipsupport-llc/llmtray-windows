@@ -24,39 +24,71 @@ public sealed class ChatLibrary
 
     public ChatProject? ProjectOf(Guid chat) => ProjectOfChat.TryGetValue(chat, out var p) ? Project(p) : null;
 
-    /// <summary>Read leniently, element by element: one bad entry drops itself, not the file. Throws <see cref="JsonException"/> when it isn't an object at all.</summary>
+    /// <summary>
+    /// Read leniently, element by element, as the Mac decodes it: one bad
+    /// entry drops itself, not the file (a project without an id or with a
+    /// date that doesn't read; a missing date is now). Throws
+    /// <see cref="JsonException"/> when it isn't a JSON object at all.
+    /// </summary>
     public static ChatLibrary Parse(string json)
     {
         var lib = new ChatLibrary();
-        if (JsonNode.Parse(json) is not JsonObject o) throw new JsonException("not an object");
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json);
+        }
+        catch (ArgumentException e)
+        {
+            // Duplicate keys throw this, not a JsonException.
+            throw new JsonException(e.Message, e);
+        }
+        if (root is not JsonObject o) throw new JsonException("not an object");
+        try
+        {
+            Read(o, lib);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException)
+        {
+            throw new JsonException(e.Message, e);
+        }
+        return lib;
+    }
+
+    static void Read(JsonObject o, ChatLibrary lib)
+    {
         foreach (var node in o["projects"] as JsonArray ?? [])
         {
-            if (node is not JsonObject p || !Guid.TryParse(p["id"]?.ToString(), out var id)) continue;
-            var created = DateTimeOffset.TryParse(p["createdAt"]?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var c) ? c : DateTimeOffset.UtcNow;
-            lib.Projects.Add(new ChatProject(id, p["name"]?.ToString() ?? "", created, p["instructions"]?.ToString() ?? ""));
+            if (node is not JsonObject p || !Guid.TryParse(Text(p["id"]), out var id) || lib.Project(id) is not null) continue;
+            DateTimeOffset created;
+            if (p["createdAt"] is null) created = DateTimeOffset.UtcNow;
+            else if (!DateTimeOffset.TryParse(Text(p["createdAt"]), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out created)) continue;
+            lib.Projects.Add(new ChatProject(id, Text(p["name"]) ?? "", created, Text(p["instructions"]) ?? ""));
         }
         foreach (var node in o["pinned"] as JsonArray ?? [])
         {
-            if (Guid.TryParse(node?.ToString(), out var id) && !lib.Pinned.Contains(id)) lib.Pinned.Add(id);
+            if (Guid.TryParse(Text(node), out var id) && !lib.Pinned.Contains(id)) lib.Pinned.Add(id);
         }
         switch (o["projectOfChat"])
         {
             case JsonObject map:
                 foreach (var (chat, project) in map)
                 {
-                    if (Guid.TryParse(chat, out var c) && Guid.TryParse(project?.ToString(), out var p)) lib.ProjectOfChat[c] = p;
+                    if (Guid.TryParse(chat, out var c) && Guid.TryParse(Text(project), out var p)) lib.ProjectOfChat[c] = p;
                 }
                 break;
             case JsonArray flat:
                 // An early Mac build wrote the pairs flat.
                 for (var i = 0; i + 1 < flat.Count; i += 2)
                 {
-                    if (Guid.TryParse(flat[i]?.ToString(), out var c) && Guid.TryParse(flat[i + 1]?.ToString(), out var p)) lib.ProjectOfChat[c] = p;
+                    if (Guid.TryParse(Text(flat[i]), out var c) && Guid.TryParse(Text(flat[i + 1]), out var p)) lib.ProjectOfChat[c] = p;
                 }
                 break;
         }
-        return lib;
     }
+
+    /// <summary>A string value; null for anything else (a number or an object isn't a name).</summary>
+    static string? Text(JsonNode? node) => node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     static string Upper(Guid id) => id.ToString("D").ToUpperInvariant();
 
@@ -115,6 +147,9 @@ public sealed class ChatLibraryStore
     /// <summary>The file couldn't be read: changes aren't saved this session (nothing of it is lost).</summary>
     public bool Unreadable { get; }
 
+    /// <summary>The last change couldn't be written (a full disk, a locked file): it holds until the app quits.</summary>
+    public bool SaveFailed { get; private set; }
+
     public event Action? Changed;
 
     public T Read<T>(Func<ChatLibrary, T> read)
@@ -135,9 +170,11 @@ public sealed class ChatLibraryStore
                     var temp = file + ".tmp";
                     File.WriteAllText(temp, library.ToJson());
                     File.Move(temp, file, overwrite: true);
+                    SaveFailed = false;
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
+                    SaveFailed = true;
                 }
             }
         }

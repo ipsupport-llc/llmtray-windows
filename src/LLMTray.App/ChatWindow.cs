@@ -89,20 +89,29 @@ sealed partial class ChatWindow : Window
         chats.SelectionChanged += (_, _) =>
         {
             if (rendering) return;
-            switch (chats.SelectedItem)
+            // Arrow keys move through every row; only a chat's row opens it (a project's row is opened by a click, Enter or Space).
+            if (chats.SelectedItem is ListViewItem { Tag: ChatSummary summary })
             {
-                case ListViewItem { Tag: ChatSummary summary }:
-                    if (summary.Id != chat.Id) chat.Load(summary.Id);
-                    input.Focus(FocusState.Programmatic);
-                    break;
+                if (summary.Id != chat.Id) chat.Load(summary.Id);
+                input.Focus(FocusState.Programmatic);
+            }
+        };
+        chats.IsItemClickEnabled = true;
+        chats.ItemClick += (_, e) =>
+        {
+            switch (e.ClickedItem)
+            {
                 case ListViewItem { Tag: ChatProject project }:
-                    // A project's row opens or closes its chats.
+                    // A project's row opens or closes its chats; it keeps the focus.
                     if (!collapsed.Remove(project.Id)) collapsed.Add(project.Id);
                     RenderChats();
+                    if (chats.Items.OfType<ListViewItem>().FirstOrDefault(i => i.Tag is ChatProject p && p.Id == project.Id) is { } row)
+                    {
+                        row.Focus(FocusState.Keyboard);
+                    }
                     break;
                 case ListViewItem { Tag: "new-project" }:
                     _ = NewProjectAsync(null);
-                    RenderChatsSelection();
                     break;
             }
         };
@@ -1298,7 +1307,8 @@ sealed partial class ChatWindow : Window
             var query = search.Text.Trim();
             var library = App.Current.ChatLibrary;
             var (projects, pinned, map) = library.Read(l => (l.Projects.ToList(), l.Pinned.ToList(), new Dictionary<Guid, Guid>(l.ProjectOfChat)));
-            var all = store.List().Where(c => query.Length == 0
+            var every = store.List();
+            var all = every.Where(c => query.Length == 0
                 || c.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase)
                 || c.Preview.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
             chats.Items.Clear();
@@ -1314,6 +1324,10 @@ sealed partial class ChatWindow : Window
                 if (library.Unreadable)
                 {
                     chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("The projects file couldn't be read, so changes to projects and pins aren't saved. A copy of it is kept beside it.")), IsEnabled = false });
+                }
+                else if (library.SaveFailed)
+                {
+                    chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("Changes to projects and pins couldn't be saved.")), IsEnabled = false });
                 }
                 foreach (var project in projects.OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase))
                 {
@@ -1345,9 +1359,11 @@ sealed partial class ChatWindow : Window
                 }
                 chats.Items.Add(ChatItem(c, projects, pinned: pinned.Contains(c.Id), indent: false));
             }
-            if (all.Count == 0 && query.Length > 0)
+            if (all.Count == 0)
             {
-                chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("No chat matches.")), IsEnabled = false });
+                // Search: nothing matched. Otherwise only when there's no chat at all (project chats and pins are above).
+                if (query.Length > 0) chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("No chat matches.")), IsEnabled = false });
+                else if (every.Count == 0) chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("Your chats appear here.")), IsEnabled = false });
             }
         }
         finally
