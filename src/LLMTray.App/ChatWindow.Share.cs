@@ -67,12 +67,17 @@ sealed partial class ChatWindow
     /// <summary>Tabs one message may carry: each is up to 6,000 characters of text (they take no picture's place).</summary>
     const int MaxTabs = 4;
 
-    /// <summary>A tab is being read: Send waits (the message would go without it), and another read isn't started.</summary>
-    bool attachingTab;
+    /// <summary>The chat (its epoch) a tab is being read for: Send there waits (the message would go without it); null when none is.</summary>
+    int? attachingTabFor;
+
+    bool attachingTab => attachingTabFor == chat.Epoch;
+
+    /// <summary>A browser that doesn't answer (hung, a modal up): the read is given up, the composer free again.</summary>
+    static readonly TimeSpan TabReadTime = TimeSpan.FromSeconds(10);
 
     async Task<SharedContext?> AttachTabAsync()
     {
-        if (attachingTab) return null;
+        if (attachingTabFor is not null) return null;
         if (pendingShared.Count(s => s.Png is null) >= MaxTabs)
         {
             ShowAttachProblem(L.F("At most {0} browser tabs a message.", MaxTabs));
@@ -80,10 +85,20 @@ sealed partial class ChatWindow
         }
         var epoch = chat.Epoch;
         CurrentTab tab;
-        attachingTab = true;
+        attachingTabFor = epoch;
+        attachNote.Text = L.T("Reading the tab…");
+        attachNote.Foreground = Ui.Secondary;
+        attachNote.Visibility = Visibility.Visible;
+        using var timeout = new CancellationTokenSource(TabReadTime);
         try
         {
-            tab = await BrowserTab.ReadAsync(CancellationToken.None);
+            tab = await BrowserTab.ReadAsync(timeout.Token).WaitAsync(TabReadTime);
+            attachNote.Visibility = Visibility.Collapsed;
+        }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException)
+        {
+            if (epoch == chat.Epoch) ShowAttachProblem(L.T("The browser didn't answer in time. Try again in a moment."));
+            return null;
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
@@ -93,7 +108,7 @@ sealed partial class ChatWindow
         }
         finally
         {
-            attachingTab = false;
+            attachingTabFor = null;
         }
         if (epoch != chat.Epoch || pendingShared.Count(s => s.Png is null) >= MaxTabs) return null;
         var shared = SharedContext.Make(SharedKind.BrowserTab, tab.Title, tab.Address, tab.Text, hasPicture: false);

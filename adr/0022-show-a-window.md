@@ -72,8 +72,9 @@ Opera or Firefox. If another app was in front, the composer says so.
   user's click is the consent, as with the picker.
 - **No text** (a browser that doesn't give it): the tab still goes, with
   its title and address only (`titleOnly`), and the composer says so.
-- **While a tab is read, Send waits**, so the message doesn't go without
-  it. A message takes at most four tabs, and they take no picture's
+- **While a tab is read** (the composer says so), Send in that chat does
+  nothing, so the message doesn't go without it. A browser that doesn't
+  answer within 10 seconds is given up on. A message takes at most four tabs, and they take no picture's
   place.
 - **In the message**, it is a shared item like a window (the Mac's
   `browserTab` kind): a chip with a globe and the page title, the page's

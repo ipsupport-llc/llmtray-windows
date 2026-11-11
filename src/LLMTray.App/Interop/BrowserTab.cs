@@ -42,6 +42,8 @@ static partial class BrowserTab
         var (_, browser) = window.Browser
             ?? throw new BrowserTabException("The window in front isn't a browser. Bring the browser tab to the front, then attach it.");
         var title = CleanTitle(window.Title, browser);
+        // What the page's document is looked up by stays the window's: a wrong document's name never steers the retry.
+        var lookups = LookupTitles(title);
         string address = "";
         string? text = null;
         IUIAutomation automation;
@@ -70,7 +72,7 @@ static partial class BrowserTab
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var (name, read) = PageText(automation, root, title);
+                var (name, read) = PageText(automation, root, lookups);
                 if (!string.IsNullOrWhiteSpace(read)) text = read;
                 // The page's own title (the document's name) over the window's, which may carry a profile's name.
                 if (!string.IsNullOrWhiteSpace(name)) title = name.Trim();
@@ -97,7 +99,8 @@ static partial class BrowserTab
         onForeground = (_, _, hwnd, _, _, _, _) =>
         {
             GetWindowThreadProcessId(hwnd, out var pid);
-            if (hwnd != IntPtr.Zero && pid != (uint)Environment.ProcessId) lastForeign = hwnd;
+            // Only a window the user works in: Start, the task switcher or an always-on-top tool passing by isn't one.
+            if (hwnd != IntPtr.Zero && pid != (uint)Environment.ProcessId && Candidate(hwnd, (uint)Environment.ProcessId)) lastForeign = hwnd;
         };
         hook = SetWinEventHook(EventSystemForeground, EventSystemForeground, IntPtr.Zero, onForeground, 0, 0, WinEventOutOfContext);
     }
@@ -118,8 +121,6 @@ static partial class BrowserTab
         }
         for (var hwnd = GetTopWindow(IntPtr.Zero); hwnd != IntPtr.Zero; hwnd = GetWindow(hwnd, GwHwndNext))
         {
-            // Always-on-top windows aren't where the user was working.
-            if ((GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExTopmost) != 0) continue;
             if (Candidate(hwnd, own)) return Describe(hwnd);
         }
         return null;
@@ -130,7 +131,8 @@ static partial class BrowserTab
     {
         if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return false;
         if (DwmGetWindowAttribute(hwnd, DwmwaCloaked, out var cloaked, sizeof(int)) == 0 && cloaked != 0) return false;
-        if ((GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExToolWindow) != 0) return false;
+        // Tool windows and always-on-top ones (a pinned utility, a call's mini window) aren't where the user was working.
+        if ((GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & (WsExToolWindow | WsExTopmost)) != 0) return false;
         if (GetWindow(hwnd, GwOwner) != IntPtr.Zero) return false;
         if (GetWindowTextLength(hwnd) == 0) return false;
         GetWindowThreadProcessId(hwnd, out var pid);
@@ -201,7 +203,36 @@ static partial class BrowserTab
     /// The page: the document named as the window's title says (the tab's web content, not a sidebar's or tools'),
     /// else the first document. Its name (the page's title) and its text through its text pattern.
     /// </summary>
-    static (string? Name, string? Text) PageText(IUIAutomation automation, IUIAutomationElement root, string title)
+    /// <summary>
+    /// The names the page's document may have: the cleaned title, and without a last " - …" part (Edge and Chrome
+    /// put the profile's name there when there are several: "Page - Personal").
+    /// </summary>
+    static List<string> LookupTitles(string title)
+    {
+        var names = new List<string>();
+        if (title.Length > 0) names.Add(title);
+        var cut = Math.Max(title.LastIndexOf(" - ", StringComparison.Ordinal), title.LastIndexOf(" — ", StringComparison.Ordinal));
+        if (cut > 0) names.Add(title[..cut].Trim());
+        return names;
+    }
+
+    static (string? Name, string? Text) PageText(IUIAutomation automation, IUIAutomationElement root, IReadOnlyList<string> titles)
+    {
+        IUIAutomationElement? document = null;
+        foreach (var title in titles)
+        {
+            document = DocumentNamed(automation, root, title);
+            if (document is not null) break;
+        }
+        document ??= Find(automation, root, ControlTypePropertyId, DocumentControlTypeId);
+        if (document is null) return (null, null);
+        var name = document.get_CurrentName(out var n) == 0 ? n : null;
+        if (document.GetCurrentPattern(TextPatternId, out var raw) != 0 || raw is not IUIAutomationTextPattern pattern) return (name, null);
+        if (pattern.get_DocumentRange(out var range) != 0 || range is null) return (name, null);
+        return (name, range.GetText(MaxRead, out var text) == 0 ? text : null);
+    }
+
+    static IUIAutomationElement? DocumentNamed(IUIAutomation automation, IUIAutomationElement root, string title)
     {
         IUIAutomationElement? document = null;
         if (title.Length > 0 && automation.CreatePropertyCondition(ControlTypePropertyId, DocumentControlTypeId, out var isDocument) == 0)
@@ -235,12 +266,7 @@ static partial class BrowserTab
                 Marshal.Release(isDocument);
             }
         }
-        document ??= Find(automation, root, ControlTypePropertyId, DocumentControlTypeId);
-        if (document is null) return (null, null);
-        var name = document.get_CurrentName(out var n) == 0 ? n : null;
-        if (document.GetCurrentPattern(TextPatternId, out var raw) != 0 || raw is not IUIAutomationTextPattern pattern) return (name, null);
-        if (pattern.get_DocumentRange(out var range) != 0 || range is null) return (name, null);
-        return (name, range.GetText(MaxRead, out var text) == 0 ? text : null);
+        return document;
     }
 
     // ---- UI Automation, the few calls used (UIAutomationClient.h; slots before them kept in order) ----

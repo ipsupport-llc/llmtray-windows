@@ -267,8 +267,10 @@ jobs:
           if (Test-Path (Join-Path $shots 'tab.txt')) { Get-Content (Join-Path $shots 'tab.txt') }
           # Attach Current Tab (adr/0022) must read the demo page's text where a browser can be in front (x64;
           # the ARM64 runner's screen is covered by Windows' first-run setup).
-          if ('${{ matrix.platform }}' -eq 'x64' -and -not ((Get-Content (Join-Path $shots 'tab.txt') -Raw) -match 'HomeNet')) { throw 'the browser tab was not read' }
+          $tabFile = Join-Path $shots 'tab.txt'
+          $tabRead = (Test-Path $tabFile) -and ((Get-Content $tabFile -Raw) -match 'HomeNet')
           Stop-Process -Name LLMTray -Force
+          if ('${{ matrix.platform }}' -eq 'x64' -and -not $tabRead) { throw 'the browser tab was not read' }
           # The bad command's exit code 2 is still in $LASTEXITCODE: the step itself passed.
           exit 0
       # The installer (adr/0007): installed silently for this user, started, the API checked, uninstalled.
