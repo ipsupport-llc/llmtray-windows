@@ -176,6 +176,13 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
         var (files, left) = PinnedFiles.Select([one, two], limitTokens: 500, bytesPerToken: 2, roomTokens: 10_000);
         Assert.Equal([1L], files.Select(f => f.Doc));
         Assert.Equal([2L], left.Select(n => n.Doc));
+        // The whole block always fits the room it was chosen for, notes included.
+        foreach (var room in new[] { 60, 113, 200, 400 })
+        {
+            var (inRoom, outRoom) = PinnedFiles.Select([one, two], 500, 2, room, [new PinnedFileNote(3, "gone.md", TooLong: false)]);
+            var rendered = PinnedFiles.Block(inRoom, [new PinnedFileNote(3, "gone.md", TooLong: false), .. outRoom]);
+            if (inRoom.Count > 0) Assert.True(PinnedFiles.Tokens(PinnedFiles.JsonBytes(rendered), 2) <= room, $"room {room}");
+        }
         // The limit: a share of the context, never past what the answer and the margin leave.
         Assert.Equal(16_000, PinnedFiles.LimitTokens(32_000, 1_000, 0.5));
         Assert.Equal(32_000 - 8_000 - 3_200, PinnedFiles.LimitTokens(32_000, 100_000, 0.9));
@@ -186,7 +193,7 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
     [Fact]
     public void ThePinSizeCountedInSqlMatchesTheText()
     {
-        var doc = AddText("mixed.txt", "Договор \"A\"\nline\ttab\\back", "second page / slash");
+        var doc = AddText("mixed.txt", "Договор \"A\"\nline\ttab\\back\u00A0nbsp\u2028", "second page / slash");
         var (files, _) = PinnedFilesOf(doc);
         Assert.Equal(PinnedFiles.Bytes(files.Single()), service.Index(project)!.PinBytes()[doc]);
 

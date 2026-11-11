@@ -42,9 +42,18 @@ public static class PinnedFiles
     }
 
     /// <summary>The text's bytes inside a request's JSON (escaped, UTF-8).</summary>
-    static readonly JsonSerializerOptions Measure = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
-    public static int JsonBytes(string text) => text.Length == 0 ? 0 : JsonSerializer.SerializeToUtf8Bytes(text, Measure).Length - 2;
+    /// <summary>
+    /// A text's size in a request: its UTF-8 bytes plus one for each
+    /// character JSON writes with a backslash (", \, newline, tab, CR). The
+    /// same rule the index counts in SQL, so the two always agree; extracted
+    /// text holds no other control characters.
+    /// </summary>
+    public static int JsonBytes(string text)
+    {
+        var escaped = 0;
+        foreach (var c in text) if (c is '"' or '\\' or '\n' or '\t' or '\r') escaped++;
+        return System.Text.Encoding.UTF8.GetByteCount(text) + escaped;
+    }
 
     public static int Bytes(PinnedFileText f) => JsonBytes(Render(f));
 
@@ -73,13 +82,17 @@ public static class PinnedFiles
     /// left of the limit and the request's room; the rest are notes. The
     /// framing and each note's line count against the room too.
     /// </summary>
-    public static (List<PinnedFileText> Files, List<PinnedFileNote> Left) Select(IReadOnlyList<PinnedFileText> files, int limitTokens, double bytesPerToken, int roomTokens)
+    public static (List<PinnedFileText> Files, List<PinnedFileNote> Left) Select(IReadOnlyList<PinnedFileText> files, int limitTokens, double bytesPerToken, int roomTokens,
+        IReadOnlyList<PinnedFileNote>? notes = null)
     {
         var included = new List<PinnedFileText>();
         var left = new List<PinnedFileNote>();
         var used = 0;
-        // The framing and closing lines, counted at the estimator's low rate.
-        var overhead = Tokens(JsonBytes(Framing + "\n\n" + Closing), 2);
+        // Kept before any file goes in: the framing and closing, the lines of files without text, and a line for
+        // every file (any may be left out), at the estimator's low rate. A few tokens too many, never too few.
+        var overhead = Tokens(JsonBytes(Framing + "\n\n" + Closing), 2)
+            + (notes ?? []).Sum(n => Tokens(JsonBytes(Line(n) + "\n"), 2))
+            + files.Sum(f => Tokens(JsonBytes(Line(new PinnedFileNote(f.Doc, f.Name, TooLong: true)) + "\n"), 2));
         foreach (var f in files)
         {
             var t = Tokens(Bytes(f), bytesPerToken);
@@ -90,9 +103,7 @@ public static class PinnedFiles
             }
             else
             {
-                var note = new PinnedFileNote(f.Doc, f.Name, TooLong: true);
-                left.Add(note);
-                overhead += Tokens(JsonBytes(Line(note) + "\n"), 2);
+                left.Add(new PinnedFileNote(f.Doc, f.Name, TooLong: true));
             }
         }
         return (included, left);

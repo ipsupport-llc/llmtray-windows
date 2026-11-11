@@ -401,7 +401,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 // The tools' declarations aren't built yet: a share of the room is kept for them.
                 var room = context - reserve - context / 10 - ProjectFiles.PinnedFiles.DeclarationsAllowance
                     - (int)Math.Min(int.MaxValue, MeasureBytes(history, null) / ProjectFiles.ProjectFilesTool.BytesPerToken);
-                var (carried, left) = ProjectFiles.PinnedFiles.Select(pinnedAll.Files, pinLimit, pinRatio, room);
+                var (carried, left) = ProjectFiles.PinnedFiles.Select(pinnedAll.Files, pinLimit, pinRatio, room, pinnedAll.Notes);
                 pinnedSent = carried;
                 var pinnedBlock = ProjectFiles.PinnedFiles.Block(carried, [.. pinnedAll.Notes, .. left]);
                 pinnedActive = pinnedBlock.Length > 0;
