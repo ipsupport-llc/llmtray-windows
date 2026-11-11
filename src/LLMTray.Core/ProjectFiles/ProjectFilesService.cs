@@ -134,6 +134,11 @@ public sealed class ProjectFilesService : IAsyncDisposable
             {
                 results.Add(new AddResult(name, null, "couldn't be read: " + e.Message));
             }
+            catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+            {
+                // The index is busy or the project went meanwhile: this file isn't added, the others still are.
+                results.Add(new AddResult(name, null, "couldn't be added: " + e.Message));
+            }
         }
         Changed?.Invoke(project);
         Poke();
@@ -171,12 +176,13 @@ public sealed class ProjectFilesService : IAsyncDisposable
     /// </summary>
     public void DeleteProject(Guid project)
     {
-        Cancel(project, null);
         var folder = Folder(project);
         lock (sync)
         {
-            // The record first, under the lock Index() checks it with: nothing reopens the project from here on.
+            // The record first, under the lock Index() and the worker's start check it with: nothing reopens
+            // the project from here on, and a step already running is cancelled.
             deleted.Add(project);
+            if (currentProject == project) current?.Cancel();
             if (Directory.Exists(folder))
             {
                 Directory.CreateDirectory(root);
@@ -259,9 +265,11 @@ public sealed class ProjectFilesService : IAsyncDisposable
                         // The document was removed or the project deleted meanwhile.
                         didWork = true;
                     }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+                    catch (Exception e) when (e is not OperationCanceledException)
                     {
-                        // The project's folder is unavailable now: tried again later.
+                        // The project's folder is unavailable now, or something unforeseen: this project is
+                        // tried again later, and the worker goes on with the others.
+                        _ = e;
                         SetActivity(project, null);
                     }
                 }
@@ -285,6 +293,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
         using var work = CancellationTokenSource.CreateLinkedTokenSource(stop);
         lock (sync)
         {
+            // Deleted between taking the index and now: nothing starts in it.
+            if (deleted.Contains(project)) return false;
             current = work;
             currentProject = project;
         }
@@ -319,9 +329,9 @@ public sealed class ProjectFilesService : IAsyncDisposable
                     index.Requeue(doc.Doc);
                     throw;
                 }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+                catch (Exception e) when (e is not OperationCanceledException)
                 {
-                    // Never left "being read": it fails with the reason, and Read Again tries it again.
+                    // Never left "being read" (whatever went wrong): it fails with the reason, and Read Again tries it again.
                     index.Fail(doc.Doc, DocumentStatus.Failed, "couldn't be read: " + e.Message);
                 }
                 Changed?.Invoke(project);
@@ -358,9 +368,11 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 SetActivity(project, null);
                 return false;
             }
-            if (vectors.Length > 0 && vectors[0].Length != EmbedModel.Dimensions)
+            if (vectors.Length != batch.Chunks.Count || vectors.Any(v => v.Length != EmbedModel.Dimensions))
             {
-                set = index.VectorSet(embed.Id, vectors[0].Length);
+                // Not what this embedder gives: treated as an embedder that can't run now, not retried in a loop.
+                SetActivity(project, null);
+                return false;
             }
             index.SaveVectors(set, batch.Doc, batch.Rev, batch.Chunks.Select(c => c.Id).ToList(), vectors.Select(Normalized).ToList());
             Changed?.Invoke(project);

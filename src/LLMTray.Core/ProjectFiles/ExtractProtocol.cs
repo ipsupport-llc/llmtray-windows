@@ -145,6 +145,8 @@ public static class ExtractProtocol
         // The child keeps the caps too; the parent doesn't count on it.
         chars += text.Length;
         if (chars > limits.MaxTextChars) throw new ExtractException("too large: too much text");
+        // Pages come in order, numbered from 1: anything else isn't this reader's output.
+        if (number < 1 || (pages.Count > 0 && number <= pages[^1].Number)) throw new ExtractException("the reader's output didn't read");
         var label = o["l"] is JsonValue l && l.TryGetValue<string>(out var s) ? s : null;
         pages.Add(new ExtractedPage(number, text, label, o["tab"] is JsonValue tab && tab.TryGetValue<bool>(out var b) && b));
         return null;
