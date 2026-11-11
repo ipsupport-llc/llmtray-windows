@@ -273,6 +273,21 @@ public sealed class ProjectFilesTests : IDisposable
         Assert.Equal(DocumentStatus.Staged, reopened.Document(doc)!.Status);
         Assert.Empty(Directory.GetFiles(Path.Combine(folder, "staging")));
         Assert.Single(Directory.GetFiles(reopened.FilesFolder));
+        // A row still copying when the app stopped goes with its copy.
+        var b = Path.Combine(root, "b.txt");
+        File.WriteAllText(b, "beta");
+        var docB = reopened.Add(b, DocumentFormat.Text);
+        using (var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(folder, "index.sqlite")};Pooling=False"))
+        {
+            db.Open();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = $"UPDATE documents SET status = 'copying' WHERE doc = {docB}";
+            cmd.ExecuteNonQuery();
+        }
+        var again = new ProjectIndex(folder);
+        Assert.Null(again.Document(docB));
+        Assert.False(File.Exists(again.CopyPath(docB, "txt")));
+        reopened = again;
         // A row whose copy is gone goes too.
         File.Delete(reopened.CopyPath(doc, "txt"));
         Assert.Empty(new ProjectIndex(folder).Documents());

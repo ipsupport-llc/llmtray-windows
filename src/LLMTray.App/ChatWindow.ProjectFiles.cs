@@ -18,6 +18,7 @@ sealed partial class ChatWindow
     {
         DocumentStatus.Embedded => d.Reindex ? L.T("Ready · reading again") : L.T("Ready"),
         DocumentStatus.Searchable => App.Current.Embedder.IsInstalled ? L.T("Ready (words) · indexing meaning") : L.T("Ready (words only)"),
+        DocumentStatus.Copying => L.T("Copying…"),
         DocumentStatus.Staged => L.T("Waiting"),
         DocumentStatus.Extracting => L.T("Reading…"),
         DocumentStatus.Empty => L.T("No text (a scan or a picture?)"),
@@ -103,7 +104,7 @@ sealed partial class ChatWindow
                 detail.TextWrapping = TextWrapping.Wrap;
                 var open = Ui.Button(L.T("Open"), () => OpenCopy(project.Id, doc));
                 var again = Ui.Button(L.T("Read Again"), () => app.ProjectFiles.Reindex(project.Id, doc));
-                again.IsEnabled = d.Status is not (DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
+                again.IsEnabled = d.Status is not (DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
                 var remove = Ui.Button(L.T("Remove"), () => app.ProjectFiles.Remove(project.Id, doc));
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(remove, L.F("Remove {0}", d.Name));
                 var row = new Grid { ColumnSpacing = 8 };

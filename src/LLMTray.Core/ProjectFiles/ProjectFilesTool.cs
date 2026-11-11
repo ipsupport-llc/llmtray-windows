@@ -87,6 +87,19 @@ public static class ProjectFilesTool
         {
             return Fail("refused: this chat is no longer in that project");
         }
+        try
+        {
+            return await RunAsync(call, turn, index, requestTokens, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // The project was deleted meanwhile, or its index is unavailable.
+            return Fail("the project's files can't be read now");
+        }
+    }
+
+    static async Task<ToolOutcome> RunAsync(ToolCall call, ProjectTurn turn, ProjectIndex index, int requestTokens, CancellationToken cancellationToken)
+    {
         var a = ToolArguments.Parse(call.Arguments, Full);
         if (a.ErrorMessage(Full) is { } error) return Fail(error);
         var room = Room(turn, requestTokens);
@@ -144,7 +157,7 @@ public static class ProjectFilesTool
     {
         DocumentStatus.Embedded => "ready",
         DocumentStatus.Searchable => "ready (searched by words; by meaning once indexed)",
-        DocumentStatus.Staged or DocumentStatus.Extracting => "being read",
+        DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting => "being read",
         DocumentStatus.Empty => "no text (a scan or an image?)",
         DocumentStatus.Failed => "failed: " + (d.Error ?? "unknown"),
         DocumentStatus.Unsupported => "not supported: " + (d.Error ?? ""),
@@ -178,7 +191,7 @@ public static class ProjectFilesTool
         var result = new JsonObject { ["note"] = Note, ["results"] = results };
         var docs = index.Documents();
         if (wordsOnly && hits.Count > 0) result["searched"] = "by words only (meaning search isn't available now)";
-        var waiting = docs.Where(d => d.Status is DocumentStatus.Staged or DocumentStatus.Extracting).Select(d => d.Name).ToList();
+        var waiting = docs.Where(d => d.Status is DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting).Select(d => d.Name).ToList();
         if (waiting.Count > 0) result["not_searched_yet"] = new JsonArray(waiting.Take(10).Select(n => (JsonNode)JsonValue.Create(n)!).ToArray());
         foreach (var hit in hits)
         {
@@ -187,16 +200,17 @@ public static class ProjectFilesTool
             var entry = new JsonObject { ["cite"] = cite, ["file"] = hit.Name, ["page"] = hit.Page };
             if (hit.Label is { Length: > 0 } label) entry["part"] = label;
             if (hit.Heading.Length > 0) entry["heading"] = hit.Heading;
-            if (!turn.Returned.Add(key))
-            {
-                entry["text"] = "(shown earlier in this answer)";
-            }
-            else
-            {
-                entry["text"] = hit.Text;
-            }
+            var repeat = !turn.Returned.Add(key);
+            entry["text"] = repeat ? "(shown earlier in this answer)" : hit.Text;
             results.Add(entry);
             var size = Tokens(SelectableTool.Json(result));
+            if (size > room && repeat)
+            {
+                // A repeat that doesn't fit is left out, never sent again in full.
+                results.RemoveAt(results.Count - 1);
+                result["more"] = "more results didn't fit: narrow the query or read pages";
+                break;
+            }
             if (size > room)
             {
                 // The last hit cut to what fits, marked; the rest left out.
@@ -211,11 +225,11 @@ public static class ProjectFilesTool
                     break;
                 }
                 entry["text"] = text[..Math.Min(text.Length, keep)] + " …[cut]";
-                Cite(turn, hit.Doc, index.Document(hit.Doc)?.Rev ?? 0, hit.Page, hit.Chunk, hit.Name);
+                Cite(turn, hit.Doc, hit.Rev, hit.Page, hit.Chunk, hit.Name);
                 result["more"] = "more results didn't fit: narrow the query or read pages";
                 break;
             }
-            Cite(turn, hit.Doc, index.Document(hit.Doc)?.Rev ?? 0, hit.Page, hit.Chunk, hit.Name);
+            Cite(turn, hit.Doc, hit.Rev, hit.Page, hit.Chunk, hit.Name);
         }
         if (results.Count == 0) result["results"] = docs.Any(d => DocumentStatus.IsReady(d.Status)) ? "nothing found" : "no file is searchable yet";
         return SelectableTool.Json(result);
@@ -247,6 +261,8 @@ public static class ProjectFilesTool
         var read = new JsonArray();
         var result = new JsonObject { ["note"] = Note, ["doc"] = doc, ["file"] = d.Name, ["pages_in_file"] = d.Pages, ["text"] = read };
         var budget = room * BytesPerToken - Encoding.UTF8.GetByteCount(SelectableTool.Json(result)) - 200;
+        // The last page shown whole: where the read goes on when nothing was cut.
+        var shownThrough = page - 1;
         foreach (var p in texts)
         {
             var start = p.Page == page ? Math.Clamp(offset, 0, p.Text.Length) : 0;
@@ -272,15 +288,18 @@ public static class ProjectFilesTool
                 turn.Returned.Add($"p{doc}:{d.Rev}:{p.Page}:{start}");
                 Cite(turn, doc, d.Rev, p.Page, null, d.Name);
                 if (keep < text.Length) result["next"] = $"{doc}:{d.Rev}:{p.Page}:{start + keep}:{lastPage}";
+                else shownThrough = p.Page;
                 break;
             }
             entry["text"] = text;
             read.Add(entry);
             budget -= cost;
+            shownThrough = p.Page;
             turn.Returned.Add($"p{doc}:{d.Rev}:{p.Page}:{start}");
             Cite(turn, doc, d.Rev, p.Page, null, d.Name);
         }
-        if (result["next"] is null && texts[^1].Page < Math.Min(lastPage, d.Pages)) result["next"] = $"{doc}:{d.Rev}:{texts[^1].Page + 1}:0:{lastPage}";
+        // Not cut inside a page: go on after the last page shown, if the range has more.
+        if (result["next"] is null && shownThrough < Math.Min(lastPage, d.Pages)) result["next"] = $"{doc}:{d.Rev}:{shownThrough + 1}:0:{lastPage}";
         if (result["next"] is not null) result["unread"] = "the rest isn't read yet: continue with cursor, or say what you haven't read";
         return Ok(SelectableTool.Json(result));
     }

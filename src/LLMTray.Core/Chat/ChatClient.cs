@@ -460,8 +460,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
                         {
                             outcome = await ProjectFiles.ProjectFilesTool.RunAsync(call, projectTurn, RequestTokens(), token).ConfigureAwait(false);
-                            // File text read: it stays on this PC for the rest of the turn.
-                            if (!outcome.Failed) projectText = outsideText = true;
+                            // File text read (an error names files too): it stays on this PC for the rest of the turn.
+                            projectText = outsideText = true;
                         }
                         else if (folderTurn is not null && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var change))
                         {

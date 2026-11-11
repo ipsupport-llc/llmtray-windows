@@ -7,6 +7,8 @@ namespace LLMTray.Core.ProjectFiles;
 
 public static class DocumentStatus
 {
+    /// <summary>The copy is being made: nothing reads the row until it's <see cref="Staged"/>.</summary>
+    public const string Copying = "copying";
     public const string Staged = "staged";
     public const string Extracting = "extracting";
     /// <summary>Found by words; meaning search after embedding.</summary>
@@ -23,7 +25,7 @@ public static class DocumentStatus
 public sealed record ProjectDocument(long Doc, long Rev, string Name, string Ext, string Format, string? Sha256, long Bytes,
     DateTimeOffset AddedAt, string Status, int Pages, string? Error, bool Reindex);
 
-public sealed record SearchHit(long Doc, string Name, int Page, string? Label, string Heading, long Chunk, string Text, bool WordsOnly);
+public sealed record SearchHit(long Doc, long Rev, string Name, int Page, string? Label, string Heading, long Chunk, string Text, bool WordsOnly);
 
 public sealed record PageText(int Page, string? Label, string Text);
 
@@ -52,7 +54,9 @@ public sealed class ProjectIndex
     string DatabaseFile => Path.Combine(Folder, "index.sqlite");
     readonly string connectionString;
     readonly object writing = new();
-    VectorCache? vectors;
+    volatile VectorCache? vectors;
+    /// <summary>Raised under <see cref="writing"/> with every change to vectors or documents: a load that began before it isn't kept.</summary>
+    long vectorGeneration;
 
     public ProjectIndex(string folder)
     {
@@ -179,7 +183,8 @@ public sealed class ProjectIndex
             }
             foreach (var d in docs.Values)
             {
-                if (d.Status == DocumentStatus.Removing || !File.Exists(CopyPath(d.Doc, d.Ext)))
+                // A copy cut short (copying), a removal cut short, or a row whose copy is gone.
+                if (d.Status is DocumentStatus.Removing or DocumentStatus.Copying || !File.Exists(CopyPath(d.Doc, d.Ext)))
                 {
                     DeleteRows(db, d.Doc);
                     TryDelete(CopyPath(d.Doc, d.Ext));
@@ -246,7 +251,7 @@ public sealed class ProjectIndex
             using var db = Open();
             if (Convert.ToInt64(Scalar(db, "SELECT count(*) FROM documents")) >= MaxDocuments) throw new AddRefusedException($"the project has {MaxDocuments} files already");
             doc = Convert.ToInt64(Scalar(db,
-                "INSERT INTO documents(name, ext, format, bytes, added_at, status) VALUES ($n, $e, $f, $b, $a, 'staged') RETURNING doc", null,
+                "INSERT INTO documents(name, ext, format, bytes, added_at, status) VALUES ($n, $e, $f, $b, $a, 'copying') RETURNING doc", null,
                 ("$n", Path.GetFileName(source)), ("$e", ext), ("$f", format.ToString()), ("$b", info.Length), ("$a", DateTimeOffset.UtcNow.ToString("O"))));
         }
         var part = Path.Combine(StagingFolder, doc + ".part");
@@ -275,7 +280,13 @@ public sealed class ProjectIndex
                 var same = Scalar(db, "SELECT name FROM documents WHERE sha256 = $h AND doc <> $d AND status <> 'removing'", null, ("$h", hash), ("$d", doc));
                 if (same is string other) throw new AddRefusedException($"already in the project as {other}");
                 File.Move(part, CopyPath(doc, ext));
-                Exec(db, "UPDATE documents SET sha256 = $h WHERE doc = $d", null, ("$h", hash), ("$d", doc));
+                // Hash and status together: until now the row was 'copying' (deleted with its copy by a reconcile).
+                if (Convert.ToInt64(Scalar(db, "UPDATE documents SET sha256 = $h, status = 'staged' WHERE doc = $d AND status = 'copying' RETURNING 1", null, ("$h", hash), ("$d", doc)) ?? 0L) != 1)
+                {
+                    // Removed while it was copied.
+                    TryDelete(CopyPath(doc, ext));
+                    throw new AddRefusedException("removed while it was added");
+                }
             }
             return doc;
         }
@@ -305,6 +316,16 @@ public sealed class ProjectIndex
         {
             using var db = Open();
             Exec(db, "UPDATE documents SET reindex = 1 WHERE doc = $d AND status <> 'removing'", null, ("$d", doc));
+        }
+    }
+
+    /// <summary>A read cut short (the app stopping, another file's removal): read again later.</summary>
+    public void Requeue(long doc)
+    {
+        lock (writing)
+        {
+            using var db = Open();
+            Exec(db, "UPDATE documents SET status = 'staged' WHERE doc = $d AND status = 'extracting'", null, ("$d", doc));
         }
     }
 
@@ -361,6 +382,7 @@ public sealed class ProjectIndex
                 ("$r", rev), ("$s", status), ("$p", pages.Count), ("$d", doc));
             tx.Commit();
             vectors = null;
+            vectorGeneration++;
         }
     }
 
@@ -394,6 +416,7 @@ public sealed class ProjectIndex
             using var db = Open();
             DeleteRows(db, doc);
             vectors = null;
+            vectorGeneration++;
         }
     }
 
@@ -429,6 +452,7 @@ public sealed class ProjectIndex
                     Exec(db, "UPDATE vec_sets SET active = (set_id = $s)", tx, ("$s", found));
                     tx.Commit();
                     vectors = null;
+                    vectorGeneration++;
                 }
                 return found;
             }
@@ -437,6 +461,7 @@ public sealed class ProjectIndex
             var id = Convert.ToInt64(Scalar(db, "INSERT INTO vec_sets(model, dim, active) VALUES ($m, $n, 1) RETURNING set_id", t, ("$m", model), ("$n", dim)));
             t.Commit();
             vectors = null;
+            vectorGeneration++;
             return id;
         }
     }
@@ -503,6 +528,7 @@ public sealed class ProjectIndex
             tx.Commit();
             MarkEmbedded(db, set);
             vectors = null;
+            vectorGeneration++;
         }
     }
 
@@ -518,6 +544,8 @@ public sealed class ProjectIndex
     VectorCache? LoadVectors(SqliteConnection db)
     {
         if (vectors is { } cached) return cached;
+        long generation;
+        lock (writing) generation = vectorGeneration;
         if (Scalar(db, "SELECT set_id FROM vec_sets WHERE active = 1") is not long set) return null;
         var dim = Convert.ToInt32(Scalar(db, "SELECT dim FROM vec_sets WHERE set_id = $s", null, ("$s", set)));
         var ids = new List<long>();
@@ -538,7 +566,13 @@ public sealed class ProjectIndex
             ids.AddRange(MemoryMarshal.Cast<byte, long>(idBytes).ToArray());
             values.AddRange(MemoryMarshal.Cast<byte, Half>(v).ToArray());
         }
-        return vectors = new VectorCache(set, dim, ids.ToArray(), values.ToArray());
+        var loaded = new VectorCache(set, dim, ids.ToArray(), values.ToArray());
+        // Kept only if nothing changed while it loaded; otherwise used for this search alone.
+        lock (writing)
+        {
+            if (vectorGeneration == generation) vectors = loaded;
+        }
+        return loaded;
     }
 
     /// <summary>The model the active set was made with, or null before any.</summary>
@@ -584,7 +618,8 @@ public sealed class ProjectIndex
         }
         if (queryVector is not null && LoadVectors(db) is { } cache && cache.Dim == queryVector.Length && cache.Ids.Length > 0)
         {
-            Fuse(Dense(cache, queryVector, onlyDoc is null ? ListDepth : ListDepth * 4), dense);
+            // One document asked for: only its chunks are ranked by meaning (a global top list could leave it out).
+            Fuse(Dense(cache, queryVector, ListDepth, onlyDoc is { } d ? ChunkIds(db, d) : null), dense);
         }
         if (scores.Count == 0) return [];
         var hits = new List<SearchHit>();
@@ -622,7 +657,18 @@ public sealed class ProjectIndex
         return ids;
     }
 
-    static IEnumerable<long> Dense(VectorCache cache, float[] query, int depth)
+    static HashSet<long> ChunkIds(SqliteConnection db, long doc)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT id FROM chunks WHERE doc = $d";
+        cmd.Parameters.AddWithValue("$d", doc);
+        using var r = cmd.ExecuteReader();
+        var ids = new HashSet<long>();
+        while (r.Read()) ids.Add(r.GetInt64(0));
+        return ids;
+    }
+
+    static IEnumerable<long> Dense(VectorCache cache, float[] query, int depth, HashSet<long>? only)
     {
         var dim = cache.Dim;
         var n = cache.Ids.Length;
@@ -640,14 +686,14 @@ public sealed class ProjectIndex
             scores[i] = s;
             return buffer;
         }, _ => { });
-        return Enumerable.Range(0, n).OrderByDescending(i => scores[i]).Take(depth).Select(i => cache.Ids[i]);
+        return Enumerable.Range(0, n).Where(i => only is null || only.Contains(cache.Ids[i])).OrderByDescending(i => scores[i]).Take(depth).Select(i => cache.Ids[i]);
     }
 
     static SearchHit? Hit(SqliteConnection db, long id, bool wordsOnly)
     {
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
-            SELECT c.doc, d.name, c.page, p.label, c.heading, c.start, c.len, p.text, d.status FROM chunks c
+            SELECT c.doc, d.name, c.page, p.label, c.heading, c.start, c.len, p.text, d.status, c.rev FROM chunks c
             JOIN documents d ON d.doc = c.doc AND d.rev = c.rev
             JOIN pages p ON p.doc = c.doc AND p.rev = c.rev AND p.page = c.page
             WHERE c.id = $id
@@ -658,7 +704,7 @@ public sealed class ProjectIndex
         var text = r.GetString(7);
         var start = Math.Clamp(r.GetInt32(5), 0, text.Length);
         var len = Math.Clamp(r.GetInt32(6), 0, text.Length - start);
-        return new SearchHit(r.GetInt64(0), r.GetString(1), r.GetInt32(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetString(4), id,
+        return new SearchHit(r.GetInt64(0), r.GetInt64(9), r.GetString(1), r.GetInt32(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetString(4), id,
             text.Substring(start, len), wordsOnly || r.GetString(8) != DocumentStatus.Embedded);
     }
 

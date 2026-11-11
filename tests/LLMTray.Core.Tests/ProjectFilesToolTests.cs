@@ -84,6 +84,18 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AReadThatEndsOnAPageBoundaryGoesOnFromTheNextPage()
+    {
+        var big = string.Join(" ", Enumerable.Repeat("long", 1_500));
+        var doc = AddText("pages.txt", "short first page", big, "third");
+        var turn = Turn(context: 9_000);
+        var read = Json(await ProjectFilesTool.RunAsync(Call($"{{\"doc\":{doc},\"pages\":\"1-3\"}}"), turn, 1_000, default));
+        var shown = read["text"]!.AsArray().Select(p => p!["page"]!.GetValue<int>()).ToList();
+        // Whatever was shown, the pages not shown are behind a cursor, never dropped.
+        if (!shown.Contains(3)) Assert.NotNull(read["next"]);
+    }
+
+    [Fact]
     public async Task NoRoomNoMovedChatAndBadArguments()
     {
         AddText("a.txt", "alpha beta");

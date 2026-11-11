@@ -34,6 +34,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     readonly Task worker;
     CancellationTokenSource? current;
     Guid? currentProject;
+    /// <summary>The document the running step reads or embeds; null between.</summary>
+    long? currentDoc;
 
     /// <summary>Embedding batches: small, so a search's query embeds between them.</summary>
     public const int EmbedBatch = 16;
@@ -81,7 +83,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
         return new ProjectFilesSummary(docs.Count,
             docs.Count(d => d.Status == DocumentStatus.Embedded),
             docs.Count(d => d.Status == DocumentStatus.Searchable),
-            docs.Count(d => d.Status is DocumentStatus.Staged or DocumentStatus.Extracting || d.Reindex),
+            docs.Count(d => d.Status is DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting || d.Reindex),
             docs.Count(d => d.Status is DocumentStatus.Failed or DocumentStatus.Unsupported),
             doing);
     }
@@ -89,8 +91,12 @@ public sealed class ProjectFilesService : IAsyncDisposable
     /// <summary>Copies the files in (each refused by name when it can't be), then wakes the reader.</summary>
     public IReadOnlyList<AddResult> Add(Guid project, IEnumerable<string> paths, Func<string, long>? freeSpace = null)
     {
-        var index = Index(project, create: true)!;
         var results = new List<AddResult>();
+        if (Index(project, create: true) is not { } index)
+        {
+            // The project is being deleted.
+            return paths.Select(p => new AddResult(Path.GetFileName(p), null, "the project was deleted")).ToList();
+        }
         foreach (var path in paths)
         {
             var name = Path.GetFileName(path);
@@ -132,7 +138,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public void Remove(Guid project, long doc)
     {
         if (Index(project) is not { } index) return;
-        Cancel(project);
+        // Only this document's read or embedding stops; another file's goes on.
+        Cancel(project, doc);
         index.Remove(doc);
         Changed?.Invoke(project);
     }
@@ -157,13 +164,19 @@ public sealed class ProjectFilesService : IAsyncDisposable
     /// </summary>
     public void DeleteProject(Guid project)
     {
-        Cancel(project);
-        lock (sync) open.Remove(project);
+        Cancel(project, null);
         var folder = Folder(project);
-        if (!Directory.Exists(folder)) return;
-        Directory.CreateDirectory(root);
-        File.WriteAllText(DeletionMarker(project), "");
-        Finish(project);
+        lock (sync)
+        {
+            // The record first, under the lock Index() checks it with: nothing reopens the project from here on.
+            if (Directory.Exists(folder))
+            {
+                Directory.CreateDirectory(root);
+                File.WriteAllText(DeletionMarker(project), "");
+            }
+            open.Remove(project);
+        }
+        if (Directory.Exists(folder)) Finish(project);
     }
 
     void FinishDeletions()
@@ -189,12 +202,12 @@ public sealed class ProjectFilesService : IAsyncDisposable
         }
     }
 
-    /// <summary>The work running in <paramref name="project"/> stops (its document removed, the project deleted); the loop goes on.</summary>
-    void Cancel(Guid project)
+    /// <summary>The work running on <paramref name="doc"/> (any of the project's when null) stops; the loop goes on.</summary>
+    void Cancel(Guid project, long? doc)
     {
         lock (sync)
         {
-            if (currentProject == project) current?.Cancel();
+            if (currentProject == project && (doc is null || currentDoc == doc)) current?.Cancel();
         }
     }
 
@@ -261,6 +274,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
             if (index.NextToExtract() is { } doc)
             {
                 SetActivity(project, "reading");
+                lock (sync) currentDoc = doc.Doc;
                 index.MarkExtracting(doc.Doc);
                 var path = index.CopyPath(doc.Doc, doc.Ext);
                 try
@@ -272,6 +286,22 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 catch (ExtractException e)
                 {
                     index.Fail(doc.Doc, DocumentStatus.Failed, e.Message);
+                }
+                catch (OperationCanceledException) when (!stop.IsCancellationRequested)
+                {
+                    // This document was removed meanwhile (its row goes with it); nothing else to do.
+                    index.Requeue(doc.Doc);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The app stops: read again at the next launch (reconcile puts it back too).
+                    index.Requeue(doc.Doc);
+                    throw;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+                {
+                    // Never left "being read": it fails with the reason, and Read Again tries it again.
+                    index.Fail(doc.Doc, DocumentStatus.Failed, "couldn't be read: " + e.Message);
                 }
                 Changed?.Invoke(project);
                 return true;
@@ -294,6 +324,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 return false;
             }
             SetActivity(project, "embedding");
+            lock (sync) currentDoc = batch.Doc;
             float[][] vectors;
             try
             {
@@ -319,6 +350,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
             {
                 current = null;
                 currentProject = null;
+                currentDoc = null;
             }
         }
     }
