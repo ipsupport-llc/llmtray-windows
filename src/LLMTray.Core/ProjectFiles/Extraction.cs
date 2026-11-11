@@ -416,9 +416,10 @@ public static class DocumentExtractor
         var number = 0;
         foreach (var (name, part) in sheets)
         {
-            number++;
             using var sheet = zip.Xml(part);
+            // A sheet whose part is missing isn't a page: the numbers stay 1, 2, 3 …
             if (sheet is null) continue;
+            number++;
             var sb = new StringBuilder();
             var row = new List<string>();
             string? type = null;

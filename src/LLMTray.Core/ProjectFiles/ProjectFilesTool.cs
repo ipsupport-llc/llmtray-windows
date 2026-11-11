@@ -255,17 +255,10 @@ public static class ProjectFilesTool
             return Fail("cursor isn't one this tool gave");
         }
         var lastPage = last ?? (parts.Length > 4 && int.TryParse(parts[4], CultureInfo.InvariantCulture, out var l) ? l : int.MaxValue);
-        if (index.Document(doc) is not { } d) return Fail($"no file with doc {doc}: project_files() lists them");
+        // The row and the pages from one snapshot: the revision, page count and text always agree.
+        if (index.PagesOf(doc, Math.Max(1, page), Math.Min(lastPage, Math.Max(1, page) + 500)) is not var (d, texts)) return Fail($"no file with doc {doc}: project_files() lists them");
         if (!DocumentStatus.IsReady(d.Status) && d.Status != DocumentStatus.Empty) return Fail($"{d.Name} is {Status(d)}");
         if (rev != 0 && rev != d.Rev) offset = 0;
-        var texts = index.Pages(doc, Math.Max(1, page), Math.Min(lastPage, Math.Max(1, page) + 500));
-        // Read again between the two reads: the pages are the new revision's, so the row must be too.
-        if (index.Document(doc) is { } now && now.Rev != d.Rev)
-        {
-            if (rev != 0) offset = 0;
-            d = now;
-            texts = index.Pages(doc, Math.Max(1, page), Math.Min(lastPage, Math.Max(1, page) + 500));
-        }
         if (texts.Count == 0) return Fail(d.Pages == 0 ? $"{d.Name} has no text" : $"{d.Name} has pages 1-{d.Pages}");
         var read = new JsonArray();
         var result = new JsonObject { ["note"] = Note, ["doc"] = doc, ["file"] = d.Name, ["pages_in_file"] = d.Pages, ["text"] = read };

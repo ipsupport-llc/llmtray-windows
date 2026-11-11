@@ -731,6 +731,37 @@ public sealed class ProjectIndex
         return list;
     }
 
+    /// <summary>
+    /// The document's row and its current revision's pages in one statement
+    /// (one snapshot): a Read Again committing meanwhile can't pair one
+    /// revision's text with another's numbers. Null when there's no such document.
+    /// </summary>
+    public (ProjectDocument Document, List<PageText> Pages)? PagesOf(long doc, int from, int to)
+    {
+        using var db = Open();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT d.rev, d.pages, d.status, p.page, p.label, p.text FROM documents d
+            LEFT JOIN pages p ON p.doc = d.doc AND p.rev = d.rev AND p.page BETWEEN $a AND $b
+            WHERE d.doc = $d ORDER BY p.page
+            """;
+        cmd.Parameters.AddWithValue("$d", doc);
+        cmd.Parameters.AddWithValue("$a", from);
+        cmd.Parameters.AddWithValue("$b", to);
+        using var r = cmd.ExecuteReader();
+        var list = new List<PageText>();
+        long? rev = null;
+        int pages = 0;
+        string status = "";
+        while (r.Read())
+        {
+            (rev, pages, status) = (r.GetInt64(0), r.GetInt32(1), r.GetString(2));
+            if (!r.IsDBNull(3)) list.Add(new PageText(r.GetInt32(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetString(5)));
+        }
+        if (rev is null || Document(doc) is not { } row) return null;
+        return (row with { Rev = rev.Value, Pages = pages, Status = status }, list);
+    }
+
     /// <summary>How big the index and copies are on disk.</summary>
     public long DiskBytes() => Directory.EnumerateFiles(Folder, "*", SearchOption.AllDirectories).Sum(f =>
     {

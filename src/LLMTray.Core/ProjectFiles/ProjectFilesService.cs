@@ -97,7 +97,16 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public IReadOnlyList<AddResult> Add(Guid project, IEnumerable<string> paths, Func<string, long>? freeSpace = null)
     {
         var results = new List<AddResult>();
-        if (Index(project, create: true) is not { } index)
+        ProjectIndex? index;
+        try
+        {
+            index = Index(project, create: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+        {
+            return paths.Select(p => new AddResult(Path.GetFileName(p), null, "the project's files can't be opened: " + e.Message)).ToList();
+        }
+        if (index is null)
         {
             // The project is being deleted.
             return paths.Select(p => new AddResult(Path.GetFileName(p), null, "the project was deleted")).ToList();
@@ -152,7 +161,15 @@ public sealed class ProjectFilesService : IAsyncDisposable
         // lock the worker claims a document with, so it either sees the mark or is cancelled.
         lock (sync) removed.Add((project, doc));
         Cancel(project, doc);
-        index.Remove(doc);
+        try
+        {
+            index.Remove(doc);
+        }
+        catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // Not removed (the index busy): it stays listed, and the worker may take it again.
+            lock (sync) removed.Remove((project, doc));
+        }
         Changed?.Invoke(project);
     }
 
@@ -302,7 +319,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
         {
             if (index.NextToExtract() is { } doc)
             {
-                if (!Claim(project, doc.Doc)) return true;
+                if (!Claim(project, doc.Doc)) return false;
                 // Removed before the mark existed (an earlier run of the loop): gone or going.
                 if (index.Document(doc.Doc) is not { Status: not DocumentStatus.Removing }) return true;
                 SetActivity(project, "reading");
@@ -354,7 +371,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 }
                 return false;
             }
-            if (!Claim(project, batch.Doc)) return true;
+            if (!Claim(project, batch.Doc)) return false;
             if (index.Document(batch.Doc) is not { Status: DocumentStatus.Searchable or DocumentStatus.Embedded }) return true;
             SetActivity(project, "embedding");
             float[][] vectors;
