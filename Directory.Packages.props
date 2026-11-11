@@ -1,5 +1,8 @@
 <Project>
   <ItemGroup>
+    <!-- Core: project files (adr/0021) -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0" />
+    <PackageVersion Include="PdfPig" Version="0.1.16" />
     <!-- App -->
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.6.4" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />

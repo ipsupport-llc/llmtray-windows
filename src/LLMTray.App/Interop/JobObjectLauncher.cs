@@ -93,6 +93,36 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
         return own;
     }
 
+    /// <summary>
+    /// A job for a reader of untrusted files (adr/0021): killed with the job
+    /// or the app, at most <paramref name="memoryBytes"/> of committed memory
+    /// (past it allocations fail and the process ends), no child processes,
+    /// no error dialog on a crash.
+    /// </summary>
+    public static IDisposable Confine(System.Diagnostics.Process process, long memoryBytes)
+    {
+        var job = Native.CreateJobObjectW(IntPtr.Zero, null);
+        if (job.IsInvalid) throw new Win32Exception();
+        var info = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            BasicLimitInformation = new Native.JOBOBJECT_BASIC_LIMIT_INFORMATION
+            {
+                LimitFlags = Native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | Native.JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                    | Native.JOB_OBJECT_LIMIT_ACTIVE_PROCESS | Native.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
+                ActiveProcessLimit = 1,
+            },
+            ProcessMemoryLimit = (UIntPtr)(ulong)memoryBytes,
+        };
+        if (!Native.SetInformationJobObject(job, Native.JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf(info))
+            || !Native.AssignProcessToJobObject(job, process.SafeHandle))
+        {
+            var error = new Win32Exception();
+            job.Dispose();
+            throw new InvalidOperationException($"the reader couldn't be confined ({error.Message})", error);
+        }
+        return job;
+    }
+
     /// <summary>The app's environment plus the plan's, sorted as CreateProcess wants it.</summary>
     static string EnvironmentBlock(IReadOnlyDictionary<string, string> extra)
     {
@@ -171,6 +201,9 @@ sealed class JobObjectLauncher : IProcessLauncher, IDisposable
     static class Native
     {
         public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+        public const uint JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x8;
+        public const uint JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100;
+        public const uint JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x400;
         public const int JobObjectExtendedLimitInformation = 9;
         public const uint CREATE_SUSPENDED = 0x4;
         public const uint CREATE_UNICODE_ENVIRONMENT = 0x400;

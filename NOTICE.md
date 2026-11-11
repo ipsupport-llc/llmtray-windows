@@ -40,3 +40,18 @@ Contributors, and Copyright (c) Microsoft Corporation. See
 https://github.com/dotnet/runtime/blob/main/LICENSE.TXT,
 https://github.com/dotnet/aspnetcore/blob/main/LICENSE.txt and
 https://github.com/microsoft/WindowsAppSDK/blob/main/LICENSE.
+
+## SQLite, SQLitePCLRaw and Microsoft.Data.Sqlite
+
+Project files keep their index in SQLite (adr/0021). SQLite
+(https://sqlite.org) is in the public domain. The native build and its
+binding come from SQLitePCLRaw (https://github.com/ericsink/SQLitePCL.raw),
+Apache License 2.0, Copyright (c) 2014-2026 Zumero, LLC / Eric Sink.
+Microsoft.Data.Sqlite (https://github.com/dotnet/efcore), MIT License,
+Copyright (c) .NET Foundation and Contributors.
+
+## PdfPig
+
+Reads the text of PDF files added to projects. https://github.com/UglyToad/PdfPig,
+Apache License 2.0, Copyright (c) 2017-2026 UglyToad and PdfPig contributors.
+The full text of the Apache License 2.0 is in this repository's `LICENSE`.

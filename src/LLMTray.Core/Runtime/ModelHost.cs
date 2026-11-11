@@ -54,8 +54,9 @@ public sealed class ModelHost : IAsyncDisposable
     Task lastKill = Task.CompletedTask;
 
     /// <param name="Lifetime">Cancelled when this server stops or dies: requests to it end with it.</param>
+    /// <param name="ContextTokens">The context of one request (a slot's n_ctx), as the server reported it; 0 when it didn't.</param>
     sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
-        CancellationTokenSource Lifetime, ServerOptions Options);
+        CancellationTokenSource Lifetime, ServerOptions Options, int ContextTokens = 0);
 
     /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
     public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ModelEntry, ServerOptions> options, string logDirectory,
@@ -80,6 +81,12 @@ public sealed class ModelHost : IAsyncDisposable
     public HostState State
     {
         get { lock (sync) return Snapshot(); }
+    }
+
+    /// <summary>How many tokens one request may hold on the running server (its n_ctx per slot); 0 when nothing runs or it didn't say.</summary>
+    public int ContextTokens
+    {
+        get { lock (sync) return running?.ContextTokens ?? 0; }
     }
 
     /// <summary>What the running server was started with, or null: compared with the profile for "Restart to apply".</summary>
@@ -288,7 +295,8 @@ public sealed class ModelHost : IAsyncDisposable
             }
             if (error is null)
             {
-                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched);
+                var context = await ContextTokensAsync(baseUri, key).ConfigureAwait(false);
+                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context);
                 lock (sync)
                 {
                     if (disposed)
@@ -311,6 +319,29 @@ public sealed class ModelHost : IAsyncDisposable
         }
         Fail(model, null, lastError ?? "llama-server didn't start.");
         throw new ModelLoadException(lastError ?? "llama-server didn't start.");
+    }
+
+    /// <summary>The server's context per request, from /props (default_generation_settings.n_ctx); 0 when it doesn't answer.</summary>
+    async Task<int> ContextTokensAsync(Uri baseUri, string apiKey)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUri, "/props"));
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            using var response = await health.SendAsync(request).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return 0;
+            var props = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var n = props?["default_generation_settings"]?["n_ctx"] ?? props?["n_ctx"];
+            return n is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<int>(out var ctx) && ctx > 0 ? ctx : 0;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException)
+        {
+            return 0;
+        }
+        catch (ObjectDisposedException)
+        {
+            return 0;
+        }
     }
 
     async Task<string?> WaitHealthyAsync(IChildProcess process, Uri baseUri, LlamaBackend backend)

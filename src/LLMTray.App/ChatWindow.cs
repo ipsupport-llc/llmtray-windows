@@ -80,6 +80,7 @@ sealed partial class ChatWindow : Window
         chat.Changed += () => DispatcherQueue.TryEnqueue(RenderSoon);
         store.Changed += _ => DispatcherQueue.TryEnqueue(RenderChats);
         App.Current.ChatLibrary.Changed += () => DispatcherQueue.TryEnqueue(RenderChats);
+        App.Current.ProjectFilesChanged += UpdateProjectMark;
 
         Content = Layout();
         SetUpPictures((UIElement)Content);
@@ -267,7 +268,11 @@ sealed partial class ChatWindow : Window
             Count: (feature, model) => app.Telemetry.Record(feature, (model is null ? null : app.Library.Current.Resolve(model)?.FullPath) ?? app.Host.State.Model?.FullPath),
             Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync, Memory: app.Memory,
             // The chat's project's instructions, as they are now (an edit applies from the next message).
-            ProjectInstructions: chat.Id is { } chatId && !chat.Temporary ? app.ChatLibrary.ProjectOf(chatId)?.Instructions : null);
+            ProjectInstructions: chat.Id is { } chatId && !chat.Temporary ? app.ChatLibrary.ProjectOf(chatId)?.Instructions : null,
+            // Project files (adr/0021): the chat's project as it is when each call runs (a move refuses the rest of the turn).
+            ProjectFiles: app.ProjectFiles,
+            ProjectOfChat: chat.Id is { } fileChat && !chat.Temporary ? () => app.ChatLibrary.ProjectOf(fileChat)?.Id : null,
+            ContextTokens: app.Host.ContextTokens);
     }
 
     /// <summary>
@@ -881,6 +886,8 @@ sealed partial class ChatWindow : Window
             stack.Children.Add(sources);
         }
 
+        if (!message.Streaming && message.Citations.Count > 0) stack.Children.Add(CitationsView(message));
+
         if (!message.Streaming && message.Content.Length > 0)
         {
             var copy = new Button { Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 12 }, new TextBlock { Text = L.T("Copy"), FontSize = 12 }) };
@@ -1321,6 +1328,7 @@ sealed partial class ChatWindow : Window
                 || c.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase)
                 || c.Preview.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
             chats.Items.Clear();
+            projectMarks.Clear();
             if (query.Length == 0)
             {
                 var pins = pinned.Select(id => all.FirstOrDefault(c => c.Id == id)).OfType<ChatSummary>().ToList();
@@ -1384,16 +1392,23 @@ sealed partial class ChatWindow : Window
 
     ListViewItem ProjectItem(ChatProject project, bool open)
     {
+        // While its files are read: a small ring; a mark when some couldn't be (adr/0021).
+        var ring = new ProgressRing { Width = 12, Height = 12, MinWidth = 12, MinHeight = 12, IsActive = false, Visibility = Visibility.Collapsed };
+        var warning = new FontIcon { Glyph = "\uE7BA", FontSize = 12, Foreground = Ui.Secondary, Visibility = Visibility.Collapsed };
         var item = new ListViewItem
         {
-            Content = Ui.Horizontal(new FontIcon { Glyph = open ? "\uE838" : "\uE8B7", FontSize = 13 }, new TextBlock { Text = project.Name, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeights.SemiBold }),
+            Content = Ui.Horizontal(new FontIcon { Glyph = open ? "\uE838" : "\uE8B7", FontSize = 13 }, new TextBlock { Text = project.Name, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeights.SemiBold }, ring, warning),
             Tag = project,
             MinHeight = 32,
         };
+        projectMarks[project.Id] = (ring, warning, item);
+        UpdateProjectMark(project.Id);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, L.F("Project {0}", project.Name));
         var menu = new MenuFlyout();
         var start = new MenuFlyoutItem { Text = L.T("New Chat in Project") };
         start.Click += (_, _) => NewChatIn(project.Id);
+        var files = new MenuFlyoutItem { Text = L.T("Files…") };
+        files.Click += async (_, _) => await ProjectFilesAsync(project);
         var instructions = new MenuFlyoutItem { Text = L.T("Instructions…") };
         instructions.Click += async (_, _) => await ProjectInstructionsAsync(project);
         var rename = new MenuFlyoutItem { Text = L.T("Rename…") };
@@ -1401,6 +1416,8 @@ sealed partial class ChatWindow : Window
         var delete = new MenuFlyoutItem { Text = L.T("Delete Project…") };
         delete.Click += async (_, _) => await DeleteProjectAsync(project);
         menu.Items.Add(start);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(files);
         menu.Items.Add(instructions);
         menu.Items.Add(rename);
         menu.Items.Add(new MenuFlyoutSeparator());
@@ -1537,7 +1554,12 @@ sealed partial class ChatWindow : Window
         };
         try
         {
-            if (await dialog.ShowAsync() == ContentDialogResult.Primary) App.Current.ChatLibrary.DeleteProject(project.Id);
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                App.Current.ChatLibrary.DeleteProject(project.Id);
+                // Its copies and index go too (a deletion record first, finished at the next launch if cut short).
+                App.Current.ProjectFiles.DeleteProject(project.Id);
+            }
         }
         catch (Exception)
         {

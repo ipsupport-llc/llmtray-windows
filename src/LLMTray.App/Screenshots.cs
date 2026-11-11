@@ -23,7 +23,12 @@ static class Screenshots
             var app = App.Current;
             app.ShowChat();
             await Task.Delay(1500);
-            if (app.Chat is { } chat) await SaveAsync(chat, Path.Combine(folder, "chat.png"));
+            if (app.Chat is { } chat)
+            {
+                await SaveAsync(chat, Path.Combine(folder, "chat.png"));
+                // A demo project with files (adr/0021): the sidebar, the Files dialog, and the reader process run for real.
+                await chat.ProjectScreenshotsAsync(folder, SaveElementAsync);
+            }
             app.ShowSettings();
             foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })
             {
@@ -44,7 +49,11 @@ static class Screenshots
 
     static async Task SaveAsync(Window window, string path)
     {
-        if (window.Content is not UIElement content) return;
+        if (window.Content is UIElement content) await SaveElementAsync(content, path);
+    }
+
+    static async Task SaveElementAsync(UIElement content, string path)
+    {
         var bitmap = new RenderTargetBitmap();
         await bitmap.RenderAsync(content);
         var pixels = (await bitmap.GetPixelsAsync()).ToArray();

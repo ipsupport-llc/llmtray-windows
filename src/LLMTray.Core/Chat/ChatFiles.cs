@@ -75,6 +75,8 @@ public sealed record PersistedMessage
     public List<string> Sources { get; init; } = [];
     /// <summary>MCP calls under an answer (the Mac's mcpCalls).</summary>
     public List<McpCallRecord> McpCalls { get; init; } = [];
+    /// <summary>Project files the answer cites (the Mac's citations).</summary>
+    public List<ProjectFiles.Citation>? Citations { get; init; }
     public AnswerStats? AnswerStats { get; init; }
     public int? Seq { get; init; }
     public DateTimeOffset? SentAt { get; init; }
