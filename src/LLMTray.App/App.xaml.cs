@@ -93,6 +93,8 @@ public partial class App : Application
 
     /// <summary>The saved chats (sessions/, the Mac app's layout).</summary>
     public LLMTray.Core.Chat.ChatStore Chats { get; private set; } = null!;
+    /// <summary>Projects, pins, and which project a chat is in (sessions/library.json, as on the Mac).</summary>
+    public LLMTray.Core.Chat.ChatLibraryStore ChatLibrary { get; private set; } = null!;
 
     /// <summary>For the app's own requests to its local API: no proxy, no timeout (answers stream).</summary>
     public HttpClient Local { get; } = new(new SocketsHttpHandler { UseProxy = false }) { Timeout = Timeout.InfiniteTimeSpan };
@@ -221,6 +223,8 @@ public partial class App : Application
 
         Updater = new AppUpdater(dispatcher, Web, DataFolder);
         Chats = new LLMTray.Core.Chat.ChatStore(Path.Combine(DataFolder, "sessions"));
+        ChatLibrary = new LLMTray.Core.Chat.ChatLibraryStore(Path.Combine(DataFolder, "sessions"));
+        ChatLibrary.Prune(Chats.Present());
 
         Profiles = new LLMTray.Core.Profiles.ProfileManager(
             new LLMTray.Core.Profiles.ProfileStore(Path.Combine(DataFolder, "profiles")), () => Settings.ContextSize);

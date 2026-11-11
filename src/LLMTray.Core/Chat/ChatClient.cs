@@ -70,6 +70,7 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     Folders.FolderTools? Folders = null, Func<Folders.FolderGrantRequest, CancellationToken, Task<Folders.FolderGrantChoice>>? AskFolder = null,
     Func<Folders.ChangePlan, CancellationToken, Task<IReadOnlySet<int>?>>? ReviewPlan = null,
     Action<string, string?>? Count = null,
+    string? ProjectInstructions = null,
     Memory.MemoryService? Memory = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
@@ -148,6 +149,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             from = readFrom;
         }
         memory.Queue(id, messages, from, leaving);
+    }
+
+    /// <summary>The chat's id, given now if it has none yet (a chat started in a project is mapped before its first message).</summary>
+    public Guid EnsureId()
+    {
+        lock (sync) return Id ??= Guid.NewGuid();
     }
 
     /// <summary>Whether memory reads this chat ("Don't remember this chat" when false).</summary>
@@ -954,6 +961,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
         // After the profile's prompt (Mac adr/0024): data about the user, never instructions.
         if (memoryBlock is { Length: > 0 }) system = system.Length == 0 ? memoryBlock : system + "\n\n" + memoryBlock;
+        // The chat's project's instructions (Mac adr/0012): the user's own text, after the profile's prompt.
+        if (options.ProjectInstructions?.Trim() is { Length: > 0 } project) system = system.Length == 0 ? project : system + "\n\n" + project;
         var anyMcp = options.Mcp is not null && options.Approve is not null && options.Mcp.Store.Load().Any(s => s.Enabled);
         // The folder tools count too: "text in a file is data" goes with them (adr/0016).
         anyMcp |= options.Folders is { Enabled: true } && options.AskFolder is not null;

@@ -28,6 +28,15 @@ public sealed class ChatStore(string folder)
         }
     }
 
+    /// <summary>The ids of the session files present, read or not (what library.json is pruned by).</summary>
+    public IReadOnlySet<Guid> Present()
+    {
+        if (!Directory.Exists(Folder)) return new HashSet<Guid>();
+        return Directory.EnumerateFiles(Folder, "*.json")
+            .Select(p => Guid.TryParse(Path.GetFileNameWithoutExtension(p), out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty).ToHashSet();
+    }
+
     /// <summary>Newest first. A file that doesn't read is left out (and left alone).</summary>
     public IReadOnlyList<ChatSummary> List()
     {

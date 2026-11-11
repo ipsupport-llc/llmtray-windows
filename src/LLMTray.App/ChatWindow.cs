@@ -79,6 +79,7 @@ sealed partial class ChatWindow : Window
         chat = new ChatClient(App.Current.Local, new Uri($"http://127.0.0.1:{Core.AppInfo.ProxyPort}/"), store);
         chat.Changed += () => DispatcherQueue.TryEnqueue(RenderSoon);
         store.Changed += _ => DispatcherQueue.TryEnqueue(RenderChats);
+        App.Current.ChatLibrary.Changed += () => DispatcherQueue.TryEnqueue(RenderChats);
 
         Content = Layout();
         SetUpPictures((UIElement)Content);
@@ -87,9 +88,23 @@ sealed partial class ChatWindow : Window
         search.TextChanged += (_, _) => RenderChats();
         chats.SelectionChanged += (_, _) =>
         {
-            if (rendering || chats.SelectedItem is not ListViewItem { Tag: ChatSummary summary }) return;
-            if (summary.Id != chat.Id) chat.Load(summary.Id);
-            input.Focus(FocusState.Programmatic);
+            if (rendering) return;
+            switch (chats.SelectedItem)
+            {
+                case ListViewItem { Tag: ChatSummary summary }:
+                    if (summary.Id != chat.Id) chat.Load(summary.Id);
+                    input.Focus(FocusState.Programmatic);
+                    break;
+                case ListViewItem { Tag: ChatProject project }:
+                    // A project's row opens or closes its chats.
+                    if (!collapsed.Remove(project.Id)) collapsed.Add(project.Id);
+                    RenderChats();
+                    break;
+                case ListViewItem { Tag: "new-project" }:
+                    _ = NewProjectAsync(null);
+                    RenderChatsSelection();
+                    break;
+            }
         };
         ToolTipService.SetToolTip(temporary, L.T("Temporary chat: not saved"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(temporary, L.T("Temporary chat"));
@@ -232,7 +247,9 @@ sealed partial class ChatWindow : Window
         return new ChatOptions(picked, Profile: app.Profiles.ResolvedFor(entry?.FullPath), Tools: app.Tools,
             Effort: app.Settings.ThinkingEffort, Style: entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry),
             Count: (feature, model) => app.Telemetry.Record(feature, (model is null ? null : app.Library.Current.Resolve(model)?.FullPath) ?? app.Host.State.Model?.FullPath),
-            Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync, Memory: app.Memory);
+            Mcp: app.Mcp, Approve: AskAsync, Folders: app.Folders, AskFolder: AskFolderAsync, ReviewPlan: ReviewPlanAsync, Memory: app.Memory,
+            // The chat's project's instructions, as they are now (an edit applies from the next message).
+            ProjectInstructions: chat.Id is { } chatId && !chat.Temporary ? app.ChatLibrary.ProjectOf(chatId)?.Instructions : null);
     }
 
     /// <summary>
@@ -1259,16 +1276,64 @@ sealed partial class ChatWindow : Window
         RenderStatus();
     }
 
+    /// <summary>Projects whose chats are hidden in the sidebar (open by default).</summary>
+    readonly HashSet<Guid> collapsed = [];
+
+    static ListViewItem Header(string text) => new()
+    {
+        Content = new TextBlock { Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Ui.Secondary },
+        IsEnabled = false,
+        MinHeight = 28,
+    };
+
+    /// <summary>
+    /// The sidebar (Mac adr/0006): pinned chats, then projects with their
+    /// chats, then the rest by date. A search lists every match by date.
+    /// </summary>
     void RenderChats()
     {
         rendering = true;
         try
         {
             var query = search.Text.Trim();
+            var library = App.Current.ChatLibrary;
+            var (projects, pinned, map) = library.Read(l => (l.Projects.ToList(), l.Pinned.ToList(), new Dictionary<Guid, Guid>(l.ProjectOfChat)));
             var all = store.List().Where(c => query.Length == 0
                 || c.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase)
                 || c.Preview.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
             chats.Items.Clear();
+            if (query.Length == 0)
+            {
+                var pins = pinned.Select(id => all.FirstOrDefault(c => c.Id == id)).OfType<ChatSummary>().ToList();
+                if (pins.Count > 0)
+                {
+                    chats.Items.Add(Header(L.T("Pinned")));
+                    foreach (var c in pins) chats.Items.Add(ChatItem(c, projects, pinned: true, indent: false));
+                }
+                chats.Items.Add(Header(L.T("Projects")));
+                if (library.Unreadable)
+                {
+                    chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("The projects file couldn't be read, so changes to projects and pins aren't saved. A copy of it is kept beside it.")), IsEnabled = false });
+                }
+                foreach (var project in projects.OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase))
+                {
+                    var open = !collapsed.Contains(project.Id);
+                    chats.Items.Add(ProjectItem(project, open));
+                    if (!open) continue;
+                    foreach (var c in all.Where(c => map.GetValueOrDefault(c.Id) == project.Id && !pinned.Contains(c.Id)))
+                    {
+                        chats.Items.Add(ChatItem(c, projects, pinned: false, indent: true));
+                    }
+                }
+                chats.Items.Add(new ListViewItem
+                {
+                    Content = Ui.Horizontal(new FontIcon { Glyph = "\uE710", FontSize = 12, Foreground = Ui.Secondary }, new TextBlock { Text = L.T("New Project…"), Foreground = Ui.Secondary }),
+                    Tag = "new-project",
+                    MinHeight = 32,
+                });
+                // The rest by date: not pinned, in no project that's there.
+                all = all.Where(c => !pinned.Contains(c.Id) && !(map.TryGetValue(c.Id, out var p) && projects.Any(x => x.Id == p))).ToList();
+            }
             string? group = null;
             foreach (var c in all)
             {
@@ -1276,35 +1341,13 @@ sealed partial class ChatWindow : Window
                 if (g != group)
                 {
                     group = g;
-                    chats.Items.Add(new ListViewItem
-                    {
-                        Content = new TextBlock { Text = g, FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = Ui.Secondary },
-                        IsEnabled = false,
-                        MinHeight = 28,
-                    });
+                    chats.Items.Add(Header(g));
                 }
-                var item = new ListViewItem { Content = new TextBlock { Text = c.Title, TextTrimming = TextTrimming.CharacterEllipsis }, Tag = c };
-                ToolTipService.SetToolTip(item, c.Preview.Length > 0 ? c.Preview : c.Title);
-                var menu = new MenuFlyout();
-                var rename = new MenuFlyoutItem { Text = L.T("Rename…") };
-                rename.Click += async (_, _) => await RenameAsync(c);
-                var delete = new MenuFlyoutItem { Text = L.T("Delete") };
-                delete.Click += async (_, _) => await DeleteAsync(c);
-                menu.Items.Add(rename);
-                if (App.Current.Memory.Settings.Enabled)
-                {
-                    // "Don't remember this chat" (adr/0018): nothing more is learned from it.
-                    var remember = new ToggleMenuFlyoutItem { Text = L.T("Remember This Chat"), IsChecked = !App.Current.Memory.IsOptedOut(c.Id) };
-                    remember.Click += (_, _) => App.Current.Memory.SetOptedOut(c.Id, !remember.IsChecked, forgetLearned: false);
-                    menu.Items.Add(remember);
-                }
-                menu.Items.Add(delete);
-                item.ContextFlyout = menu;
-                chats.Items.Add(item);
+                chats.Items.Add(ChatItem(c, projects, pinned: pinned.Contains(c.Id), indent: false));
             }
-            if (all.Count == 0)
+            if (all.Count == 0 && query.Length > 0)
             {
-                chats.Items.Add(new ListViewItem { Content = Ui.Caption(query.Length > 0 ? L.T("No chat matches.") : L.T("Your chats appear here.")), IsEnabled = false });
+                chats.Items.Add(new ListViewItem { Content = Ui.Caption(L.T("No chat matches.")), IsEnabled = false });
             }
         }
         finally
@@ -1312,6 +1355,161 @@ sealed partial class ChatWindow : Window
             rendering = false;
         }
         RenderChatsSelection();
+    }
+
+    ListViewItem ProjectItem(ChatProject project, bool open)
+    {
+        var item = new ListViewItem
+        {
+            Content = Ui.Horizontal(new FontIcon { Glyph = open ? "\uE838" : "\uE8B7", FontSize = 13 }, new TextBlock { Text = project.Name, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeights.SemiBold }),
+            Tag = project,
+            MinHeight = 32,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, L.F("Project {0}", project.Name));
+        var menu = new MenuFlyout();
+        var start = new MenuFlyoutItem { Text = L.T("New Chat in Project") };
+        start.Click += (_, _) => NewChatIn(project.Id);
+        var instructions = new MenuFlyoutItem { Text = L.T("Instructions…") };
+        instructions.Click += async (_, _) => await ProjectInstructionsAsync(project);
+        var rename = new MenuFlyoutItem { Text = L.T("Rename…") };
+        rename.Click += async (_, _) => await RenameProjectAsync(project);
+        var delete = new MenuFlyoutItem { Text = L.T("Delete Project…") };
+        delete.Click += async (_, _) => await DeleteProjectAsync(project);
+        menu.Items.Add(start);
+        menu.Items.Add(instructions);
+        menu.Items.Add(rename);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(delete);
+        item.ContextFlyout = menu;
+        return item;
+    }
+
+    ListViewItem ChatItem(ChatSummary c, IReadOnlyList<ChatProject> projects, bool pinned, bool indent)
+    {
+        var item = new ListViewItem
+        {
+            Content = new TextBlock { Text = c.Title, TextTrimming = TextTrimming.CharacterEllipsis },
+            Tag = c,
+            Padding = indent ? new Thickness(28, 0, 12, 0) : new Thickness(12, 0, 12, 0),
+        };
+        ToolTipService.SetToolTip(item, c.Preview.Length > 0 ? c.Preview : c.Title);
+        var menu = new MenuFlyout();
+        var rename = new MenuFlyoutItem { Text = L.T("Rename…") };
+        rename.Click += async (_, _) => await RenameAsync(c);
+        menu.Items.Add(rename);
+        var pin = new MenuFlyoutItem { Text = pinned ? L.T("Unpin") : L.T("Pin") };
+        pin.Click += (_, _) => App.Current.ChatLibrary.SetPinned(c.Id, !pinned);
+        menu.Items.Add(pin);
+        // Move to a project, or out of one.
+        var move = new MenuFlyoutSubItem { Text = L.T("Move to Project") };
+        var current = App.Current.ChatLibrary.ProjectOf(c.Id);
+        foreach (var project in projects.OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var to = new ToggleMenuFlyoutItem { Text = project.Name, IsChecked = current?.Id == project.Id };
+            to.Click += (_, _) => App.Current.ChatLibrary.Move(c.Id, project.Id);
+            move.Items.Add(to);
+        }
+        if (projects.Count > 0) move.Items.Add(new MenuFlyoutSeparator());
+        var newProject = new MenuFlyoutItem { Text = L.T("New Project…") };
+        newProject.Click += async (_, _) => await NewProjectAsync(c.Id);
+        move.Items.Add(newProject);
+        if (current is not null)
+        {
+            var none = new MenuFlyoutItem { Text = L.T("Remove from Project") };
+            none.Click += (_, _) => App.Current.ChatLibrary.Move(c.Id, null);
+            move.Items.Add(none);
+        }
+        menu.Items.Add(move);
+        if (App.Current.Memory.Settings.Enabled)
+        {
+            // "Don't remember this chat" (adr/0018): nothing more is learned from it.
+            var remember = new ToggleMenuFlyoutItem { Text = L.T("Remember This Chat"), IsChecked = !App.Current.Memory.IsOptedOut(c.Id) };
+            remember.Click += (_, _) => App.Current.Memory.SetOptedOut(c.Id, !remember.IsChecked, forgetLearned: false);
+            menu.Items.Add(remember);
+        }
+        var delete = new MenuFlyoutItem { Text = L.T("Delete") };
+        delete.Click += async (_, _) => await DeleteAsync(c);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(delete);
+        item.ContextFlyout = menu;
+        return item;
+    }
+
+    /// <summary>A new chat that starts in <paramref name="project"/>: mapped before its first message, so that message already has its instructions.</summary>
+    void NewChatIn(Guid project)
+    {
+        temporary.IsChecked = false;
+        chat.New();
+        App.Current.ChatLibrary.Move(chat.EnsureId(), project);
+        collapsed.Remove(project);
+        RenderChats();
+        input.Focus(FocusState.Programmatic);
+    }
+
+    async Task<string?> AskTextAsync(string title, string text, string placeholder, bool multiline, string primary)
+    {
+        var box = new TextBox
+        {
+            Text = text, PlaceholderText = placeholder, AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            MinWidth = 420, MinHeight = multiline ? 160 : 0, MaxHeight = multiline ? 360 : double.PositiveInfinity,
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = title,
+            Content = box,
+            PrimaryButtonText = primary,
+            CloseButtonText = L.T("Cancel"),
+            DefaultButton = multiline ? ContentDialogButton.None : ContentDialogButton.Primary,
+        };
+        try
+        {
+            return await dialog.ShowAsync() == ContentDialogResult.Primary ? box.Text : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A new project; <paramref name="moving"/>: a chat that goes into it.</summary>
+    async Task NewProjectAsync(Guid? moving)
+    {
+        if (await AskTextAsync(L.T("New Project"), "", L.T("Name"), multiline: false, L.T("Create")) is not { } name || name.Trim().Length == 0) return;
+        var project = App.Current.ChatLibrary.AddProject(name);
+        if (moving is { } chatId) App.Current.ChatLibrary.Move(chatId, project.Id);
+    }
+
+    async Task RenameProjectAsync(ChatProject project)
+    {
+        if (await AskTextAsync(L.T("Rename Project"), project.Name, L.T("Name"), multiline: false, L.T("Rename")) is { } name) App.Current.ChatLibrary.RenameProject(project.Id, name);
+    }
+
+    async Task ProjectInstructionsAsync(ChatProject project)
+    {
+        var text = await AskTextAsync(L.F("Instructions for {0}", project.Name), project.Instructions,
+            L.T("What every chat in this project should know or do: the subject, the style, what to avoid. Sent with each message."), multiline: true, L.T("Save"));
+        if (text is not null) App.Current.ChatLibrary.SetInstructions(project.Id, text);
+    }
+
+    async Task DeleteProjectAsync(ChatProject project)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = L.T("Delete this project?"),
+            Content = L.T("Its chats stay, back among the recents; the project's instructions and files are deleted."),
+            PrimaryButtonText = L.T("Delete Project"),
+            CloseButtonText = L.T("Cancel"),
+            DefaultButton = ContentDialogButton.Close,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary) App.Current.ChatLibrary.DeleteProject(project.Id);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     void RenderChatsSelection()
@@ -1378,6 +1576,7 @@ sealed partial class ChatWindow : Window
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             if (c.Id == chat.Id) chat.New();
             store.Delete(c.Id);
+            App.Current.ChatLibrary.Forget(c.Id);
             // What was learned only from it goes too (adr/0018).
             App.Current.Memory.ChatDeleted(c.Id);
         }
