@@ -54,6 +54,9 @@ public sealed class ChatMessage
     /// <summary>Recordings the model may hear: a user message's WAVs.</summary>
     public IEnumerable<byte[]> Recordings => Role == "user" ? Audios.Where(a => Wav.IsWav(a)) : [];
 
+    /// <summary>A user message with a recording, read or not (a file gone still reads "(audio)").</summary>
+    public bool Spoken => Role == "user" && (Recordings.Any() || AudioFilenames.Any(n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)));
+
     /// <summary>Where the tools' facts came from, shown under the answer and saved (the Mac's sources).</summary>
     public List<string> Sources { get; init; } = [];
 
@@ -957,7 +960,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             List<ChatMessage> firstTurn;
             // The words only: the pictures needn't be read again for a title.
-            lock (sync) firstTurn = Messages.Take(2).Select(m => new ChatMessage { Role = m.Role, Content = m.Content.Length > 0 ? m.Content : m.Images.Count == 0 && m.Audios.Count > 0 ? "(a spoken message)" : "(a picture)" }).ToList();
+            lock (sync) firstTurn = Messages.Take(2).Select(m => new ChatMessage { Role = m.Role, Content = m.Content.Length > 0 ? m.Content : m.Images.Count == 0 && m.Spoken ? "(a spoken message)" : "(a picture)" }).ToList();
             var ask = new List<ChatMessage>(firstTurn)
             {
                 new() { Role = "user", Content = "Give this conversation a title of at most six words, in its language. Reply with the title only, no quotes." },
@@ -1220,7 +1223,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     static string WithNote(ChatMessage m, ChatOptions options, bool heard)
     {
         if (m.Role != "user") return m.Content;
-        if (!heard && m.Content.Length == 0 && m.Recordings.Any()) m = new ChatMessage
+        if (!heard && m.Content.Length == 0 && m.Spoken) m = new ChatMessage
         {
             Role = m.Role, Content = "(audio)", Images = m.Images, ImageFilenames = m.ImageFilenames, ProjectFilesAdded = m.ProjectFilesAdded, Shared = m.Shared,
         };
@@ -1256,7 +1259,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
         var list = messages.Where(m => m.Role is "user" or "assistant").ToList();
         var heard = HeardMessages(list, options);
-        foreach (var m in list.Where(m => m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0 || m.Recordings.Any()))
+        foreach (var m in list.Where(m => m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0 || m.Spoken))
         {
             // A model that doesn't see gets no pictures (the server refuses them); what was shown goes as its text.
             var images = m.Role == "user" && m.Images.Count > 0 && options.SeesPictures != false;
@@ -1266,7 +1269,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             {
                 // Text first, then each picture as a data URL (always PNG: attachments are converted), then the recordings.
                 var parts = new JsonArray();
-                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0 || (!audios && m.Recordings.Any()))
+                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0 || (!audios && m.Spoken))
                 {
                     parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m, options, audios) });
                 }
@@ -1289,7 +1292,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 history.Add(new JsonObject { ["role"] = "user", ["content"] = parts });
                 continue;
             }
-            if (m.Content.Length == 0 && m.Shared.Count == 0 && !m.Recordings.Any()) continue;
+            if (m.Content.Length == 0 && m.Shared.Count == 0 && !m.Spoken) continue;
             history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m, options, heard: false) });
         }
         return history;

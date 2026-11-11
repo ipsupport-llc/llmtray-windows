@@ -18,7 +18,10 @@ composer, next to Send. No setting.
     A second click stops it. Send stops a clip still going and sends it.
   - **Held** for 0.3 s or longer, the button is a walkie-talkie. Released
     over the button, the message goes at once with the field's text. Moved
-    off the button first, the recording is dropped.
+    off the button first, or the press cancelled (the window left, a
+    system gesture), the recording is dropped. Esc during a hold drops it
+    too, and the release then sends nothing. A release while an answer is
+    still coming keeps the clip by the field.
   - While recording, a bar above the field shows the time, the level and
     what ends it. Esc drops the recording. Ctrl+Shift+R starts or stops a
     clip (the Mac's ⌥⌘R).
@@ -52,8 +55,10 @@ composer, next to Send. No setting.
     calibrate the pinned-file token ratio (as with pictures).
   - Compaction stops before a message with a recording, because a summary
     can't hold what was said.
-  - A chat whose first message was only a recording gets its title from
-    "(a spoken message)".
+  - A recording whose file went missing still reads "(audio)", and its
+    name is kept.
+  - For a chat whose first message was only a recording, the title request
+    reads "(a spoken message)".
 
 Not in this step (as on the Mac): attaching an audio file through +,
 longer clips, choosing a microphone other than the default.

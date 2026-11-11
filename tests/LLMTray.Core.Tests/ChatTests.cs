@@ -346,6 +346,16 @@ public sealed class ChatClientTests : IAsyncDisposable
         var messages = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray();
         Assert.Equal("(audio)", messages[0]!["content"]!.GetValue<string>());
         Assert.DoesNotContain("input_audio", messages.ToJsonString());
+
+        // A recording whose file is gone: the message still reads "(audio)", also to a model that hears, and keeps its name.
+        File.Delete(Path.Combine(store.ImagesFolder(chat.Id!.Value), name));
+        var third = new ChatClient(http, api, store);
+        third.Load(chat.Id!.Value);
+        Assert.Empty(third.Messages[0].Audios);
+        bodies.Clear();
+        await third.SendAsync("still there?", new ChatOptions(null, Hears: true));
+        Assert.Equal("(audio)", bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]![0]!["content"]!.GetValue<string>());
+        Assert.Equal([name], store.Load(chat.Id!.Value)!.Messages[0].AudioFilenames);
     }
 
     [Fact]

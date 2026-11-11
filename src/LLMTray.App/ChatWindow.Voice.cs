@@ -35,6 +35,8 @@ sealed partial class ChatWindow
     readonly ProgressBar recordingLevel = new() { Width = 80, Maximum = 1, VerticalAlignment = VerticalAlignment.Center };
     Microphone? recorder;
     DispatcherTimer? recordingTimer;
+    /// <summary>The pointer pressing the microphone now (one at a time: a second finger is ignored).</summary>
+    uint? pressPointer;
     /// <summary>The press that may become a hold: when, and whether it started the recording.</summary>
     DateTime pressedAt;
     bool pressStarted;
@@ -43,6 +45,8 @@ sealed partial class ChatWindow
     /// <summary>A pointer press already did what its Click would do.</summary>
     bool swallowClick;
     MediaPlayer? player;
+    IDisposable? playingSource;
+    IDisposable? playingStream;
     string? playing;
 
     void SetUpVoice()
@@ -59,15 +63,35 @@ sealed partial class ChatWindow
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(mic, L.T("Record a spoken message"));
         // The button handles the pointer itself: these see its presses anyway.
         // Only the primary button (a mouse's left, a touch, a pen tip): a right-click is no press of the microphone.
-        // Not the capture's loss: the button lets the capture go before its release reaches here.
-        mic.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) => { if (Primary(e)) MicPressed(); }), handledEventsToo: true);
+        mic.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (pressPointer is not null || !Primary(e)) return;
+            pressPointer = e.Pointer.PointerId;
+            MicPressed();
+        }), handledEventsToo: true);
         mic.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) =>
         {
-            if (e.GetCurrentPoint(mic).Properties.PointerUpdateKind is Microsoft.UI.Input.PointerUpdateKind.LeftButtonReleased or Microsoft.UI.Input.PointerUpdateKind.Other)
-            {
-                MicReleased(Inside(e));
-            }
+            if (pressPointer != e.Pointer.PointerId) return;
+            pressPointer = null;
+            MicReleased(Inside(e));
         }), handledEventsToo: true);
+        // A press that ends without a release (the capture taken away, the window left, a system gesture) is
+        // a cancel. The button lets the capture go just before an ordinary release too: looked at after it.
+        void Lost(PointerRoutedEventArgs e)
+        {
+            var id = e.Pointer.PointerId;
+            if (pressPointer != id) return;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (pressPointer != id) return;
+                pressPointer = null;
+                swallowClick = false;
+                if (holding && DateTime.UtcNow - pressedAt >= HoldTime) DropRecording();
+                holding = false;
+            });
+        }
+        mic.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler((_, e) => Lost(e)), handledEventsToo: true);
+        mic.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler((_, e) => Lost(e)), handledEventsToo: true);
         mic.PointerExited += (_, _) => { if (holding) movedOff = true; };
         mic.PointerEntered += (_, _) => { if (holding) movedOff = false; };
         // The keyboard (Space, Enter on the button): a click starts or stops a clip.
@@ -142,7 +166,8 @@ sealed partial class ChatWindow
             if (over && !movedOff)
             {
                 FinishRecording();
-                SendOrStop();
+                // Never a Stop of an answer under way: then the clip waits by the field.
+                if (!chat.Busy) SendOrStop();
             }
             else
             {
@@ -163,13 +188,13 @@ sealed partial class ChatWindow
     bool StartRecording()
     {
         if (recorder is not null) return true;
+        // Clips left from another chat (its redraw not yet run) don't go with this one, nor count against it.
+        if (audioEpoch != chat.Epoch) pendingAudio.Clear();
         if (pendingAudio.Count >= Wav.MaxClips)
         {
             ShowAttachProblem(L.F("At most {0} recordings in one message.", Wav.MaxClips));
             return false;
         }
-        // Clips left from another chat (its redraw not yet run) don't go with this one.
-        if (audioEpoch != chat.Epoch) pendingAudio.Clear();
         try
         {
             recorder = Microphone.Start();
@@ -224,6 +249,8 @@ sealed partial class ChatWindow
     /// <summary>Drops the recording under way (Esc, moved off, another chat).</summary>
     bool DropRecording()
     {
+        // A hold under way ends with it: its release sends nothing.
+        holding = false;
         if (recorder is not { } r) return false;
         recorder = null;
         StopTimer();
@@ -329,32 +356,39 @@ sealed partial class ChatWindow
             if (playing == id)
             {
                 StopPlaying();
-                button.Content = new FontIcon { Glyph = "", FontSize = 12 };
+                button.Content = new FontIcon { Glyph = "\uE768", FontSize = 12 };
                 return;
             }
+            // Taken before the wait: a quick second click on another clip stops this one, never plays over it.
             StopPlaying();
+            playing = id;
+            var stream = new InMemoryRandomAccessStream();
             try
             {
-                var stream = new InMemoryRandomAccessStream();
                 await stream.WriteAsync(data.AsBuffer());
+                if (playing != id)
+                {
+                    stream.Dispose();
+                    return;
+                }
                 stream.Seek(0);
-                var mime = Wav.IsWav(data) ? "audio/wav" : "audio/mp4";
-                player = new MediaPlayer { Source = MediaSource.CreateFromStream(stream, mime) };
-                var mine = player;
-                playing = id;
-                button.Content = new FontIcon { Glyph = "", FontSize = 12 };
+                var source = MediaSource.CreateFromStream(stream, Wav.IsWav(data) ? "audio/wav" : "audio/mp4");
+                var mine = new MediaPlayer { Source = source };
+                (player, playingSource, playingStream) = (mine, source, stream);
+                button.Content = new FontIcon { Glyph = "\uE71A", FontSize = 12 };
                 mine.MediaEnded += (_, _) => DispatcherQueue.TryEnqueue(() =>
                 {
                     if (player != mine) return;
                     StopPlaying();
-                    button.Content = new FontIcon { Glyph = "", FontSize = 12 };
+                    button.Content = new FontIcon { Glyph = "\uE768", FontSize = 12 };
                 });
                 mine.Play();
             }
             catch (Exception)
             {
                 // No audio output, or a file Windows can't play: nothing plays.
-                StopPlaying();
+                if (playing == id) StopPlaying();
+                stream.Dispose();
             }
         };
         return button;
@@ -363,8 +397,9 @@ sealed partial class ChatWindow
     void StopPlaying()
     {
         player?.Dispose();
-        player = null;
-        playing = null;
+        playingSource?.Dispose();
+        playingStream?.Dispose();
+        (player, playingSource, playingStream, playing) = (null, null, null, null);
     }
 
     /// <summary>

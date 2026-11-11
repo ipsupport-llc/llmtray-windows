@@ -29,7 +29,7 @@ sealed class Microphone : IDisposable
     bool closed;
     float level;
 
-    /// <summary>Raised once, on the recording's thread, when it reached the longest clip and stopped taking sound.</summary>
+    /// <summary>Raised once, on the recording's thread, when it reached the longest clip (or the driver failed) and stopped taking sound.</summary>
     public event Action? Full;
 
     Microphone(IntPtr handle)
@@ -125,7 +125,8 @@ sealed class Microphone : IDisposable
             full = pcm.Length >= MaxBytes;
             // Clear the flag first: a buffer not handed back isn't read twice.
             Marshal.WriteInt32(header, FlagsOffset, Marshal.ReadInt32(header, FlagsOffset) & ~Done);
-            if (requeue && !full) waveInAddBuffer(handle, header, Marshal.SizeOf<WaveHeader>());
+            // A buffer the driver won't take back ends the recording here (the queue order needs every one).
+            if (requeue && !full && waveInAddBuffer(handle, header, Marshal.SizeOf<WaveHeader>()) != 0) full = true;
             next = (next + 1) % Buffers;
         }
         return any;
@@ -144,6 +145,8 @@ sealed class Microphone : IDisposable
                 if (closed) return;
                 any = DrainLocked(requeue: true);
                 reachedEnd = full;
+                // The microphone goes quiet now, not when the window gets round to the clip.
+                if (full) waveInStop(handle);
             }
             if (reachedEnd)
             {
@@ -240,6 +243,8 @@ sealed class Microphone : IDisposable
     static extern int waveInStart(IntPtr handle);
     [DllImport("winmm.dll")]
     static extern int waveInReset(IntPtr handle);
+    [DllImport("winmm.dll")]
+    static extern int waveInStop(IntPtr handle);
     [DllImport("winmm.dll")]
     static extern int waveInClose(IntPtr handle);
 }
