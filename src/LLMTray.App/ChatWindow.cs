@@ -276,7 +276,9 @@ sealed partial class ChatWindow : Window
             ContextTokens: entry is not null && app.Host.State.Model?.FullPath == entry.FullPath ? app.Host.ContextTokens : 0,
             PinShare: app.Settings.PinShare,
             PinRatios: app.PinRatios,
-            ModelKey: entry?.FullPath);
+            ModelKey: entry?.FullPath,
+            // A model that doesn't see gets the text of what was shown, also in earlier messages.
+            SeesPictures: entry is null ? null : entry.ProjectorPath is not null);
     }
 
     /// <summary>
@@ -503,9 +505,8 @@ sealed partial class ChatWindow : Window
         if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0) return;
         input.Text = "";
         var images = pending.ToList();
-        var shared = pendingShared.Select(s => s.Shared).ToList();
+        var shared = TakeShared(images);
         pending.Clear();
-        pendingShared.Clear();
         RenderAttachments();
         follow = true;
         _ = chat.SendAsync(text, Options(), images, shared);

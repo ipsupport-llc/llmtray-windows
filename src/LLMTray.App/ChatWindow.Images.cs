@@ -167,8 +167,10 @@ sealed partial class ChatWindow
     /// <summary>Another chat is shown: what was waiting to be sent belonged to the one before.</summary>
     void ClearAttachments()
     {
-        if (pending.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
+        if (pending.Count == 0 && pendingShared.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
         pending.Clear();
+        // What was shown belongs to the chat it was shown in (a temporary one's never reaches another).
+        pendingShared.Clear();
         RenderAttachments();
         attachNote.Visibility = Visibility.Collapsed;
     }

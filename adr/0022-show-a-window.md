@@ -20,9 +20,12 @@ is on.
   (`Windows.Media.Ocr`, the user's languages), line by line, at most 6,000
   characters, marked as recognized text (icons and states of controls
   aren't in it). With no OCR language installed, it says no text could be
-  read. The text is kept with a capture that goes as a picture too: a
-  model that ends up without the picture (removed, or another model) gets
-  the text instead.
+  read. Each capture keeps both until the message is sent; then, for the model
+  it goes to, a model that sees gets the picture (within the 8 pictures a
+  message may carry) and one that doesn't gets the text. A later request to
+  a model that doesn't see gets the text of earlier captures too. The text
+  is read from the full frame (up to the engine's size), not the scaled
+  picture; a recognition failure only means no text.
 - **In the message**, before its text, a block marked as what the user
   shows, so its words don't read as the user's own. A chip in the composer
   until sent (remove it there); under the sent message, "Showed the model:
@@ -33,8 +36,10 @@ is on.
   and it stays in the conversation, so a chat that showed anything is
   treated like one with pinned files from then on (adr/0021): only the
   calculator among the built-in tools, folders only to look at, no MCP
-  servers; calls to the rest are refused with that reason. A new chat has
-  them again.
+  servers; calls to anything else, however local, are refused with that
+  reason. A new chat has them again. Compaction never summarizes a message
+  that showed something, so the chat stays marked. What's shown and not yet
+  sent belongs to its chat: switching chats drops it.
 
 ## Not yet
 

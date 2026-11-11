@@ -25,6 +25,10 @@ public sealed record SharedContext
     /// <summary>The picture goes with the message: its text is for a model that doesn't see.</summary>
     public bool HasPicture { get; init; }
 
+    /// <summary>Fields a newer Mac wrote: kept when this app saves the chat.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? Other { get; set; }
+
     /// <summary>The most text one shared item adds to a message.</summary>
     public const int MaxText = 6000;
 
@@ -32,7 +36,7 @@ public sealed record SharedContext
     {
         var clean = text is null ? null : Clean(text);
         var truncated = clean is { Length: > MaxText };
-        if (truncated) clean = clean![..MaxText];
+        if (truncated && clean is { } whole) clean = whole[..(char.IsHighSurrogate(whole[MaxText - 1]) ? MaxText - 1 : MaxText)];
         return new SharedContext
         {
             Kind = kind, Title = title.Trim(), Source = source.Trim(), Text = clean is { Length: > 0 } ? clean : null,

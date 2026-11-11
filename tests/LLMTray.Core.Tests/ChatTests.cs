@@ -295,6 +295,24 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AModelThatDoesntSeeGetsTheTextOfWhatWasShownAndCompactionKeepsIt()
+    {
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        var shown = SharedContext.Make(SharedKind.Window, "Settings", "", "Wi-Fi off", hasPicture: true);
+        await chat.SendAsync("look", new ChatOptions(null), [PngBytes()], [shown]);
+        // Asked again with a model that doesn't see: the text goes even though the picture is there.
+        await chat.SendAsync("again", new ChatOptions(null, SeesPictures: false));
+        var last = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray();
+        Assert.Contains(last, m => m!["content"] is JsonArray parts && parts.Any(p => p!["text"]?.GetValue<string>().Contains("Wi-Fi off") == true));
+        // Never summarized away.
+        for (var i = 0; i < 8; i++) chat.Messages.Add(new ChatMessage { Role = i % 2 == 0 ? "user" : "assistant", Content = "x" });
+        var range = ChatClient.CompactionRange(chat.Messages, keepStart: 0, keepEnd: 2);
+        Assert.True(range is null || chat.Messages.Take(range.Value.End).Skip(range.Value.Start).All(m => m.Shared.Count == 0));
+    }
+
+    static byte[] PngBytes() => Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==");
+
+    [Fact]
     public void AShownItemsTextGoesOnlyToAModelThatDoesntSeeIt()
     {
         var picture = SharedContext.Make(SharedKind.Screen, "", "", "OK  Cancel", hasPicture: true);
@@ -303,6 +321,9 @@ public sealed class ChatClientTests : IAsyncDisposable
         var big = SharedContext.Make(SharedKind.Window, "t", "a", new string('x', SharedContext.MaxText + 10), hasPicture: false);
         Assert.True(big.Truncated);
         Assert.Contains("(cut here", big.NoteForModel(false));
+        // A cut never splits a pair: the text stays valid.
+        var emoji = SharedContext.Make(SharedKind.Window, "", "", new string('x', SharedContext.MaxText - 1) + "😀😀", hasPicture: false);
+        Assert.False(char.IsHighSurrogate(emoji.Text![^1]));
     }
 
     [Fact]

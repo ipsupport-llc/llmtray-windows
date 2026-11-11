@@ -7,14 +7,15 @@ namespace LLMTray.App;
 
 /// <summary>
 /// Showing the model a window or the screen (adr/0022, Mac adr/0030): from
-/// the attach button's menu, through the system picker. A model that sees
-/// gets the picture and a line naming it; one that doesn't gets the text
-/// recognized in it. Shown as a chip until sent; saved with the message.
+/// the attach button's menu, through the system picker. Each capture keeps
+/// its picture and the text read from it; at send time, a model that sees
+/// gets the picture (within the picture limit) and one that doesn't gets
+/// the text. Shown as a chip until sent; saved with the message.
 /// </summary>
 sealed partial class ChatWindow
 {
-    /// <summary>What's shown with the next message, and its picture among <see cref="pending"/> (null: the model doesn't see).</summary>
-    readonly List<(SharedContext Shared, byte[]? Png)> pendingShared = [];
+    /// <summary>What's shown with the next message: what it was and its picture (apart from the attached pictures).</summary>
+    readonly List<(SharedContext Shared, byte[] Png)> pendingShared = [];
 
     /// <summary>The attach button: a menu when windows may be shown, else the picture picker.</summary>
     async Task AttachClickedAsync()
@@ -36,6 +37,11 @@ sealed partial class ChatWindow
 
     async Task ShowWindowAsync()
     {
+        if (pending.Count + pendingShared.Count >= MaxPictures)
+        {
+            ShowAttachProblem(L.F("At most {0} pictures and windows a message.", MaxPictures));
+            return;
+        }
         var epoch = chat.Epoch;
         Capture? capture;
         try
@@ -44,23 +50,44 @@ sealed partial class ChatWindow
         }
         catch (Exception e)
         {
-            attachNote.Text = L.F("The window couldn't be captured: {0}", e.Message);
-            attachNote.Foreground = Ui.Orange;
-            attachNote.Visibility = Visibility.Visible;
+            ShowAttachProblem(L.F("The window couldn't be captured: {0}", e.Message));
             return;
         }
         // Cancelled, or another chat is on screen now.
         if (capture is null || epoch != chat.Epoch) return;
+        pendingShared.Add((SharedContext.Make(SharedKind.Window, capture.Name, "", capture.Text, hasPicture: false), capture.Png));
+        RenderAttachments();
+        input.Focus(FocusState.Programmatic);
+    }
+
+    void ShowAttachProblem(string text)
+    {
+        attachNote.Text = text;
+        attachNote.Foreground = Ui.Orange;
+        attachNote.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// At send time, for the model the message goes to: a model that sees
+    /// gets each capture's picture, after the attached ones (so the captures
+    /// with pictures are the message's last pictures); one that doesn't gets
+    /// the text. Returns the shown items as sent.
+    /// </summary>
+    List<SharedContext> TakeShared(List<byte[]> images)
+    {
         var app = App.Current;
         var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
-        // A model that sees gets the picture; its text goes too, for the model to fall back on if the picture is removed.
         var sees = entry is { ProjectorPath: not null };
-        var shared = SharedContext.Make(SharedKind.Window, capture.Name, "", capture.Text, hasPicture: sees);
-        if (sees && pending.Count < MaxPictures) pending.Add(capture.Png);
-        pendingShared.Add((shared, sees ? capture.Png : null));
-        RenderAttachments();
-        input.Focus(FocusState.Programmatic);
+        var sent = new List<SharedContext>();
+        foreach (var (shared, png) in pendingShared)
+        {
+            var withPicture = sees && images.Count < MaxPictures;
+            if (withPicture) images.Add(png);
+            sent.Add(shared with { HasPicture = withPicture });
+        }
+        pendingShared.Clear();
+        return sent;
     }
 
     /// <summary>The chips of what's shown, beside the pictures.</summary>
@@ -74,18 +101,19 @@ sealed partial class ChatWindow
             remove.Click += (_, _) =>
             {
                 pendingShared.Remove(item);
-                if (item.Png is { } png) pending.Remove(png);
                 RenderAttachments();
             };
-            var label = new TextBlock { Text = item.Shared.Heading, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 260 };
+            var thumb = new Image { Width = 40, Height = 40, Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill };
+            _ = SetSourceAsync(thumb, item.Png, 40);
+            var label = new TextBlock { Text = item.Shared.Heading, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 };
             ToolTipService.SetToolTip(label, item.Shared.Text is { } text ? (text.Length > 400 ? text[..400] + "…" : text) : item.Shared.Heading);
             attachments.Children.Add(new Border
             {
-                Child = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 12 }, label, remove),
+                Child = Ui.Horizontal(thumb, label, remove),
                 BorderBrush = Ui.Stroke,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(8, 2, 2, 2),
+                Padding = new Thickness(2, 2, 2, 2),
                 VerticalAlignment = VerticalAlignment.Center,
             });
         }

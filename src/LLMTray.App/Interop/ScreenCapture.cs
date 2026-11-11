@@ -31,7 +31,18 @@ static class ScreenCapture
         if (item is null) return null;
         using var bitmap = await FrameAsync(item);
         var png = await PngAsync(bitmap, maxSide);
-        return new Capture(item.DisplayName ?? "", png, await RecognizeAsync(png));
+        // Read from the full frame (up to what the engine takes), not the scaled picture: small text survives.
+        string? text;
+        try
+        {
+            text = await RecognizeAsync(bitmap);
+        }
+        catch (Exception)
+        {
+            // No text, but the picture is good.
+            text = null;
+        }
+        return new Capture(item.DisplayName ?? "", png, text);
     }
 
     static async Task<SoftwareBitmap> FrameAsync(GraphicsCaptureItem item)
@@ -48,21 +59,39 @@ static class ScreenCapture
             // Older Windows: the cursor may show.
         }
         var first = new TaskCompletionSource<SoftwareBitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pool.FrameArrived += async (sender, _) =>
+        var taken = 0;
+        async void OnFrame(Direct3D11CaptureFramePool sender, object _)
         {
-            using var frame = sender.TryGetNextFrame();
-            if (frame is null || first.Task.IsCompleted) return;
+            // On the pool's own thread: nothing may escape (an async void would end the app), and only the first frame counts.
             try
             {
-                first.TrySetResult(await SoftwareBitmap.CreateCopyFromSurfaceAsync(frame.Surface, BitmapAlphaMode.Premultiplied));
+                using var frame = sender.TryGetNextFrame();
+                if (frame is null || Interlocked.Exchange(ref taken, 1) == 1) return;
+                var copy = await SoftwareBitmap.CreateCopyFromSurfaceAsync(frame.Surface, BitmapAlphaMode.Premultiplied);
+                // Too late (timed out): nobody will dispose it but us.
+                if (!first.TrySetResult(copy)) copy.Dispose();
             }
             catch (Exception e)
             {
                 first.TrySetException(e);
             }
-        };
-        session.StartCapture();
-        return await first.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        pool.FrameArrived += OnFrame;
+        try
+        {
+            session.StartCapture();
+            return await first.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException)
+        {
+            // A copy still under way finds the task done and disposes its bitmap.
+            first.TrySetCanceled();
+            throw new InvalidOperationException("no picture came from the window in 5 seconds");
+        }
+        finally
+        {
+            pool.FrameArrived -= OnFrame;
+        }
     }
 
     static async Task<byte[]> PngAsync(SoftwareBitmap bitmap, uint maxSide)
@@ -86,16 +115,28 @@ static class ScreenCapture
     }
 
     /// <summary>The text in the picture, line by line in the engine's reading order; null when no OCR language is installed or nothing reads.</summary>
-    static async Task<string?> RecognizeAsync(byte[] png)
+    static async Task<string?> RecognizeAsync(SoftwareBitmap frame)
     {
         var engine = OcrEngine.TryCreateFromUserProfileLanguages();
         if (engine is null) return null;
-        using var stream = new InMemoryRandomAccessStream();
-        await stream.WriteAsync(png.AsBuffer());
-        stream.Seek(0);
-        var decoder = await BitmapDecoder.CreateAsync(stream);
-        using var bitmap = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
-        if (bitmap.PixelWidth > OcrEngine.MaxImageDimension || bitmap.PixelHeight > OcrEngine.MaxImageDimension) return null;
+        // The full frame when the engine takes it; else scaled down to its limit.
+        var limit = OcrEngine.MaxImageDimension;
+        using var source = SoftwareBitmap.Convert(frame, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        SoftwareBitmap bitmap;
+        if (source.PixelWidth <= limit && source.PixelHeight <= limit)
+        {
+            bitmap = SoftwareBitmap.Copy(source);
+        }
+        else
+        {
+            var scaled = await PngAsync(source, limit);
+            using var stream = new InMemoryRandomAccessStream();
+            await stream.WriteAsync(scaled.AsBuffer());
+            stream.Seek(0);
+            var decoder = await BitmapDecoder.CreateAsync(stream);
+            bitmap = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        }
+        using var _ = bitmap;
         var result = await engine.RecognizeAsync(bitmap);
         var text = string.Join("\n", result.Lines.Select(l => l.Text));
         return text.Trim().Length > 0 ? text : null;
@@ -106,6 +147,7 @@ static class ScreenCapture
     static IDirect3DDevice Device()
     {
         // Hardware first; WARP (software) where there's no GPU (a VM, a CI runner).
+        Exception? last = null;
         foreach (var driver in new[] { DriverTypeHardware, DriverTypeWarp })
         {
             if (D3D11CreateDevice(IntPtr.Zero, driver, IntPtr.Zero, CreateDeviceBgraSupport, IntPtr.Zero, 0, SdkVersion, out var d3d, out _, out var context) != 0) continue;
@@ -130,13 +172,18 @@ static class ScreenCapture
                     Marshal.Release(dxgi);
                 }
             }
+            catch (Exception e) when (e is COMException or InvalidCastException)
+            {
+                // This driver's device won't do (a flaky GPU, a VM): the next one is tried.
+                last = e;
+            }
             finally
             {
                 Marshal.Release(d3d);
                 if (context != IntPtr.Zero) Marshal.Release(context);
             }
         }
-        throw new InvalidOperationException("no Direct3D device for the capture");
+        throw new InvalidOperationException("no Direct3D device for the capture", last);
     }
 
     const int DriverTypeHardware = 1;

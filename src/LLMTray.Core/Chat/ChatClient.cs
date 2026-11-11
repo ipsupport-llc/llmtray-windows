@@ -86,7 +86,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     int ContextTokens = 0,
     double PinShare = 0.5,
     ProjectFiles.PinTokenRatios? PinRatios = null,
-    string? ModelKey = null);
+    string? ModelKey = null,
+    bool? SeesPictures = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -623,6 +624,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         {
                             outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error($"no tool called {call.Name} is available"), null, true);
                         }
+                        else if (lockedDown && !string.Equals(call.Name.Trim(), "calculate", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Only the calculator was declared: nothing else runs, however local.
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error("refused: " + string.Format(System.Globalization.CultureInfo.InvariantCulture, lockedReason, "other tools")), null, true);
+                        }
                         else
                         {
                             outcome = await options.Tools.RunAsync(call, enabled, token).ConfigureAwait(false);
@@ -991,7 +997,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             .FirstOrDefault(i => IsTurnStart(i!.Value) || messages[i!.Value].IsSummary);
         if (start is not int s) return null;
         var end = messages.Count - keepEnd;
-        var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0);
+        var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0
+            // What the user showed (Mac hasMedia): never summarized away, so the chat stays treated as having shown it.
+            || messages[i!.Value].Shared.Count > 0);
         if (media is int m) end = Math.Min(end, m);
         while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
         if (end <= s + 1 || end >= messages.Count) return null;
@@ -1133,12 +1141,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         (long)Encoding.UTF8.GetByteCount(history.ToJsonString(Measure)) + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString(Measure)));
 
     /// <summary>A user message as the model reads it: the new-files note first, when files came before it.</summary>
-    static string WithNote(ChatMessage m)
+    static string WithNote(ChatMessage m, ChatOptions options)
     {
         if (m.Role != "user") return m.Content;
         // Files added to the project first, then what the user showed (Mac adr/0030). A capture's text goes only
         // when its picture doesn't: each capture's picture is here, or every capture's text goes.
-        var seesPictures = m.Images.Count >= m.Shared.Count(s => s.HasPicture);
+        var seesPictures = options.SeesPictures != false && m.Images.Count >= m.Shared.Count(s => s.HasPicture);
         var notes = new List<string>();
         if (ProjectFiles.ProjectFilesNote.Text(m.ProjectFilesAdded) is { } files) notes.Add(files);
         notes.AddRange(m.Shared.Select(s => s.NoteForModel(seesPictures)));
@@ -1170,7 +1178,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             {
                 // Text first, then each picture as a data URL (always PNG: attachments are converted).
                 var parts = new JsonArray();
-                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m) });
+                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m, options) });
                 foreach (var png in m.Images)
                 {
                     parts.Add(new JsonObject
@@ -1183,7 +1191,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 continue;
             }
             if (m.Content.Length == 0 && m.Shared.Count == 0) continue;
-            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m) });
+            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m, options) });
         }
         return history;
     }
