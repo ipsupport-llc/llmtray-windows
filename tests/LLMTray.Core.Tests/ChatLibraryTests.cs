@@ -106,6 +106,11 @@ public sealed class ChatLibraryTests : IDisposable
         var store = new ChatStore(root);
         Assert.Equal(new HashSet<Guid> { name, inside }, store.Present().ToHashSet());
         Assert.Equal("New chat", Assert.Single(store.List()).Title);
+        var withNulls = Guid.NewGuid();
+        File.WriteAllText(Path.Combine(root, withNulls.ToString("D").ToUpperInvariant() + ".json"),
+            $$"""{ "id": "{{withNulls}}", "messages": [ null, { "role": "user", "content": null, "imageFilenames": null, "sources": null, "mcpCalls": null, "reasoning": null } ] }""");
+        var message = Assert.Single(store.Load(withNulls)!.Messages);
+        Assert.Equal(("", 0, 0, 0), (message.Content, message.ImageFilenames.Count, message.Sources.Count, message.McpCalls.Count));
     }
 
     [Fact]

@@ -25,8 +25,7 @@ public sealed class ChatStore(string folder)
             return file with
             {
                 Title = file.Title ?? "",
-                Messages = (file.Messages ?? []).Where(m => m is not null)
-                    .Select(m => m.Role is null || m.Content is null ? m with { Role = m.Role ?? "user", Content = m.Content ?? "" } : m).ToList(),
+                Messages = (file.Messages ?? []).Where(m => m is not null).Select(Whole).ToList(),
             };
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
@@ -34,6 +33,23 @@ public sealed class ChatStore(string folder)
             return null;
         }
     }
+
+    /// <summary>A message with every list and text present (JSON nulls read as empty).</summary>
+    static PersistedMessage Whole(PersistedMessage m) =>
+        m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
+            || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
+            ? m with
+            {
+                Role = m.Role ?? "user",
+                Content = m.Content ?? "",
+                Reasoning = m.Reasoning ?? "",
+                ImageFilenames = m.ImageFilenames ?? [],
+                ImageDurations = m.ImageDurations ?? [],
+                ImagePrompts = m.ImagePrompts ?? [],
+                Sources = m.Sources ?? [],
+                McpCalls = m.McpCalls ?? [],
+            }
+            : m;
 
     /// <summary>
     /// The chats present (what library.json is pruned by): every session
