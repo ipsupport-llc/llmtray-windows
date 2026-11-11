@@ -84,15 +84,37 @@ public sealed class ProjectFilesToolTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task AReadThatEndsOnAPageBoundaryGoesOnFromTheNextPage()
+    public async Task EveryPageIsShownOnceFollowingTheCursor()
     {
-        var big = string.Join(" ", Enumerable.Repeat("long", 1_500));
-        var doc = AddText("pages.txt", "short first page", big, "third");
-        var turn = Turn(context: 9_000);
-        var read = Json(await ProjectFilesTool.RunAsync(Call($"{{\"doc\":{doc},\"pages\":\"1-3\"}}"), turn, 1_000, default));
-        var shown = read["text"]!.AsArray().Select(p => p!["page"]!.GetValue<int>()).ToList();
-        // Whatever was shown, the pages not shown are behind a cursor, never dropped.
-        if (!shown.Contains(3)) Assert.NotNull(read["next"]);
+        // Pages of every size around the cut: following the cursors shows each page's text whole, in order, none skipped.
+        var pages = Enumerable.Range(1, 9).Select(i => string.Join(" ", Enumerable.Repeat($"p{i}", 40 + i * 170))).ToArray();
+        var doc = AddText("pages.txt", pages);
+        var seen = new Dictionary<int, string>();
+        var call = $"{{\"doc\":{doc},\"pages\":\"1-9\"}}";
+        for (var step = 0; step < 50; step++)
+        {
+            var read = Json(await ProjectFilesTool.RunAsync(Call(call), Turn(context: 6_000), 1_000, default));
+            foreach (var p in read["text"]!.AsArray())
+            {
+                var n = p!["page"]!.GetValue<int>();
+                seen[n] = seen.GetValueOrDefault(n, "") + p["text"]!.GetValue<string>();
+            }
+            if (read["next"] is null) break;
+            call = $"{{\"cursor\":\"{read["next"]!.GetValue<string>()}\"}}";
+        }
+        Assert.Equal(Enumerable.Range(1, 9), seen.Keys.Order());
+        for (var i = 1; i <= 9; i++) Assert.Equal(pages[i - 1], seen[i]);
+    }
+
+    [Fact]
+    public async Task ADeletedProjectIsNeverMadeAgain()
+    {
+        AddText("a.txt", "alpha");
+        service.DeleteProject(project);
+        var path = Path.Combine(root, "late.txt");
+        File.WriteAllText(path, "late");
+        Assert.Equal("the project was deleted", service.Add(project, [path]).Single().Refused);
+        Assert.Contains("no longer in that project", (await ProjectFilesTool.RunAsync(Call("{}"), Turn(), 100, default)).Result);
     }
 
     [Fact]

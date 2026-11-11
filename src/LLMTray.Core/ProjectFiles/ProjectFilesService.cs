@@ -28,6 +28,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     readonly Func<bool> foreground;
     readonly Dictionary<Guid, ProjectIndex> open = [];
     readonly Dictionary<Guid, string> activity = [];
+    /// <summary>Projects deleted while the app runs: never made again (a late add from an open Files window).</summary>
+    readonly HashSet<Guid> deleted = [];
     readonly object sync = new();
     readonly SemaphoreSlim poke = new(0, int.MaxValue);
     readonly CancellationTokenSource stopping = new();
@@ -65,6 +67,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
         lock (sync)
         {
             if (open.TryGetValue(project, out var index)) return index;
+            if (deleted.Contains(project)) return null;
             var folder = Folder(project);
             if (!create && !File.Exists(Path.Combine(folder, "index.sqlite"))) return null;
             if (File.Exists(DeletionMarker(project))) return null;
@@ -169,6 +172,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
         lock (sync)
         {
             // The record first, under the lock Index() checks it with: nothing reopens the project from here on.
+            deleted.Add(project);
             if (Directory.Exists(folder))
             {
                 Directory.CreateDirectory(root);
@@ -273,8 +277,10 @@ public sealed class ProjectFilesService : IAsyncDisposable
         {
             if (index.NextToExtract() is { } doc)
             {
-                SetActivity(project, "reading");
                 lock (sync) currentDoc = doc.Doc;
+                // Removed between the pick and now: its Cancel found nothing to cancel yet.
+                if (index.Document(doc.Doc) is null) return true;
+                SetActivity(project, "reading");
                 index.MarkExtracting(doc.Doc);
                 var path = index.CopyPath(doc.Doc, doc.Ext);
                 try
@@ -323,8 +329,9 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 }
                 return false;
             }
-            SetActivity(project, "embedding");
             lock (sync) currentDoc = batch.Doc;
+            if (index.Document(batch.Doc) is not { Status: DocumentStatus.Searchable or DocumentStatus.Embedded }) return true;
+            SetActivity(project, "embedding");
             float[][] vectors;
             try
             {

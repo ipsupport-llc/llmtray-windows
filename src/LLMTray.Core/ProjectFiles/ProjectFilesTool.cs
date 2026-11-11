@@ -83,12 +83,12 @@ public static class ProjectFilesTool
     public static async Task<ToolOutcome> RunAsync(ToolCall call, ProjectTurn turn, int requestTokens, CancellationToken cancellationToken)
     {
         // The chat moved to another project (or out of one), or the project went: nothing from it now.
-        if (turn.CurrentProject() != turn.Project || turn.Service.Index(turn.Project) is not { } index)
-        {
-            return Fail("refused: this chat is no longer in that project");
-        }
         try
         {
+            if (turn.CurrentProject() != turn.Project || turn.Service.Index(turn.Project) is not { } index)
+            {
+                return Fail("refused: this chat is no longer in that project");
+            }
             return await RunAsync(call, turn, index, requestTokens, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)

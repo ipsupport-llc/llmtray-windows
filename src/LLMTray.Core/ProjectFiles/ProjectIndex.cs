@@ -302,11 +302,16 @@ public sealed class ProjectIndex
         }
     }
 
-    /// <summary>The next document to read: new ones and re-index requests, oldest first.</summary>
+    /// <summary>
+    /// The next document to read: new ones and re-index requests, oldest
+    /// first. One reader works at a time, so one still marked extracting
+    /// when it asks is a read that ended without a word (its failure
+    /// couldn't be written): read again.
+    /// </summary>
     public ProjectDocument? NextToExtract()
     {
         using var db = Open();
-        return Documents(db).FirstOrDefault(d => d.Status == DocumentStatus.Staged || (d.Reindex && d.Status != DocumentStatus.Removing && d.Status != DocumentStatus.Extracting));
+        return Documents(db).FirstOrDefault(d => d.Status is DocumentStatus.Staged or DocumentStatus.Extracting || (d.Reindex && d.Status != DocumentStatus.Removing));
     }
 
     /// <summary>A re-index: the current revision stays searchable until the new one commits.</summary>
@@ -335,7 +340,7 @@ public sealed class ProjectIndex
         {
             using var db = Open();
             // A re-index keeps its searchable status meanwhile.
-            Exec(db, "UPDATE documents SET status = 'extracting' WHERE doc = $d AND status = 'staged'", null, ("$d", doc));
+            Exec(db, "UPDATE documents SET status = 'extracting' WHERE doc = $d AND status IN ('staged', 'extracting')", null, ("$d", doc));
         }
     }
 
