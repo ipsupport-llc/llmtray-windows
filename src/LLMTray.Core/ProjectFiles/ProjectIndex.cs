@@ -238,8 +238,8 @@ public sealed class ProjectIndex
         var info = new FileInfo(source);
         if (info.Length > MaxFileBytes) throw new AddRefusedException("too large");
         if (freeSpace?.Invoke(Folder) is long free && free < info.Length * 3 + (64L << 20)) throw new AddRefusedException("not enough free disk space");
-        var ext = DocumentFormats.Extension(source);
-        if (ext.Length > 16 || ext.Any(c => !char.IsAsciiLetterOrDigit(c))) ext = "";
+        // The format's own extension, never one Windows would run (adr/0021).
+        var ext = DocumentFormats.CopyExtension(format);
         long doc;
         lock (writing)
         {

@@ -77,6 +77,7 @@ public static class ExtractProtocol
         var maxBytes = limits.MaxTextChars * 6 + limits.MaxPages * 64L + 4096;
         var pages = new List<ExtractedPage>();
         long read = 0;
+        long chars = 0;
         try
         {
             await process.Input.WriteAsync("go\n"u8.ToArray(), timeout.Token).ConfigureAwait(false);
@@ -95,7 +96,7 @@ public static class ExtractProtocol
                     if (buffer[i] != (byte)'\n') continue;
                     line.Write(buffer, start, i - start);
                     start = i + 1;
-                    if (Line(line.ToArray(), pages, limits) is { } done) return done ? pages : throw new ExtractException("the reader stopped");
+                    if (Line(line.ToArray(), pages, limits, ref chars) is { } done) return done ? pages : throw new ExtractException("the reader stopped");
                     line.SetLength(0);
                 }
                 line.Write(buffer, start, n - start);
@@ -122,7 +123,7 @@ public static class ExtractProtocol
     }
 
     /// <summary>One line: a page (null: go on), done (true), or the child's error (thrown).</summary>
-    static bool? Line(byte[] bytes, List<ExtractedPage> pages, ExtractLimits limits)
+    static bool? Line(byte[] bytes, List<ExtractedPage> pages, ExtractLimits limits, ref long chars)
     {
         JsonNode? node;
         try
@@ -141,6 +142,9 @@ public static class ExtractProtocol
         {
             throw new ExtractException("the reader's output didn't read");
         }
+        // The child keeps the caps too; the parent doesn't count on it.
+        chars += text.Length;
+        if (chars > limits.MaxTextChars) throw new ExtractException("too large: too much text");
         var label = o["l"] is JsonValue l && l.TryGetValue<string>(out var s) ? s : null;
         pages.Add(new ExtractedPage(number, text, label, o["tab"] is JsonValue tab && tab.TryGetValue<bool>(out var b) && b));
         return null;

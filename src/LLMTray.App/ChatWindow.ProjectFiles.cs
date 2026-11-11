@@ -58,7 +58,8 @@ sealed partial class ChatWindow
         var list = new StackPanel { Spacing = 6 };
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
-        var add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
+        Button add = null!;
+        add = Ui.Button(L.T("Add Files…"), () => _ = PickAsync(), accent: true);
         var body = new StackPanel
         {
             Spacing = 10,
@@ -237,7 +238,9 @@ sealed partial class ChatWindow
         try
         {
             // Text and code open as text: a script's copy (.bat, .ps1) must never run.
-            var asText = Enum.TryParse<DocumentFormat>(d.Format, out var format) && format is DocumentFormat.Text or DocumentFormat.Markdown or DocumentFormat.Code;
+            // Only the formats that open in their own app go to the shell, under the extension the copy was given for its format.
+            var asText = !Enum.TryParse<DocumentFormat>(d.Format, out var format) || !DocumentFormats.OpensInItsApp(format)
+                || d.Ext != DocumentFormats.CopyExtension(format);
             var start = asText
                 ? new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "notepad.exe")) { ArgumentList = { path }, UseShellExecute = false }
                 : new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true };

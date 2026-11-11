@@ -101,6 +101,12 @@ public sealed class ProjectFilesService : IAsyncDisposable
                     results.Add(new AddResult(name, null, "folders can't be added; add the files in it"));
                     continue;
                 }
+                // Too large before anything reads it.
+                if (new FileInfo(path).Length > ProjectIndex.MaxFileBytes)
+                {
+                    results.Add(new AddResult(name, null, "too large"));
+                    continue;
+                }
                 var format = DocumentFormats.Detect(path);
                 if (format is DocumentFormat.Unsupported or DocumentFormat.Legacy)
                 {

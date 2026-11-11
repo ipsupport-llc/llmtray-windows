@@ -51,38 +51,66 @@ public static class DocumentFormats
         if (head.StartsWith("PK\u0003\u0004"u8)) return zipKind();
         if (head.StartsWith("{\\rtf"u8)) return DocumentFormat.Rtf;
         if (head.StartsWith(new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 })) return DocumentFormat.Legacy;
+        // UTF-32 before UTF-16: its little-endian BOM starts like UTF-16's.
+        if (head.StartsWith(new byte[] { 0xFF, 0xFE, 0, 0 }) || head.StartsWith(new byte[] { 0, 0, 0xFE, 0xFF })) return TextKind(ext);
         if (!LooksLikeText(head)) return DocumentFormat.Unsupported;
+        if (TextKind(ext) is var kind and not DocumentFormat.Unsupported) return kind;
+        var start = Encoding.UTF8.GetString(head[..Math.Min(head.Length, 512)]).TrimStart('\uFEFF', ' ', '\r', '\n', '\t').ToLowerInvariant();
+        if (start.StartsWith("<!doctype html", StringComparison.Ordinal) || start.StartsWith("<html", StringComparison.Ordinal)) return DocumentFormat.Html;
+        return DocumentFormat.Unsupported;
+    }
+
+    static DocumentFormat TextKind(string ext)
+    {
         if (HtmlExtensions.Contains(ext)) return DocumentFormat.Html;
         if (MarkdownExtensions.Contains(ext)) return DocumentFormat.Markdown;
         if (CodeExtensions.Contains(ext)) return DocumentFormat.Code;
         if (TextExtensions.Contains(ext) || ext.Length == 0) return DocumentFormat.Text;
-        var start = Encoding.UTF8.GetString(head[..Math.Min(head.Length, 512)]).TrimStart('﻿', ' ', '\r', '\n', '\t').ToLowerInvariant();
-        if (start.StartsWith("<!doctype html", StringComparison.Ordinal) || start.StartsWith("<html", StringComparison.Ordinal)) return DocumentFormat.Html;
         return DocumentFormat.Unsupported;
     }
 
     /// <summary>Text: no NUL bytes (UTF-16 with a BOM aside).</summary>
     static bool LooksLikeText(ReadOnlySpan<byte> head)
     {
+        if (head.StartsWith(new byte[] { 0xFF, 0xFE, 0, 0 }) || head.StartsWith(new byte[] { 0, 0, 0xFE, 0xFF })) return true;
         if (head.StartsWith(new byte[] { 0xFF, 0xFE }) || head.StartsWith(new byte[] { 0xFE, 0xFF })) return true;
         return !head.Contains((byte)0);
     }
 
-    static DocumentFormat ZipKind(string path)
+    /// <summary>
+    /// A zip container's kind, from its extension: the app never opens the
+    /// zip itself (a central directory of millions of entries would be read
+    /// before any cap); the reader process finds out if the parts aren't there.
+    /// </summary>
+    static DocumentFormat ZipKind(string path) => Extension(path) switch
     {
-        try
-        {
-            using var zip = new SafeZip(File.OpenRead(path));
-            if (zip.Has("word/document.xml")) return DocumentFormat.Docx;
-            if (zip.Has("xl/workbook.xml")) return DocumentFormat.Xlsx;
-            if (zip.Has("ppt/presentation.xml")) return DocumentFormat.Pptx;
-            if (zip.Read("mimetype") is { } mime && Encoding.ASCII.GetString(mime).Trim() == "application/vnd.oasis.opendocument.text") return DocumentFormat.Odt;
-        }
-        catch (ExtractException)
-        {
-        }
-        return DocumentFormat.Unsupported;
-    }
+        "docx" or "docm" or "dotx" => DocumentFormat.Docx,
+        "xlsx" or "xlsm" or "xltx" => DocumentFormat.Xlsx,
+        "pptx" or "pptm" or "potx" => DocumentFormat.Pptx,
+        "odt" => DocumentFormat.Odt,
+        _ => DocumentFormat.Unsupported,
+    };
+
+    /// <summary>
+    /// The copy's extension: the format's own, never the file's when that
+    /// could make Windows run it (an .hta that's HTML, a .bat that's text).
+    /// </summary>
+    public static string CopyExtension(DocumentFormat format) => format switch
+    {
+        DocumentFormat.Pdf => "pdf",
+        DocumentFormat.Docx => "docx",
+        DocumentFormat.Xlsx => "xlsx",
+        DocumentFormat.Pptx => "pptx",
+        DocumentFormat.Odt => "odt",
+        DocumentFormat.Rtf => "rtf",
+        DocumentFormat.Html => "html",
+        DocumentFormat.Markdown => "md",
+        _ => "txt",
+    };
+
+    /// <summary>Formats whose copy opens in its own app; the rest open as text in Notepad.</summary>
+    public static bool OpensInItsApp(DocumentFormat format) =>
+        format is DocumentFormat.Pdf or DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt or DocumentFormat.Rtf or DocumentFormat.Html;
 
     public static string Describe(DocumentFormat format) => format switch
     {
@@ -161,6 +189,9 @@ public static class DocumentExtractor
     {
         var bytes = File.ReadAllBytes(path);
         if (bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF })) return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+        // UTF-32 before UTF-16: FF FE 00 00 starts like UTF-16's BOM.
+        if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE, 0, 0 })) return new UTF32Encoding(false, false).GetString(bytes, 4, bytes.Length - 4);
+        if (bytes.AsSpan().StartsWith(new byte[] { 0, 0, 0xFE, 0xFF })) return new UTF32Encoding(true, false).GetString(bytes, 4, bytes.Length - 4);
         if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE })) return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
         if (bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })) return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
         try

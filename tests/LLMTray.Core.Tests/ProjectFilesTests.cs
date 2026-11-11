@@ -103,6 +103,8 @@ public sealed class ProjectFilesTests : IDisposable
     public void RtfIsReadInItsCodePage()
     {
         var rtf = @"{\rtf1\ansi\ansicpg1251{\fonttbl{\f0 Arial;}}{\*\generator x;}\f0 \'cf\'f0\'e8\'e2\'e5\'f2\par caf\u233?\page next}";
+        // A \u's fallback may be a control symbol: skipped, not the text after it.
+        Assert.Equal("{X", RtfText.Text(Encoding.ASCII.GetBytes(@"{\rtf1\uc1\u123\{X}")));
         Assert.Equal("Привет\ncafé\n\fnext", RtfText.Text(Encoding.ASCII.GetBytes(rtf)));
         var path = Path.Combine(root, "e.rtf");
         File.WriteAllText(path, rtf);
@@ -151,7 +153,14 @@ public sealed class ProjectFilesTests : IDisposable
         var fake = Path.Combine(root, "fake.pdf");
         File.WriteAllBytes(fake, [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]);
         Assert.Equal(DocumentFormat.Legacy, DocumentFormats.Detect(fake));
-        var binary = Path.Combine(root, "x.txt");
+        var utf32 = Path.Combine(root, "wide.txt");
+        File.WriteAllBytes(utf32, [.. new byte[] { 0xFF, 0xFE, 0, 0 }, .. new UTF32Encoding(false, false).GetBytes("emoji 😀")]);
+        Assert.Equal(DocumentFormat.Text, DocumentFormats.Detect(utf32));
+        Assert.Equal("emoji 😀", Read(utf32).Single().Text);
+        // A zip's kind comes from its name: the app never opens it.
+        var unnamed = Zip("x.zip", ("word/document.xml", "<w:document/>"));
+        Assert.Equal(DocumentFormat.Unsupported, DocumentFormats.Detect(unnamed));
+                var binary = Path.Combine(root, "x.txt");
         File.WriteAllBytes(binary, [1, 2, 0, 3]);
         Assert.Equal(DocumentFormat.Unsupported, DocumentFormats.Detect(binary));
     }
@@ -192,6 +201,12 @@ public sealed class ProjectFilesTests : IDisposable
         var docA = index.Add(a, DocumentFormat.Markdown);
         var docB = index.Add(b, DocumentFormat.Text);
         Assert.Throws<AddRefusedException>(() => index.Add(a, DocumentFormat.Markdown));
+        // The copy's extension is the format's: an HTML file named .hta is kept as .html.
+        var hta = Path.Combine(root, "invoice.hta");
+        File.WriteAllText(hta, "<html><script>x</script></html>");
+        var docH = index.Add(hta, DocumentFormat.Html);
+        Assert.Equal("html", index.Document(docH)!.Ext);
+        index.Remove(docH);
         while (index.NextToExtract() is { } next)
         {
             index.MarkExtracting(next.Doc);
