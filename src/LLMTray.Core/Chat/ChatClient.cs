@@ -761,7 +761,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// <summary>A call's arguments as plain JSON (lenient text read once); "{}" for none or for what can't be read.</summary>
     static string Canonical(string arguments)
     {
-        if (string.IsNullOrWhiteSpace(arguments)) return "{}";
+        // Far past any tool's arguments (make_document's own cap): not parsed at all; the tool refuses it.
+        if (string.IsNullOrWhiteSpace(arguments) || arguments.Length > Documents.DocumentCall.MaxArgumentChars) return "{}";
         try
         {
             return Tools.LenientJson.Parse(arguments) is JsonObject o ? o.ToJsonString() : "{}";
@@ -1130,11 +1131,25 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             DeleteFiles(chatId, pdfName, thumbName);
             return stale;
         }
-        // The old files go only once the chat file names the new ones: a failed save keeps both.
+        // The old files go only once the chat file holds the new card (by its id): a failed save keeps both,
+        // and a name the new file took over (the old PDF deleted by hand, the same title) is never deleted.
         Save();
-        if (store.Load(chatId)?.Messages.Any(m => m.Documents?.Any(d => d.Filename == pdfName) == true) == true)
+        var saved = store.Load(chatId)?.Messages.Any(m => m.Documents?.Any(d => d.Id == remade.Id) == true) == true;
+        if (saved)
         {
-            DeleteFiles(chatId, document.Filename, document.Thumbnail);
+            DeleteFiles(chatId, [.. new[] { document.Filename, document.Thumbnail }.Where(n => n != pdfName && n != thumbName)]);
+        }
+        else
+        {
+            bool switched;
+            lock (sync) switched = mine != epoch || Id != chatId;
+            if (switched)
+            {
+                // Another chat was opened before the save: this one's file still names the old card.
+                DeleteFiles(chatId, pdfName, thumbName);
+                return "the chat changed meanwhile";
+            }
+            // A save that failed (a full disk) keeps both; the next save writes the new card.
         }
         Changed?.Invoke();
         return null;

@@ -102,18 +102,18 @@ static class FieldReader
             var path = prefix + field.Name;
             if (!sent.TryGetValue(field.Name, out var given))
             {
-                if (field.Required) problems.Add($"\"{path}\" is required ({field.TypeName})");
+                if (field.Required) Problem(problems, $"\"{path}\" is required ({field.TypeName})");
                 continue;
             }
             given = given.OrderByDescending(g => g.Exact).ToList();
             if (given.Count > 1 && given.Skip(1).Any(g => !JsonNode.DeepEquals(g.Value, given[0].Value)))
             {
-                problems.Add($"\"{path}\" was given twice under different names with different values");
+                Problem(problems, $"\"{path}\" was given twice under different names with different values");
                 continue;
             }
             if (given[0].Value is not { } node)
             {
-                if (field.Required) problems.Add($"\"{path}\" is required ({field.TypeName})");
+                if (field.Required) Problem(problems, $"\"{path}\" is required ({field.TypeName})");
                 continue;
             }
             if (Coerce(node, field, path, problems) is { } value) values[field.Name] = value;
@@ -155,11 +155,11 @@ static class FieldReader
                     }
                     if (items is null || items.Any(i => i is not JsonObject))
                     {
-                        problems.Add($"\"{path}\" must be a {field.TypeName}, not {ShortText(node)}");
+                        Problem(problems, $"\"{path}\" must be a {field.TypeName}, not {ShortText(node)}");
                         return null;
                     }
                     var list = new List<Dictionary<string, object>>();
-                    for (var i = 0; i < items.Count; i++) list.Add(Read((JsonObject)items[i]!, field.Fields ?? [], $"{path}[{i}].", problems));
+                    for (var i = 0; i < items.Count && problems.Count < MaxProblems; i++) list.Add(Read((JsonObject)items[i]!, field.Fields ?? [], $"{path}[{i}].", problems));
                     return list;
                 }
             case FieldKind.Strings or FieldKind.Numbers:
@@ -167,7 +167,7 @@ static class FieldReader
                     node = Unstring(node, allowObject: false);
                     if (node is JsonObject)
                     {
-                        problems.Add($"\"{path}\" must be a {field.TypeName}, not an object");
+                        Problem(problems, $"\"{path}\" must be a {field.TypeName}, not an object");
                         return null;
                     }
                     var items = node is JsonArray a ? a.ToList() : [node];
@@ -180,7 +180,7 @@ static class FieldReader
                     if (field.Kind == FieldKind.Strings)
                     {
                         var strings = new List<string>();
-                        for (var i = 0; i < items.Count; i++)
+                        for (var i = 0; i < items.Count && problems.Count < MaxProblems; i++)
                         {
                             // A null in a list of labels is an empty label.
                             if (items[i] is null) { strings.Add(""); continue; }
@@ -189,7 +189,7 @@ static class FieldReader
                         return strings;
                     }
                     var numbers = new List<double>();
-                    for (var i = 0; i < items.Count; i++)
+                    for (var i = 0; i < items.Count && problems.Count < MaxProblems; i++)
                     {
                         if (items[i] is null)
                         {
@@ -225,11 +225,11 @@ static class FieldReader
                     if (allowed.FirstOrDefault(a => a.ToLowerInvariant() == folded) is { } match) return match;
                     if (field.ValueAliases?.FirstOrDefault(a => a.Key.ToLowerInvariant() == folded) is { Value: { } target } && allowed.Contains(target))
                         return target;
-                    problems.Add($"\"{path}\" must be one of {string.Join(", ", allowed)}, not {ShortText(node)}");
+                    Problem(problems, $"\"{path}\" must be one of {string.Join(", ", allowed)}, not {ShortText(node)}");
                     return null;
                 }
         }
-        problems.Add($"\"{path}\" must be a {field.TypeName}, not {ShortText(node)}");
+        Problem(problems, $"\"{path}\" must be a {field.TypeName}, not {ShortText(node)}");
         return null;
     }
 

@@ -109,7 +109,8 @@ public sealed record PersistedMessage
     public List<ProjectFiles.Citation>? Citations { get; init; }
     /// <summary>Files added to the project before this user message, as the model was told (the Mac's projectFilesAdded).</summary>
     public List<string>? ProjectFilesAdded { get; init; }
-    /// <summary>The documents an answer made (the Mac's documents).</summary>
+    /// <summary>The documents an answer made (the Mac's documents). A card that doesn't read is skipped, never the chat.</summary>
+    [JsonConverter(typeof(DocumentListConverter))]
     public List<DocumentRef>? Documents { get; init; }
     /// <summary>Windows or the screen shown with this user message (the Mac's shared).</summary>
     public List<SharedContext>? Shared { get; init; }
@@ -155,6 +156,44 @@ sealed class UpperGuidConverter : JsonConverter<Guid>
     public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         Guid.TryParse(reader.GetString(), out var id) ? id : throw new JsonException("not a UUID");
     public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString("D").ToUpperInvariant());
+}
+
+/// <summary>
+/// A message's documents, each read on its own: a card with a wrong shape ("pages": "3", "filename": 12) is
+/// left out (and so not saved back) rather than making the whole chat unreadable.
+/// </summary>
+sealed class DocumentListConverter : JsonConverter<List<DocumentRef>?>
+{
+    public override List<DocumentRef>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        using var document = JsonDocument.ParseValue(ref reader);
+        if (document.RootElement.ValueKind != JsonValueKind.Array) return [];
+        var list = new List<DocumentRef>();
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            try
+            {
+                if (item.Deserialize(ChatJson.Default.DocumentRef) is { } card) list.Add(card);
+            }
+            catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
+            {
+            }
+        }
+        return list;
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<DocumentRef>? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartArray();
+        foreach (var card in value) JsonSerializer.Serialize(writer, card, ChatJson.Default.DocumentRef);
+        writer.WriteEndArray();
+    }
 }
 
 /// <summary>A document's id: one that isn't a UUID reads as empty, so one odd card can't make the whole chat unreadable.</summary>
@@ -205,4 +244,5 @@ sealed class SwiftDateConverter : JsonConverter<DateTimeOffset>
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     Converters = [typeof(SwiftDateConverter)])]
 [JsonSerializable(typeof(ChatSessionFile))]
+[JsonSerializable(typeof(DocumentRef))]
 internal sealed partial class ChatJson : JsonSerializerContext;

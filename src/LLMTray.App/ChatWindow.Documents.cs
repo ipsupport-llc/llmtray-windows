@@ -80,6 +80,8 @@ sealed partial class ChatWindow
             actions.Children.Add(again);
         }
 
+        // A card whose PDF went (deleted by hand, a chat copied without its folder) says so at once.
+        if (path is null || !File.Exists(path)) Say(L.T("The PDF is gone."));
         var text = new StackPanel { Spacing = 4 };
         text.Children.Add(new TextBlock { Text = document.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         text.Children.Add(Ui.Caption(L.F("PDF · {0} pages", document.Pages)));

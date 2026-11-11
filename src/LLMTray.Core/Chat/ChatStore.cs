@@ -39,7 +39,7 @@ public sealed class ChatStore(string folder)
         m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
             || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
             || m.AudioFilenames is null || m.AudioPrompts is null || m.AudioDurations is null
-            || m.Documents?.Any(d => d?.Filename is null || d.Title is null) == true
+            || m.Documents?.Any(d => d?.Filename is null || d.Title is null || d.Source is { Arguments: null }) == true
             ? m with
             {
                 Role = m.Role ?? "user",
@@ -50,7 +50,12 @@ public sealed class ChatStore(string folder)
                 ImagePrompts = m.ImagePrompts ?? [],
                 Sources = m.Sources ?? [],
                 McpCalls = m.McpCalls ?? [],
-                Documents = m.Documents?.Where(d => d is { Filename: not null }).Select(d => d.Title is null ? d with { Title = "Document" } : d).ToList(),
+                Documents = m.Documents?.Where(d => d is { Filename: not null }).Select(d => d with
+                {
+                    Title = d.Title ?? "Document",
+                    // A saved call that can't be read: no Make again, rather than a crash on the click.
+                    Source = d.Source?.Arguments is null ? null : d.Source,
+                }).ToList(),
                 AudioFilenames = m.AudioFilenames ?? [],
                 AudioPrompts = m.AudioPrompts ?? [],
                 AudioDurations = m.AudioDurations ?? [],
@@ -181,21 +186,39 @@ public sealed class ChatStore(string folder)
         }
         finally
         {
-            if (File.Exists(temp)) File.Delete(temp);
+            // Best effort: a leftover .tmp is named by nothing, and the write's own error is the one to report.
+            try
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
         }
         string? thumb = null;
         if (thumbnail is { Length: > 0 and <= 512 * 1024 })
         {
+            // Through a temporary name as the PDF; a thumbnail that can't be written is no thumbnail (the card shows an icon).
             var thumbName = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".thumb.png";
+            var thumbTemp = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
             try
             {
-                File.WriteAllBytes(Path.Combine(folder, thumbName), thumbnail);
+                File.WriteAllBytes(thumbTemp, thumbnail);
+                File.Move(thumbTemp, Path.Combine(folder, thumbName), overwrite: false);
                 thumb = thumbName;
             }
-            catch (IOException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // No thumbnail: the card shows an icon. Nothing half-written stays.
-                try { File.Delete(Path.Combine(folder, thumbName)); } catch (IOException) { }
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(thumbTemp)) File.Delete(thumbTemp);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                }
             }
         }
         return (name, thumb);

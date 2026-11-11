@@ -235,6 +235,15 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.NotEqual(loaded.Filename, remade.Filename);
         Assert.False(File.Exists(store.MediaPath(chat.Id!.Value, loaded.Filename)));
         Assert.True(File.Exists(store.MediaPath(chat.Id!.Value, remade.Filename)));
+
+        // Its PDF deleted by hand: the card stays; Make again takes the freed name and keeps the new file.
+        File.Delete(store.MediaPath(chat.Id!.Value, remade.Filename)!);
+        var fourth = new ChatClient(http, api, store);
+        fourth.Load(chat.Id!.Value);
+        var gone = Assert.Single(fourth.Messages[^1].Documents);
+        Assert.Null(await fourth.RemakeDocumentAsync(fourth.Messages[^1], gone, printer));
+        var back = Assert.Single(fourth.Messages[^1].Documents);
+        Assert.True(File.Exists(store.MediaPath(chat.Id!.Value, back.Filename)));
     }
 
     [Fact]
@@ -247,13 +256,16 @@ public sealed class ChatClientTests : IAsyncDisposable
             {"id":"{{id}}","title":"T","createdAt":"2026-11-01T00:00:00Z","updatedAt":"2026-11-01T00:00:00Z","messages":[
               {"role":"assistant","content":"Here.","reasoning":"","isSummary":false,"documents":[
                 {"id":"not-a-uuid","filename":"Plan 1..2.pdf","title":"Plan","pages":1,"source":{"arguments":"{}","project":"nope"},"future":1},
-                {"id":"{{Guid.NewGuid()}}","filename":"x.pdf","title":null,"pages":1}]}]}
+                {"id":"{{Guid.NewGuid()}}","filename":"x.pdf","title":null,"pages":1,"source":{"x":1} },
+                {"id":"{{Guid.NewGuid()}}","filename":12,"title":"Bad","pages":"three"}]}]}
             """);
         var file = store.Load(id);
         Assert.NotNull(file);
         var documents = file!.Messages[0].Documents!;
         Assert.Equal(2, documents.Count);
         Assert.Equal("Document", documents[1].Title);
+        // A saved call that can't be read: no Make again.
+        Assert.Null(documents[1].Source);
         Assert.Null(documents[0].Source!.Project);
         // A name with dots inside is a name, not a way out; one with a separator is.
         Assert.NotNull(store.MediaPath(id, "Plan 1..2.pdf"));

@@ -72,7 +72,18 @@ static class DocumentPrinter
         await gate.WaitAsync(cancellationToken);
         try
         {
-            return await PrintLockedAsync(parent, dataFolder, html, resources, title, paperInches, cancellationToken);
+            // The whole of it bounded too (WebView2 starting, Windows reading the PDF): a stalled print never holds the next one.
+            var work = PrintLockedAsync(parent, dataFolder, html, resources, title, paperInches, cancellationToken);
+            var finished = await Task.WhenAny(work, Task.Delay(Timeout + TimeSpan.FromSeconds(30), cancellationToken).ContinueWith(_ => { }, TaskScheduler.Default));
+            if (finished != work)
+            {
+                // Left to end on its own; the next print starts a fresh environment.
+                environment = null;
+                _ = work.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new DocumentPrintException("it took over a minute");
+            }
+            return await work;
         }
         finally
         {
@@ -92,11 +103,11 @@ static class DocumentPrinter
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
-            // No runtime (an old Windows 10 without Edge's WebView2), or it wouldn't start.
-            throw new DocumentPrintException("Microsoft Edge WebView2, which lays out the pages, isn't available on this PC");
+            // No runtime (an old Windows 10 without Edge's WebView2), or it wouldn't start: its own words say which.
+            throw new DocumentPrintException($"Microsoft Edge WebView2, which lays out the pages, couldn't start ({e.Message})");
         }
         // The page itself is served from the table too: NavigateToString takes at most 2 MB, a page may be 8.
-        var pages = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources)
+        var served = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources)
         {
             [PageName] = (System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
         };
@@ -121,7 +132,7 @@ static class DocumentPrinter
             view.WebResourceRequested += (_, e) =>
             {
                 var uri = e.Request.Uri;
-                if (uri.StartsWith(Base, StringComparison.Ordinal) && pages.TryGetValue(uri[Base.Length..], out var resource))
+                if (uri.StartsWith(Base, StringComparison.Ordinal) && served.TryGetValue(uri[Base.Length..], out var resource))
                 {
                     var stream = new MemoryStream(resource.Bytes, writable: false).AsRandomAccessStream();
                     e.Response = environment.CreateWebResourceResponse(stream, 200, "OK",
@@ -134,7 +145,11 @@ static class DocumentPrinter
             var loaded = false;
             view.NavigationStarting += (_, e) =>
             {
-                if (loaded || e.Uri != Base + PageName) e.Cancel = true;
+                if (loaded || !string.Equals(e.Uri, Base + PageName, StringComparison.OrdinalIgnoreCase))
+                {
+                    e.Cancel = true;
+                    return;
+                }
                 loaded = true;
             };
             view.NewWindowRequested += (_, e) => e.Handled = true;

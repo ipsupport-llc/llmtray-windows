@@ -67,8 +67,9 @@ writes Markdown and chart numbers; the app does the layout.
   `<UUID>-images` folder. The message keeps `documents` (`DocumentRef`:
   id, filename, thumbnail, title, pages, `source` = the whole call with
   changes applied, and its project), so a chat reads the same on either
-  app. A document whose PDF is gone isn't shown. Compaction stops before
-  a message with a document.
+  app. A card whose PDF is gone stays and says so (a save never forgets
+  it). A card that doesn't read is left out, never the whole chat.
+  Compaction stops before a message with a document.
 - **Trust: ordinary** (Mac Hardening 5). It sends nothing anywhere and
   changes no existing file; a PDF goes further only by the user's click.
   It stays declared with pinned files and after file text. "Summarise
