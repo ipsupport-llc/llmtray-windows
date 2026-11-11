@@ -232,15 +232,21 @@ public sealed class ProjectFilesService : IAsyncDisposable
 
     void Finish(Guid project)
     {
-        try
+        // A step just cancelled may hold the index open a moment longer (Windows won't delete an open file): a few tries.
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            var folder = Folder(project);
-            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            File.Delete(DeletionMarker(project));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            // A file still open (a search in flight): the next launch finishes it.
+            try
+            {
+                var folder = Folder(project);
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                File.Delete(DeletionMarker(project));
+                return;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Still open: tried again shortly; after the last try the next launch finishes it.
+                Thread.Sleep(100);
+            }
         }
     }
 
