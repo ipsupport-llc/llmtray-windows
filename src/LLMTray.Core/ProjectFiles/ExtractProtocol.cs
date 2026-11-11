@@ -74,6 +74,7 @@ public static class ExtractProtocol
         using var handle = process.Handle;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(wallTime);
+        var started = DateTime.UtcNow;
         // Escaping can take six bytes a character; framing a little more.
         var maxBytes = limits.MaxTextChars * 6 + limits.MaxPages * 64L + 4096;
         var pages = new List<ExtractedPage>();
@@ -98,6 +99,10 @@ public static class ExtractProtocol
                     line.Write(buffer, start, i - start);
                     start = i + 1;
                     if (Line(line.ToArray(), pages, limits, ref chars) is { } done) return done ? pages : throw new ExtractException("the reader stopped");
+                    // A page came: the wait starts again, up to the whole read's limit.
+                    var left = ChildProcessReader.MaxWallTime - (DateTime.UtcNow - started);
+                    if (left <= TimeSpan.Zero) throw new OperationCanceledException();
+                    timeout.CancelAfter(wallTime < left ? wallTime : left);
                     line.SetLength(0);
                 }
                 line.Write(buffer, start, n - start);
@@ -157,8 +162,14 @@ public static class ExtractProtocol
 /// <summary>Runs <see cref="ExtractProtocol"/> against a child started by <paramref name="start"/> (the app's: its own exe in a job).</summary>
 public sealed class ChildProcessReader(Func<string, DocumentFormat, ReaderProcess> start) : IDocumentReader
 {
-    /// <summary>Two minutes, and a minute more per 5 MB: a scan's pages are recognized one by one, a second or so each.</summary>
-    public static TimeSpan WallTime(long bytes) => TimeSpan.FromSeconds(120 + bytes / (5L << 20) * 60);
+    /// <summary>
+    /// A minute, and a minute more per 10 MB, without a page coming: each page that comes starts it again (a scan's
+    /// pages are recognized one by one, so its work follows its pages, not its bytes); see <see cref="MaxWallTime"/>.
+    /// </summary>
+    public static TimeSpan WallTime(long bytes) => TimeSpan.FromSeconds(60 + bytes / (10L << 20) * 60);
+
+    /// <summary>A document's whole read at most, however steadily its pages come.</summary>
+    public static readonly TimeSpan MaxWallTime = TimeSpan.FromMinutes(30);
 
     public Task<IReadOnlyList<ExtractedPage>> ReadAsync(string path, DocumentFormat format, CancellationToken cancellationToken)
     {

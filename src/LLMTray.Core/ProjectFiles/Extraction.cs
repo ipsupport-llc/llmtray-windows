@@ -146,7 +146,7 @@ public static class DocumentExtractor
     /// <summary>A page with less text than this and a picture on it is taken for a scan (a scanner's header or a page number aside).</summary>
     public const int ScanTextBelow = 100;
 
-    /// <summary>Pages of one document recognized at most: each takes a second or so.</summary>
+    /// <summary>Pages of one document whose text is recognized at most; one more fails the document (never a quietly cut one).</summary>
     public const int MaxRecognizedPages = 300;
 
     /// <param name="recognize">Reads scanned PDF pages (the reader process's); none: a scan reads as no text.</param>
@@ -295,10 +295,25 @@ public static class DocumentExtractor
                     text = "";
                 }
                 // A scan: next to no text and a picture. Its text is read from the picture, after what little the page had.
-                if (recognize is not null && text.Trim().Length < ScanTextBelow && recognized < MaxRecognizedPages && HasPicture(pdf, i))
+                if (recognize is not null && text.Trim().Length < ScanTextBelow && HasPicture(pdf, i))
                 {
-                    recognized++;
-                    if (recognize(path, i) is { Length: > 0 } read) text = text.Trim().Length == 0 ? read : text.Trim() + "\n" + read;
+                    string? read;
+                    try
+                    {
+                        read = recognize(path, i);
+                    }
+                    catch (Exception)
+                    {
+                        // A page that won't draw or read (even out of memory): no text for it; the rest goes on.
+                        read = null;
+                    }
+                    if (read is { Length: > 0 })
+                    {
+                        if (++recognized > MaxRecognizedPages) throw new ExtractException($"more than {MaxRecognizedPages} scanned pages; split the PDF");
+                        // The picture holds the page's own words too (a footer drawn over the scan): not twice.
+                        var had = text.Trim();
+                        text = had.Length == 0 || read.Contains(had, StringComparison.Ordinal) ? read : had + "\n" + read;
+                    }
                 }
                 yield return new ExtractedPage(i, text);
             }
@@ -311,8 +326,9 @@ public static class DocumentExtractor
         {
             return pdf.GetPage(page).GetImages().Any();
         }
-        catch (Exception e) when (e is PdfDocumentFormatException or InvalidOperationException or ArgumentException or IndexOutOfRangeException or NullReferenceException or InvalidCastException or KeyNotFoundException)
+        catch (Exception)
         {
+            // A damaged picture's description: the page is read as it is, not failed.
             return false;
         }
     }

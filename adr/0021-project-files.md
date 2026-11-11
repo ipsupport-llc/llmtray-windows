@@ -44,11 +44,19 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
     (`Windows.Data.Pdf`) draws the page at the size the recognizer takes,
     and `Windows.Media.Ocr` reads it in the user's languages, as for a
     shown window (adr/0022).
-  - The recognized text follows what little the page had.
-  - At most 300 pages a document.
-  - The reader's wall time is two minutes, and a minute more per 5 MB.
-  - Nothing is downloaded. With no recognition language installed, or a
-    page that won't draw, a scan reads as no text, as before.
+  - The page is drawn at about 300 dpi (3,300 px on its long side), what
+    recognition needs, rather than the 10,000 px it could take, so the
+    reader's 2 GB is never near. A page with no sane size isn't drawn.
+  - The recognized text follows what little the page had, or replaces it
+    when it already holds it (a footer drawn over the scan).
+  - Each page gets at most 30 s. A page that hangs, fails or runs out of
+    memory reads as no text, and the rest of the document goes on.
+  - More than 300 recognized pages fails the document ("split the PDF"),
+    never a quietly cut one.
+  - The reader's wait starts again with each page that comes, since a
+    scan's work follows its pages, not its bytes, up to 30 minutes in all.
+  - Nothing is downloaded. With no recognition language installed, a scan
+    reads as no text, as before.
 - **Readers see hostile files, so they're our own and confined**: OOXML
   and ODT through a capped zip reader (entries, bytes per part and in all,
   compression ratio) and XML with DTDs prohibited and nesting capped; RTF
@@ -56,7 +64,8 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   own exe with `--extract <path> <format>`, put in a Job Object (2 GB of
   memory, no child processes, killed with the app) before it's told to
   start, writing one JSON line a page. The parent caps the bytes, the
-  pages (5,000) and the wall time (a minute plus a minute per 10 MB); a
+  pages (5,000) and the wall time (a minute plus a minute per 10 MB without a
+  page coming, 30 minutes in all); a
   cap hit kills the child and fails the document with the reason, never a
   silently cut one. The readers open no network connection; the child
   isn't otherwise sandboxed.

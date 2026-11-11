@@ -16,6 +16,14 @@ static class PageOcr
 {
     static string? openPath;
     static PdfDocument? open;
+    /// <summary>A PDF Windows couldn't open: not tried again for every page.</summary>
+    static string? failedPath;
+
+    /// <summary>A page's draw and read at most: one that hangs is given up, the rest go on.</summary>
+    static readonly TimeSpan PageTime = TimeSpan.FromSeconds(30);
+
+    /// <summary>The long side a page is drawn at: about 300 dpi for A4 or Letter, what text recognition needs, never the 10,000 px it could take.</summary>
+    const double RenderSide = 3300;
     static OcrEngine? engine;
     static bool noEngine;
 
@@ -24,11 +32,11 @@ static class PageOcr
     {
         try
         {
-            return RecognizeAsync(path, page).GetAwaiter().GetResult();
+            return RecognizeAsync(path, page).WaitAsync(PageTime).GetAwaiter().GetResult();
         }
-        catch (Exception e) when (e is not OutOfMemoryException)
+        catch (Exception)
         {
-            // A page Windows can't draw or read: no text for it, the rest of the document goes on.
+            // A page Windows can't draw or read in time (or in memory): no text for it, the rest of the document goes on.
             return null;
         }
     }
@@ -42,17 +50,30 @@ static class PageOcr
             noEngine = true;
             return null;
         }
+        if (failedPath == path) return null;
         if (open is null || openPath != path)
         {
-            open = await PdfDocument.LoadFromFileAsync(await StorageFile.GetFileFromPathAsync(path));
-            openPath = path;
+            try
+            {
+                open = await PdfDocument.LoadFromFileAsync(await StorageFile.GetFileFromPathAsync(path));
+                openPath = path;
+            }
+            catch (Exception)
+            {
+                failedPath = path;
+                throw;
+            }
         }
         if (page < 1 || page > open.PageCount) return null;
         using var pdfPage = open.GetPage((uint)(page - 1));
-        // As large as the recognizer takes on the long side: small print survives.
-        var limit = OcrEngine.MaxImageDimension;
         var size = pdfPage.Size;
-        var scale = Math.Min(limit / Math.Max(1.0, size.Width), limit / Math.Max(1.0, size.Height));
+        // A page with no sane size reads as no text, before anything is drawn.
+        if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width < 10 || size.Height < 10 || Math.Max(size.Width, size.Height) / Math.Min(size.Width, size.Height) > 20)
+        {
+            return null;
+        }
+        var side = Math.Min(RenderSide, OcrEngine.MaxImageDimension);
+        var scale = side / Math.Max(size.Width, size.Height);
         using var stream = new InMemoryRandomAccessStream();
         await pdfPage.RenderToStreamAsync(stream, new PdfPageRenderOptions
         {
