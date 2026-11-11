@@ -84,8 +84,8 @@ static class ScreenCapture
         }
         catch (TimeoutException)
         {
-            // A copy still under way finds the task done and disposes its bitmap.
-            first.TrySetCanceled();
+            // A copy still under way finds the task done and disposes its bitmap; one that won the race just now is disposed here.
+            if (!first.TrySetCanceled() && first.Task.IsCompletedSuccessfully) first.Task.Result.Dispose();
             throw new InvalidOperationException("no picture came from the window in 5 seconds");
         }
         finally
@@ -172,7 +172,7 @@ static class ScreenCapture
                     Marshal.Release(dxgi);
                 }
             }
-            catch (Exception e) when (e is COMException or InvalidCastException)
+            catch (Exception e) when (e is not OutOfMemoryException)
             {
                 // This driver's device won't do (a flaky GPU, a VM): the next one is tried.
                 last = e;

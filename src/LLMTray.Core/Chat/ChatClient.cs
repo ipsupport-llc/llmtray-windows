@@ -624,7 +624,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         {
                             outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error($"no tool called {call.Name} is available"), null, true);
                         }
-                        else if (lockedDown && !string.Equals(call.Name.Trim(), "calculate", StringComparison.OrdinalIgnoreCase))
+                        else if (lockedDown && Tools.ToolNameResolver.Resolve(call.Name, ["calculate"]) is null)
                         {
                             // Only the calculator was declared: nothing else runs, however local.
                             outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error("refused: " + string.Format(System.Globalization.CultureInfo.InvariantCulture, lockedReason, "other tools")), null, true);
@@ -1146,7 +1146,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         if (m.Role != "user") return m.Content;
         // Files added to the project first, then what the user showed (Mac adr/0030). A capture's text goes only
         // when its picture doesn't: each capture's picture is here, or every capture's text goes.
-        var seesPictures = options.SeesPictures != false && m.Images.Count >= m.Shared.Count(s => s.HasPicture);
+        // A picture file that didn't load could be a capture's: then every capture's text goes.
+        var missing = m.ImageFilenames.Count > m.Images.Count;
+        var seesPictures = options.SeesPictures != false && !missing && m.Images.Count >= m.Shared.Count(s => s.HasPicture);
         var notes = new List<string>();
         if (ProjectFiles.ProjectFilesNote.Text(m.ProjectFilesAdded) is { } files) notes.Add(files);
         notes.AddRange(m.Shared.Select(s => s.NoteForModel(seesPictures)));
@@ -1174,7 +1176,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
         foreach (var m in messages.Where(m => (m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0) && m.Role is "user" or "assistant"))
         {
-            if (m.Role == "user" && m.Images.Count > 0)
+            // A model that doesn't see gets no pictures (the server refuses them); what was shown goes as its text.
+            if (m.Role == "user" && m.Images.Count > 0 && options.SeesPictures != false)
             {
                 // Text first, then each picture as a data URL (always PNG: attachments are converted).
                 var parts = new JsonArray();

@@ -303,11 +303,16 @@ public sealed class ChatClientTests : IAsyncDisposable
         // Asked again with a model that doesn't see: the text goes even though the picture is there.
         await chat.SendAsync("again", new ChatOptions(null, SeesPictures: false));
         var last = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray();
-        Assert.Contains(last, m => m!["content"] is JsonArray parts && parts.Any(p => p!["text"]?.GetValue<string>().Contains("Wi-Fi off") == true));
-        // Never summarized away.
-        for (var i = 0; i < 8; i++) chat.Messages.Add(new ChatMessage { Role = i % 2 == 0 ? "user" : "assistant", Content = "x" });
-        var range = ChatClient.CompactionRange(chat.Messages, keepStart: 0, keepEnd: 2);
-        Assert.True(range is null || chat.Messages.Take(range.Value.End).Skip(range.Value.Start).All(m => m.Shared.Count == 0));
+        // No picture part at all for it (the server would refuse the request); the text instead.
+        Assert.DoesNotContain(last, m => m!["content"] is JsonArray);
+        Assert.Contains(last, m => m!["content"]!.GetValue<string>().Contains("Wi-Fi off"));
+        // Never summarized away, also without a picture.
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 6; i++) messages.Add(new ChatMessage { Role = i % 2 == 0 ? "user" : "assistant", Content = "x" });
+        messages.Add(new ChatMessage { Role = "user", Content = "shown", Shared = [SharedContext.Make(SharedKind.Window, "t", "", "text", hasPicture: false)] });
+        for (var i = 0; i < 9; i++) messages.Add(new ChatMessage { Role = i % 2 == 0 ? "assistant" : "user", Content = "x" });
+        var range = ChatClient.CompactionRange(messages, keepStart: 0, keepEnd: 2);
+        Assert.True(range is null || messages.Take(range.Value.End).Skip(range.Value.Start).All(m => m.Shared.Count == 0));
     }
 
     static byte[] PngBytes() => Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==");
