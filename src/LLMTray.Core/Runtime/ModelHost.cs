@@ -55,8 +55,9 @@ public sealed class ModelHost : IAsyncDisposable
 
     /// <param name="Lifetime">Cancelled when this server stops or dies: requests to it end with it.</param>
     /// <param name="ContextTokens">The context of one request (a slot's n_ctx), as the server reported it; 0 when it didn't.</param>
+    /// <param name="Hears">The server takes audio (its /props modalities), null when it didn't say.</param>
     sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
-        CancellationTokenSource Lifetime, ServerOptions Options, int ContextTokens = 0);
+        CancellationTokenSource Lifetime, ServerOptions Options, int ContextTokens = 0, bool? Hears = null);
 
     /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
     public ModelHost(IProcessLauncher launcher, Func<IReadOnlyList<LlamaBackend>> backends, Func<ModelEntry, ServerOptions> options, string logDirectory,
@@ -87,6 +88,12 @@ public sealed class ModelHost : IAsyncDisposable
     public int ContextTokens
     {
         get { lock (sync) return running?.ContextTokens ?? 0; }
+    }
+
+    /// <summary>Whether the running server takes audio (adr/0023), as its /props said; null when nothing runs or it didn't say.</summary>
+    public bool? Hears
+    {
+        get { lock (sync) return running?.Hears; }
     }
 
     /// <summary>What the running server was started with, or null: compared with the profile for "Restart to apply".</summary>
@@ -295,8 +302,8 @@ public sealed class ModelHost : IAsyncDisposable
             }
             if (error is null)
             {
-                var context = await ContextTokensAsync(baseUri, key).ConfigureAwait(false);
-                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context);
+                var (context, hears) = await PropsAsync(baseUri, key).ConfigureAwait(false);
+                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context, hears);
                 lock (sync)
                 {
                     if (disposed)
@@ -321,27 +328,37 @@ public sealed class ModelHost : IAsyncDisposable
         throw new ModelLoadException(lastError ?? "llama-server didn't start.");
     }
 
-    /// <summary>The server's context per request, from /props (default_generation_settings.n_ctx); 0 when it doesn't answer.</summary>
-    async Task<int> ContextTokensAsync(Uri baseUri, string apiKey)
+    /// <summary>
+    /// The server's context per request, from /props (default_generation_settings.n_ctx; 0 when it doesn't answer),
+    /// and whether it takes audio (modalities.audio; null when it doesn't say).
+    /// </summary>
+    async Task<(int Context, bool? Hears)> PropsAsync(Uri baseUri, string apiKey)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUri, "/props"));
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
             using var response = await health.SendAsync(request).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return 0;
+            if (!response.IsSuccessStatusCode) return (0, null);
             var props = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
-            var n = props?["default_generation_settings"]?["n_ctx"] ?? props?["n_ctx"];
-            return n is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<int>(out var ctx) && ctx > 0 ? ctx : 0;
+            return ParseProps(props);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException)
         {
-            return 0;
+            return (0, null);
         }
         catch (ObjectDisposedException)
         {
-            return 0;
+            return (0, null);
         }
+    }
+
+    internal static (int Context, bool? Hears) ParseProps(System.Text.Json.Nodes.JsonNode? props)
+    {
+        var n = props?["default_generation_settings"]?["n_ctx"] ?? props?["n_ctx"];
+        var context = n is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<int>(out var ctx) && ctx > 0 ? ctx : 0;
+        bool? hears = props?["modalities"]?["audio"] is System.Text.Json.Nodes.JsonValue a && a.TryGetValue<bool>(out var audio) ? audio : null;
+        return (context, hears);
     }
 
     async Task<string?> WaitHealthyAsync(IChildProcess process, Uri baseUri, LlamaBackend backend)

@@ -167,8 +167,11 @@ sealed partial class ChatWindow
     /// <summary>Another chat is shown: what was waiting to be sent belonged to the one before.</summary>
     void ClearAttachments()
     {
-        if (pending.Count == 0 && pendingShared.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
+        // A recording belongs to the chat it was made in too.
+        DropRecording();
+        if (pending.Count == 0 && pendingShared.Count == 0 && pendingAudio.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
         pending.Clear();
+        pendingAudio.Clear();
         // What was shown belongs to the chat it was shown in (a temporary one's never reaches another).
         pendingShared.Clear();
         RenderAttachments();
@@ -235,13 +238,21 @@ sealed partial class ChatWindow
             attachments.Children.Add(tile);
         }
         RenderSharedChips();
-        attachments.Visibility = pending.Count > 0 || pendingShared.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        RenderAudioChips();
+        attachments.Visibility = pending.Count > 0 || pendingShared.Count > 0 || pendingAudio.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         RenderAttachNote();
     }
 
     /// <summary>Says so when the chosen model can't see what's attached.</summary>
     void RenderAttachNote()
     {
+        if (pendingAudio.Count > 0 && !ModelHears())
+        {
+            attachNote.Text = L.T("This model doesn't hear recordings: it gets \"(audio)\" in their place. Choose a model that hears to send them.");
+            attachNote.Foreground = Ui.Orange;
+            attachNote.Visibility = Visibility.Visible;
+            return;
+        }
         if (pending.Count == 0)
         {
             attachNote.Visibility = Visibility.Collapsed;

@@ -73,5 +73,7 @@
   <Capabilities>
     <!-- A desktop app that starts a local inference server (adr/0001, Store). -->
     <rescap:Capability Name="runFullTrust" />
+    <!-- Spoken messages for models that hear (adr/0023): asked the first time the microphone is used. -->
+    <DeviceCapability Name="microphone" />
   </Capabilities>
 </Package>

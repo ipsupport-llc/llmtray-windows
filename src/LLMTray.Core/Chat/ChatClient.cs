@@ -36,6 +36,24 @@ public sealed class ChatMessage
     /// <summary>Attached pictures not written beside the chat yet (a temporary chat's never are).</summary>
     public List<byte[]> UnsavedImages { get; init; } = [];
 
+    /// <summary>
+    /// Recordings (a user message's, adr/0023: WAV) and the Mac's music (an answer's): every one the
+    /// names list, or none when one of them didn't read (as on the Mac).
+    /// </summary>
+    public List<byte[]> Audios { get; init; } = [];
+
+    /// <summary>The audio files in the chat's images folder, as saved; kept even when they didn't read.</summary>
+    public List<string> AudioFilenames { get; init; } = [];
+
+    /// <summary>Lined up with the files: "Recording" for a spoken message, a song's prompt.</summary>
+    public List<string> AudioPrompts { get; init; } = [];
+
+    /// <summary>Recordings not written beside the chat yet (a temporary chat's never are).</summary>
+    public List<byte[]> UnsavedAudios { get; init; } = [];
+
+    /// <summary>Recordings the model may hear: a user message's WAVs.</summary>
+    public IEnumerable<byte[]> Recordings => Role == "user" ? Audios.Where(a => Wav.IsWav(a)) : [];
+
     /// <summary>Where the tools' facts came from, shown under the answer and saved (the Mac's sources).</summary>
     public List<string> Sources { get; init; } = [];
 
@@ -87,7 +105,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     double PinShare = 0.5,
     ProjectFiles.PinTokenRatios? PinRatios = null,
     string? ModelKey = null,
-    bool? SeesPictures = null);
+    bool? SeesPictures = null,
+    bool? Hears = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -243,6 +262,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 // Every name is kept; the pictures that read are shown and sent.
                 var names = m.ImageFilenames.Where(n => n is not null).ToList();
                 var images = names.Select(n => store.ReadImage(file.Id, n)).OfType<byte[]>().ToList();
+                // Recordings and music: all of them, or none when one is gone (Mac).
+                var audioNames = m.AudioFilenames.Where(n => n is not null).ToList();
+                var audios = audioNames.Select(n => store.ReadImage(file.Id, n)).OfType<byte[]>().ToList();
+                if (audios.Count != audioNames.Count) audios = [];
                 Messages.Add(new ChatMessage
                 {
                     Role = m.Role,
@@ -258,6 +281,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Shared = [.. (m.Shared ?? []).Where(s => s is not null)],
                     Images = images,
                     ImageFilenames = names,
+                    Audios = audios,
+                    AudioFilenames = audioNames,
+                    AudioPrompts = [.. m.AudioPrompts.Where(p => p is not null)],
                     IsSummary = m.IsSummary,
                     // A message from before numbers were kept gets one now (kept from the next save on).
                     Seq = m.Seq ?? ++lastSeq,
@@ -269,11 +295,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         return true;
     }
 
-    /// <summary>Sends the user's message (and its pictures, PNG) and streams the answer.</summary>
-    public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null, IReadOnlyList<SharedContext>? shared = null)
+    /// <summary>Sends the user's message (and its pictures, PNG, and recordings, WAV) and streams the answer.</summary>
+    public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null, IReadOnlyList<SharedContext>? shared = null,
+        IReadOnlyList<byte[]>? audios = null)
     {
         text = text.Trim();
-        if ((text.Length == 0 && images is not { Count: > 0 } && shared is not { Count: > 0 }) || Busy || Compacting) return Task.CompletedTask;
+        var clips = (audios ?? []).Where(a => Wav.IsWav(a)).Take(Wav.MaxClips).ToList();
+        if ((text.Length == 0 && images is not { Count: > 0 } && shared is not { Count: > 0 } && clips.Count == 0) || Busy || Compacting) return Task.CompletedTask;
         var added = ProjectFilesSinceLastMessage(options);
         lock (sync) Messages.Add(new ChatMessage
         {
@@ -281,6 +309,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
             ProjectFilesAdded = added,
             Shared = [.. shared ?? []],
+            Audios = [.. clips],
+            UnsavedAudios = [.. clips],
+            AudioPrompts = [.. clips.Select(_ => "Recording")],
         });
         return AnswerAsync(options);
     }
@@ -530,7 +561,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 var (calls, request, content) = await StreamAsync(body, answer, mine, token).ConfigureAwait(false);
                 requests.Add(request);
                 // The model's bytes a token, from the server's own count (what sizes pins): long requests without pictures only.
-                if (request.PromptTokens is int counted && counted >= 2_000 && !Messages.Any(m => m.Images.Count > 0))
+                if (request.PromptTokens is int counted && counted >= 2_000 && !Messages.Any(m => m.Images.Count > 0 || m.Audios.Count > 0))
                 {
                     options.PinRatios?.Add(options.ModelKey ?? options.Model, (double)lastRequestBytes / counted);
                 }
@@ -926,7 +957,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             List<ChatMessage> firstTurn;
             // The words only: the pictures needn't be read again for a title.
-            lock (sync) firstTurn = Messages.Take(2).Select(m => new ChatMessage { Role = m.Role, Content = m.Content.Length > 0 ? m.Content : "(a picture)" }).ToList();
+            lock (sync) firstTurn = Messages.Take(2).Select(m => new ChatMessage { Role = m.Role, Content = m.Content.Length > 0 ? m.Content : m.Images.Count == 0 && m.Audios.Count > 0 ? "(a spoken message)" : "(a picture)" }).ToList();
             var ask = new List<ChatMessage>(firstTurn)
             {
                 new() { Role = "user", Content = "Give this conversation a title of at most six words, in its language. Reply with the title only, no quotes." },
@@ -999,7 +1030,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var end = messages.Count - keepEnd;
         var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0
             // What the user showed (Mac hasMedia): never summarized away, so the chat stays treated as having shown it.
-            || messages[i!.Value].Shared.Count > 0);
+            || messages[i!.Value].Shared.Count > 0
+            // A recording (Mac hasMedia): a summary can't hold what was said.
+            || messages[i!.Value].Audios.Count > 0 || messages[i!.Value].AudioFilenames.Count > 0);
         if (media is int m) end = Math.Min(end, m);
         while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
         if (end <= s + 1 || end >= messages.Count) return null;
@@ -1136,14 +1169,61 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// <summary>Non-ASCII as UTF-8, not \uXXXX: what the text weighs, as the Mac measures it.</summary>
     static readonly System.Text.Json.JsonSerializerOptions Measure = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    /// <summary>A request's history and declarations in bytes, for the token estimate.</summary>
-    internal static long MeasureBytes(JsonArray history, JsonArray? definitions) =>
-        (long)Encoding.UTF8.GetByteCount(history.ToJsonString(Measure)) + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString(Measure)));
+    /// <summary>
+    /// A request's history and declarations in bytes, for the token estimate. A recording counts by
+    /// its length (adr/0023), not its base64: its soft tokens, at the bytes a token text takes.
+    /// </summary>
+    internal static long MeasureBytes(JsonArray history, JsonArray? definitions)
+    {
+        long audio = 0;
+        if (history.Any(m => m?["content"] is JsonArray parts && parts.Any(p => p?["type"]?.GetValue<string>() == "input_audio")))
+        {
+            history = (JsonArray)history.DeepClone();
+            foreach (var parts in history.Select(m => m?["content"]).OfType<JsonArray>())
+            {
+                foreach (var part in parts.OfType<JsonObject>().Where(p => p["type"]?.GetValue<string>() == "input_audio"))
+                {
+                    var data = part["input_audio"]?["data"]?.GetValue<string>() ?? "";
+                    audio += (long)Wav.Tokens(data.Length / 4 * 3) * ProjectFiles.ProjectFilesTool.BytesPerToken;
+                    part["input_audio"] = new JsonObject { ["format"] = "wav" };
+                }
+            }
+        }
+        return audio + Encoding.UTF8.GetByteCount(history.ToJsonString(Measure))
+            + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString(Measure)));
+    }
 
-    /// <summary>A user message as the model reads it: the new-files note first, when files came before it.</summary>
-    static string WithNote(ChatMessage m, ChatOptions options)
+    /// <summary>
+    /// The user messages whose recordings go to the model: the latest ones, up to <see cref="Wav.MaxClips"/>
+    /// clips in all (Mac: a ninth otherwise made every later request fail); none for a model that doesn't hear.
+    /// </summary>
+    static HashSet<ChatMessage> HeardMessages(List<ChatMessage> messages, ChatOptions options)
+    {
+        var heard = new HashSet<ChatMessage>();
+        if (options.Hears != true) return heard;
+        var clips = 0;
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var n = messages[i].Recordings.Count();
+            if (n == 0) continue;
+            if (clips + n > Wav.MaxClips) break;
+            clips += n;
+            heard.Add(messages[i]);
+        }
+        return heard;
+    }
+
+    /// <summary>
+    /// A user message as the model reads it: the new-files note first, when files came before it.
+    /// A message whose recordings it doesn't get reads "(audio)" when it has no text (Mac).
+    /// </summary>
+    static string WithNote(ChatMessage m, ChatOptions options, bool heard)
     {
         if (m.Role != "user") return m.Content;
+        if (!heard && m.Content.Length == 0 && m.Recordings.Any()) m = new ChatMessage
+        {
+            Role = m.Role, Content = "(audio)", Images = m.Images, ImageFilenames = m.ImageFilenames, ProjectFilesAdded = m.ProjectFilesAdded, Shared = m.Shared,
+        };
         // Files added to the project first, then what the user showed (Mac adr/0030). A capture's text goes only
         // when its picture doesn't: each capture's picture is here, or every capture's text goes.
         // A picture file that didn't load could be a capture's: then every capture's text goes.
@@ -1174,15 +1254,23 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             system = system.Length == 0 ? policy.Trim() : system + "\n\n" + policy.Trim();
         }
         if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
-        foreach (var m in messages.Where(m => (m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0) && m.Role is "user" or "assistant"))
+        var list = messages.Where(m => m.Role is "user" or "assistant").ToList();
+        var heard = HeardMessages(list, options);
+        foreach (var m in list.Where(m => m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0 || m.Recordings.Any()))
         {
             // A model that doesn't see gets no pictures (the server refuses them); what was shown goes as its text.
-            if (m.Role == "user" && m.Images.Count > 0 && options.SeesPictures != false)
+            var images = m.Role == "user" && m.Images.Count > 0 && options.SeesPictures != false;
+            // A model that hears gets the latest eight recordings (the rest, and a model that doesn't, read "(audio)").
+            var audios = heard.Contains(m);
+            if (images || audios)
             {
-                // Text first, then each picture as a data URL (always PNG: attachments are converted).
+                // Text first, then each picture as a data URL (always PNG: attachments are converted), then the recordings.
                 var parts = new JsonArray();
-                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m, options) });
-                foreach (var png in m.Images)
+                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0 || (!audios && m.Recordings.Any()))
+                {
+                    parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m, options, audios) });
+                }
+                foreach (var png in images ? m.Images : [])
                 {
                     parts.Add(new JsonObject
                     {
@@ -1190,11 +1278,19 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         ["image_url"] = new JsonObject { ["url"] = "data:image/png;base64," + Convert.ToBase64String(png) },
                     });
                 }
+                foreach (var wav in audios ? m.Recordings : [])
+                {
+                    parts.Add(new JsonObject
+                    {
+                        ["type"] = "input_audio",
+                        ["input_audio"] = new JsonObject { ["data"] = Convert.ToBase64String(wav), ["format"] = "wav" },
+                    });
+                }
                 history.Add(new JsonObject { ["role"] = "user", ["content"] = parts });
                 continue;
             }
-            if (m.Content.Length == 0 && m.Shared.Count == 0) continue;
-            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m, options) });
+            if (m.Content.Length == 0 && m.Shared.Count == 0 && !m.Recordings.Any()) continue;
+            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m, options, heard: false) });
         }
         return history;
     }
@@ -1308,6 +1404,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             Id ??= Guid.NewGuid();
             // Pictures not on disk yet: written beside the chat first. One
             // that fails (a full disk) stays unsaved and the next save tries again.
+            foreach (var m in Messages.Where(m => m.UnsavedAudios.Count > 0))
+            {
+                while (m.UnsavedAudios.Count > 0)
+                {
+                    try
+                    {
+                        m.AudioFilenames.Add(store.SaveAudio(Id.Value, m.UnsavedAudios[0]));
+                        m.UnsavedAudios.RemoveAt(0);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        break;
+                    }
+                }
+            }
             foreach (var m in Messages.Where(m => m.UnsavedImages.Count > 0))
             {
                 while (m.UnsavedImages.Count > 0)
@@ -1342,6 +1453,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
+                    // Only the ones written: a recording that couldn't be saved yet isn't named.
+                    AudioFilenames = [.. m.AudioFilenames],
+                    AudioPrompts = [.. m.AudioPrompts.Take(m.AudioFilenames.Count)],
                     IsSummary = m.IsSummary,
                     Seq = m.Seq,
                 };
