@@ -32,6 +32,8 @@ static class Screenshots
                 await chat.VoiceScreenshotsAsync(folder, SaveElementAsync);
                 // Documents (adr/0024): a report printed to PDF by the real printer.
                 await chat.DocumentScreenshotsAsync(folder);
+                // The current browser tab (adr/0022): Edge on the runner, read through UI Automation.
+                await chat.TabScreenshotsAsync(folder, SaveElementAsync);
             }
             app.ShowSettings();
             foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })

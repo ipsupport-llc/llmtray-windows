@@ -21,14 +21,14 @@ public sealed partial class MainWindow
     IEnumerable<UIElement> ShowWindowsSection()
     {
         var app = App.Current;
-        yield return Ui.Section(L.T("Windows and screen"));
-        yield return Ui.Card(Ui.Row(L.T("Show the model a window or the screen"),
-            L.T("The attach button can capture a window or a screen you pick in Windows' own picker: one picture, taken when you click, never again later. A model that doesn't see pictures gets the text read from it on this PC. A chat that showed something doesn't use web tools, MCP servers or folder changes from then on."),
+        yield return Ui.Section(L.T("Windows and pages"));
+        yield return Ui.Card(Ui.Row(L.T("Show the model a window, the screen or a browser tab"),
+            L.T("The attach button can capture a window or a screen you pick in Windows' own picker: one picture, taken when you click, never again later. A model that doesn't see pictures gets the text read from it on this PC. It can also attach the browser tab you were on: its title, address and text, read through Windows' accessibility interface. A chat that showed something doesn't use web tools, MCP servers or folder changes from then on."),
             Ui.Toggle(app.Settings.ShowWindows, on =>
             {
                 app.UpdateSettings(app.Settings with { ShowWindows = on });
                 RenderPage();
-            }, L.T("Show the model a window or the screen"))));
+            }, L.T("Show the model a window, the screen or a browser tab"))));
     }
 
     /// <summary>Settings › Tools › Documents (adr/0024): the switch.</summary>

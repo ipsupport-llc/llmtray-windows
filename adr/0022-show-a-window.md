@@ -1,4 +1,4 @@
-# 0022 — Showing the model a window or the screen
+# 0022 — Showing the model a window, the screen or a browser tab
 
 Status: accepted
 
@@ -6,7 +6,7 @@ Status: accepted
 
 As on the Mac (Mac adr/0030), the user can show the local model what they
 see, when they're stuck in an app: **Show a Window or the Screen…** in the
-attach button's menu, off until **Settings › Tools › Windows and screen**
+attach button's menu, off until **Settings › Tools › Windows and pages**
 is on.
 
 - **Windows' own capture picker** (`GraphicsCapturePicker`): it lists
@@ -41,12 +41,38 @@ is on.
   that showed something, so the chat stays marked. What's shown and not yet
   sent belongs to its chat: switching chats drops it.
 
+## Attach Current Tab
+
+The same menu has **Attach Current Tab**: the browser window that was in
+front before LLMTray. It is the first app window in the z-order that isn't
+LLMTray's, and it counts only when it is Edge, Chrome, Brave, Vivaldi,
+Opera or Firefox. If another app was in front, the composer says so.
+
+- **What is read**, through UI Automation (the interface browsers give
+  screen readers):
+  - the address bar's value (the window's first edit box);
+  - the page's text (the window's first document, through its text
+    pattern, at most 200,000 characters read and `SharedContext.MaxText`
+    kept);
+  - the window title, without the browser's name and profile.
+
+  It runs off the UI thread. Chromium builds its accessibility tree on the
+  first ask, so an empty first read is tried once more after 0.7 s.
+- **Nothing runs in the page and nothing is sent to the browser.** The Mac
+  runs a fixed script through Apple Events, which needs "Allow JavaScript
+  from Apple Events"; Windows needs no such setting or permission. The
+  user's click is the consent, as with the picker.
+- **No text** (a browser that doesn't give it): the tab still goes, with
+  its title and address only (`titleOnly`), and the composer says so.
+- **In the message**, it is a shared item like a window (the Mac's
+  `browserTab` kind): a chip with a globe and the page title, the page's
+  text for every model (it has no picture), and the same lockdown from
+  then on (it is outside text).
+- CI opens a page in Edge on the runner, attaches it and writes what came
+  out to `tab.txt`. The composer with the chip is `chat-tab.png`.
+
 ## Not yet
 
-- **Attach Current Tab** (the Mac reads the front browser tab through Apple
-  Events). On Windows that would be UI Automation of the browser's address
-  bar and document; to be designed. Reading a page by address is already
-  the web tool's `source=page`.
 - Telling a display from a window in the picker's result: both show as
   "Window: <name>".
 
