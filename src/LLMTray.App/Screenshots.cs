@@ -30,6 +30,8 @@ static class Screenshots
                 await chat.ProjectScreenshotsAsync(folder, SaveElementAsync);
                 // Spoken messages (adr/0023): the composer's microphone, a clip, the recording bar.
                 await chat.VoiceScreenshotsAsync(folder, SaveElementAsync);
+                // Documents (adr/0024): a report printed to PDF by the real printer.
+                await chat.DocumentScreenshotsAsync(folder);
             }
             app.ShowSettings();
             foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })

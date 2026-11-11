@@ -39,6 +39,7 @@ public sealed class ChatStore(string folder)
         m.Role is null || m.Content is null || m.Reasoning is null || m.ImageFilenames is null || m.ImageDurations is null
             || m.ImagePrompts is null || m.Sources is null || m.McpCalls is null
             || m.AudioFilenames is null || m.AudioPrompts is null || m.AudioDurations is null
+            || m.Documents?.Any(d => d?.Filename is null || d.Title is null || d.Source is { Arguments: null }) == true
             ? m with
             {
                 Role = m.Role ?? "user",
@@ -49,6 +50,12 @@ public sealed class ChatStore(string folder)
                 ImagePrompts = m.ImagePrompts ?? [],
                 Sources = m.Sources ?? [],
                 McpCalls = m.McpCalls ?? [],
+                Documents = m.Documents?.Where(d => d is { Filename: not null }).Select(d => d with
+                {
+                    Title = d.Title ?? "Document",
+                    // A saved call that can't be read: no Make again, rather than a crash on the click.
+                    Source = d.Source?.Arguments is null ? null : d.Source,
+                }).ToList(),
                 AudioFilenames = m.AudioFilenames ?? [],
                 AudioPrompts = m.AudioPrompts ?? [],
                 AudioDurations = m.AudioDurations ?? [],
@@ -139,6 +146,82 @@ public sealed class ChatStore(string folder)
         File.WriteAllBytes(temp, wav);
         File.Move(temp, path, overwrite: true);
         return name;
+    }
+
+    /// <summary>A file of a chat's folder by its saved name, or null when the name points elsewhere.</summary>
+    public string? MediaPath(Guid id, string? name) =>
+        // One name in the folder: no separator, not "." or "..", nothing Windows can't name ("1..2.pdf" is fine).
+        string.IsNullOrEmpty(name) || name != Path.GetFileName(name) || name.Trim('.').Length == 0
+            || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':']) >= 0
+            ? null
+            : Path.Combine(ImagesFolder(id), name);
+
+    /// <summary>
+    /// Writes a document's PDF under <paramref name="baseName"/> (already a safe file name, no extension),
+    /// " 2", " 3"… on a collision, never over a file; and its thumbnail beside it. The names, for the card.
+    /// </summary>
+    public (string Pdf, string? Thumbnail) SaveDocument(Guid id, string baseName, byte[] pdf, byte[]? thumbnail)
+    {
+        var folder = ImagesFolder(id);
+        Directory.CreateDirectory(folder);
+        // Written whole under a temporary name first: a full disk leaves no half PDF under the real one.
+        var temp = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
+        string name;
+        try
+        {
+            File.WriteAllBytes(temp, pdf);
+            for (var n = 1; ; n++)
+            {
+                name = (n == 1 ? baseName : $"{baseName} {n}") + ".pdf";
+                try
+                {
+                    // Never over a file: a taken name gets the next number.
+                    File.Move(temp, Path.Combine(folder, name), overwrite: false);
+                    break;
+                }
+                catch (IOException) when (File.Exists(Path.Combine(folder, name)) && n < 1000)
+                {
+                }
+            }
+        }
+        finally
+        {
+            // Best effort: a leftover .tmp is named by nothing, and the write's own error is the one to report.
+            try
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        string? thumb = null;
+        if (thumbnail is { Length: > 0 and <= 512 * 1024 })
+        {
+            // Through a temporary name as the PDF; a thumbnail that can't be written is no thumbnail (the card shows an icon).
+            var thumbName = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".thumb.png";
+            var thumbTemp = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllBytes(thumbTemp, thumbnail);
+                File.Move(thumbTemp, Path.Combine(folder, thumbName), overwrite: false);
+                thumb = thumbName;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(thumbTemp)) File.Delete(thumbTemp);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        return (name, thumb);
     }
 
     /// <summary>A saved picture (or recording), or null when it's gone or the name points elsewhere.</summary>

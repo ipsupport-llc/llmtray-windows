@@ -81,6 +81,9 @@ public sealed class ChatMessage
     /// <summary>A user message: the files added to the chat's project since the last one, which the model was told about.</summary>
     public List<string> ProjectFilesAdded { get; init; } = [];
 
+    /// <summary>An answer's documents (adr/0024): their files are in the chat's images folder.</summary>
+    public List<DocumentRef> Documents { get; init; } = [];
+
     /// <summary>A user message: the windows or the screen it showed (Mac adr/0030).</summary>
     public List<SharedContext> Shared { get; init; } = [];
 
@@ -109,7 +112,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     ProjectFiles.PinTokenRatios? PinRatios = null,
     string? ModelKey = null,
     bool? SeesPictures = null,
-    bool? Hears = null);
+    bool? Hears = null,
+    Documents.IDocumentPrinter? Documents = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -282,6 +286,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Citations = [.. m.Citations ?? []],
                     ProjectFilesAdded = [.. m.ProjectFilesAdded ?? []],
                     Shared = [.. (m.Shared ?? []).Where(s => s is not null)],
+                    // Every card is kept, its PDF there or not (the card says it's gone): a save never forgets one.
+                    Documents = [.. (m.Documents ?? []).Where(d => d is not null)],
                     Images = images,
                     ImageFilenames = names,
                     Audios = audios,
@@ -524,6 +530,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             definitions ??= [];
             definitions.Add(ProjectFiles.ProjectFilesTool.Definition(listingOnly: summary.Ready + summary.WordsOnly == 0));
         }
+        // Documents (adr/0024): a kept chat only (a temporary one writes nothing). Ordinary trust: it sends nothing
+        // anywhere and changes no file, so it stays with pinned files and after file text (Mac adr/0020, Hardening 5).
+        var documents = temporaryTurn ? null : options.Documents;
+        var madeDocument = false;
+        if (documents is not null)
+        {
+            definitions ??= [];
+            definitions.Add(Documents.DocumentTool.Definition());
+        }
         // What the last request weighed and what the server counted for it: the next one's size is estimated from them.
         long lastRequestBytes = 0;
         int RequestTokens()
@@ -618,7 +633,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
+                        if (mcp is null && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            (outcome, var made) = await MakeDocumentAsync(call.Arguments, documents, temporaryTurn, madeDocument, projectId, answer, mine, token).ConfigureAwait(false);
+                            madeDocument |= made;
+                        }
+                        else if (projectTurn is not null && mcp is null && ProjectFiles.ProjectFilesTool.Is(call.Name))
                         {
                             // Text from any other tool earlier in this turn: a pin now is refused.
                             projectTurn.TextReturned |= otherText;
@@ -741,7 +761,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// <summary>A call's arguments as plain JSON (lenient text read once); "{}" for none or for what can't be read.</summary>
     static string Canonical(string arguments)
     {
-        if (string.IsNullOrWhiteSpace(arguments)) return "{}";
+        // Far past any tool's arguments (make_document's own cap): not parsed at all; the tool refuses it.
+        if (string.IsNullOrWhiteSpace(arguments) || arguments.Length > Documents.DocumentCall.MaxArgumentChars) return "{}";
         try
         {
             return Tools.LenientJson.Parse(arguments) is JsonObject o ? o.ToJsonString() : "{}";
@@ -989,6 +1010,170 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// <c>make_document</c> (adr/0024): the call to a spec (changes applied to an earlier document of
+    /// this chat), the page built, printed by the app, the PDF written beside the chat and its card put
+    /// under the answer. One a turn. The model hears the title and page count, never a path.
+    /// </summary>
+    async Task<(Tools.ToolOutcome Outcome, bool Made)> MakeDocumentAsync(string arguments, Documents.IDocumentPrinter? printer, bool temporary,
+        bool madeThisTurn, Guid? project, ChatMessage answer, int mine, CancellationToken token)
+    {
+        static Tools.ToolOutcome Refused(string text) => new(text, null, true);
+        if (temporary) return (Refused(Documents.DocumentTool.TemporaryChat), false);
+        if (printer is null) return (Refused(Documents.DocumentTool.TurnedOff), false);
+        List<Documents.EarlierDocument> earlier;
+        lock (sync)
+        {
+            earlier = [.. Messages.SelectMany(m => m.Documents).Where(d => d.Source is not null).Select(d => new Documents.EarlierDocument(d.Title, d.Source!.Arguments))];
+        }
+        var request = Documents.DocumentTool.Prepare(arguments, earlier, madeThisTurn);
+        if (request.Refusal is { } refusal || request.Spec is not { } spec || request.Call is not { } whole) return (Refused(request.Refusal ?? Documents.DocumentTool.NotMade.Trim()), false);
+        var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
+        if (printed.Problem is { } problem) return (Refused(problem), false);
+        var (made, page) = (printed.Made!, printed.Page!);
+        Guid chatId;
+        lock (sync)
+        {
+            // Another chat on screen now: nothing is written into this one's folder.
+            if (mine != epoch) return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
+            Id ??= Guid.NewGuid();
+            chatId = Id.Value;
+        }
+        // Written outside the lock (a PDF can be 50 MB): Stop and a chat switch don't wait for the disk.
+        string pdfName;
+        string? thumbName;
+        try
+        {
+            (pdfName, thumbName) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), made.Pdf, made.Thumbnail);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return (Refused($"{Documents.DocumentTool.Name}: the PDF couldn't be saved ({e.Message}). Tell the user. Nothing was made -- don't tell the user it was made."), false);
+        }
+        var card = new DocumentRef(Guid.NewGuid(), pdfName, thumbName, spec.Title, made.Pages, new DocumentSource(whole.ToJson(), project));
+        bool kept;
+        lock (sync)
+        {
+            kept = mine == epoch && Id == chatId;
+            if (kept) answer.Documents.Add(card);
+        }
+        if (!kept)
+        {
+            // Switched away while it was written: the files go, nothing lists them.
+            DeleteFiles(chatId, pdfName, thumbName);
+            return (Refused(Documents.DocumentTool.Failed("the chat was closed")), false);
+        }
+        Changed?.Invoke();
+        return (new Tools.ToolOutcome(Documents.DocumentTool.Made(spec, made.Pages, request.FromTitle, page.Notes), null, false), true);
+    }
+
+    /// <summary>The page built and printed, within the limits; or why not, as the model reads it.</summary>
+    static async Task<(Documents.PrintedDocument? Made, Documents.DocumentPage? Page, string? Problem)> PrintDocumentAsync(
+        Documents.DocumentSpec spec, Documents.IDocumentPrinter printer, CancellationToken token)
+    {
+        var page = Documents.DocumentHtml.Build(spec, printer.Paper, printer.BaseUrl);
+        if (page.TooLarge) return (null, page, Documents.DocumentTool.TooLarge);
+        try
+        {
+            var made = await printer.PrintAsync(page, spec.Title, token).ConfigureAwait(false);
+            if (made.Pdf.Length > Documents.DocumentTool.Limits.PdfBytes) return (null, page, Documents.DocumentTool.Failed("the PDF would be over 50 MB; make it shorter"));
+            if (made.Pages > Documents.DocumentTool.Limits.Pages) return (null, page, Documents.DocumentTool.Failed($"it would be {made.Pages} pages, over {Documents.DocumentTool.Limits.Pages}; make it shorter"));
+            return (made, page, null);
+        }
+        catch (Documents.DocumentPrintException e)
+        {
+            return (null, page, Documents.DocumentTool.Failed(e.Message));
+        }
+    }
+
+    /// <summary>
+    /// Make again (Mac): the document laid out again from its saved call, the model not asked. The new
+    /// PDF takes the card's place and the old files go. Null when done, else what went wrong.
+    /// </summary>
+    public async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document, Documents.IDocumentPrinter printer, CancellationToken token = default)
+    {
+        int mine;
+        Guid chatId;
+        lock (sync)
+        {
+            if (document.Source is null || Id is not { } id || Temporary) return "it can't be made again";
+            // Its save would race the answer's.
+            if (Busy || Compacting) return "wait until the answer is done";
+            if (!Messages.Contains(message) || !message.Documents.Contains(document)) return "the document is gone";
+            (mine, chatId) = (epoch, id);
+        }
+        var parsed = Documents.DocumentSpec.Parse(document.Source.Arguments);
+        if (parsed.Spec is not { } spec) return parsed.Refusal ?? "its saved call can't be read";
+        var printed = await PrintDocumentAsync(spec, printer, token).ConfigureAwait(false);
+        if (printed.Problem is { } problem) return problem;
+        string pdfName;
+        string? thumbName;
+        try
+        {
+            (pdfName, thumbName) = store.SaveDocument(chatId, Documents.DocumentFileName.Sanitize(spec.Title), printed.Made!.Pdf, printed.Made.Thumbnail);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return e.Message;
+        }
+        var remade = document with { Id = Guid.NewGuid(), Filename = pdfName, Thumbnail = thumbName, Title = spec.Title, Pages = printed.Made.Pages };
+        string? stale = null;
+        lock (sync)
+        {
+            // Another chat (or this one opened again: new messages), or a turn started meanwhile: left as it was.
+            var at = message.Documents.IndexOf(document);
+            if (mine != epoch || Id != chatId || !Messages.Contains(message) || at < 0) stale = "the chat changed meanwhile";
+            else if (Busy || Compacting) stale = "an answer started meanwhile";
+            else message.Documents[at] = remade;
+        }
+        if (stale is not null)
+        {
+            DeleteFiles(chatId, pdfName, thumbName);
+            return stale;
+        }
+        // The old files go only once the chat file holds the new card (by its id): a failed save keeps both,
+        // and a name the new file took over (the old PDF deleted by hand, the same title) is never deleted.
+        Save();
+        var saved = store.Load(chatId)?.Messages.Any(m => m.Documents?.Any(d => d.Id == remade.Id) == true) == true;
+        if (saved)
+        {
+            // Windows names are case-blind: "Report.pdf" is the "report.pdf" just written.
+            DeleteFiles(chatId, [.. new[] { document.Filename, document.Thumbnail }
+                .Where(n => !string.Equals(n, pdfName, StringComparison.OrdinalIgnoreCase) && !string.Equals(n, thumbName, StringComparison.OrdinalIgnoreCase))]);
+        }
+        else
+        {
+            bool switched;
+            lock (sync) switched = mine != epoch || Id != chatId;
+            if (switched)
+            {
+                // Another chat was opened before the save: this one's file still names the old card.
+                DeleteFiles(chatId, pdfName, thumbName);
+                return "the chat changed meanwhile";
+            }
+            // A save that failed (a full disk): both kept, the next save writes the new card; the user hears it.
+            Changed?.Invoke();
+            return "it was made, but the chat couldn't be saved yet";
+        }
+        Changed?.Invoke();
+        return null;
+    }
+
+    /// <summary>Removes a chat's files by name, as far as it can (one open in a viewer stays).</summary>
+    void DeleteFiles(Guid chatId, params string?[] names)
+    {
+        foreach (var name in names)
+        {
+            try
+            {
+                if (store.MediaPath(chatId, name) is { } path) File.Delete(path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     /// <summary>Removes a last answer that failed (before compacting and asking again).</summary>
     public void DropFailedAnswer()
     {
@@ -1035,7 +1220,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // What the user showed (Mac hasMedia): never summarized away, so the chat stays treated as having shown it.
             || messages[i!.Value].Shared.Count > 0
             // A recording (Mac hasMedia): a summary can't hold what was said.
-            || messages[i!.Value].Audios.Count > 0 || messages[i!.Value].AudioFilenames.Count > 0);
+            || messages[i!.Value].Audios.Count > 0 || messages[i!.Value].AudioFilenames.Count > 0
+            // A document: its card would go with the summary.
+            || messages[i!.Value].Documents.Count > 0);
         if (media is int m) end = Math.Min(end, m);
         while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
         if (end <= s + 1 || end >= messages.Count) return null;
@@ -1453,6 +1640,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Citations = m.Citations.Count > 0 ? [.. m.Citations] : null,
                     ProjectFilesAdded = m.ProjectFilesAdded.Count > 0 ? [.. m.ProjectFilesAdded] : null,
                     Shared = m.Shared.Count > 0 ? [.. m.Shared] : null,
+                    Documents = m.Documents.Count > 0 ? [.. m.Documents] : null,
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
