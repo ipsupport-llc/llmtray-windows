@@ -93,7 +93,8 @@ sealed partial class ChatWindow
         try
         {
             tab = await BrowserTab.ReadAsync(timeout.Token).WaitAsync(TabReadTime);
-            attachNote.Visibility = Visibility.Collapsed;
+            // The "Reading…" note is this chat's: another chat's own note stays.
+            if (epoch == chat.Epoch) attachNote.Visibility = Visibility.Collapsed;
         }
         catch (Exception e) when (e is TimeoutException or OperationCanceledException)
         {

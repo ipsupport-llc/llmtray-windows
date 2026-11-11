@@ -100,7 +100,10 @@ static partial class BrowserTab
         {
             GetWindowThreadProcessId(hwnd, out var pid);
             // Only a window the user works in: Start, the task switcher or an always-on-top tool passing by isn't one.
-            if (hwnd != IntPtr.Zero && pid != (uint)Environment.ProcessId && Candidate(hwnd, (uint)Environment.ProcessId)) lastForeign = hwnd;
+            // A dialog counts as its owner's window (a browser's own dialog is that browser).
+            var top = hwnd == IntPtr.Zero ? IntPtr.Zero : GetAncestor(hwnd, GaRootOwner);
+            if (top == IntPtr.Zero) top = hwnd;
+            if (top != IntPtr.Zero && pid != (uint)Environment.ProcessId && Candidate(top, (uint)Environment.ProcessId)) lastForeign = top;
         };
         hook = SetWinEventHook(EventSystemForeground, EventSystemForeground, IntPtr.Zero, onForeground, 0, 0, WinEventOutOfContext);
     }
