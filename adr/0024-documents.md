@@ -75,11 +75,77 @@ writes Markdown and chart numbers; the app does the layout.
   It stays declared with pinned files and after file text. "Summarise
   these files into a report" is the point.
 
-Not in this step:
+## Project pictures
 
-- **Project pictures** (`![caption](project:p1)`). The converter takes
-  them already and leaves a picture out with a note; the picture store
-  and the confined decoder come next.
+As on the Mac (Mac adr/0020, "Project pictures"), projects keep pictures
+beside documents, so a document can show them as
+`![caption](project:p1)`. They stay out of the search index, which is
+unchanged.
+
+- **The store** (`ProjectPictures`, Core) lives in each project's folder:
+  - copies at `pictures/<uuid>.<ext>`, with thumbnails beside them;
+  - `staging/` for an add in progress;
+  - a `pictures.json` manifest of id, name, size, bytes, SHA-256 and date,
+    replaced atomically. Ids run `p1`, `p2`… and are never reused.
+
+  Each change holds the project's picture lock. A manifest that can't be
+  read stops a change and is never taken for empty. The first look in a
+  run reconciles the store: staging leftovers and files the manifest
+  doesn't name are deleted, and entries whose copy is gone are dropped.
+- **Adding.** The formats are png, jpg, jpeg, jfif, heic, heif, webp,
+  tif, tiff, gif and bmp, at most 50 MB each. They come in through the
+  Files window (Add Files…, a drop) and the document card's Add to Project.
+  - A picture is copied privately with the cap checked while copying,
+    measured by the decoder, and stored from that same copy.
+  - It is refused when it isn't a picture or has more than 100 megapixels.
+  - The same bytes twice are "already in the project", unless the earlier
+    copy has gone; then the add puts it back.
+  - A copy stalled for a minute (a share gone away) is given up.
+  - The Files window shows pictures apart, with a thumbnail, name, size
+    and Remove.
+- **The decoder is a confined child**: `LLMTray.exe --decode-picture`, in
+  a job (1 GB, no children, killed with the app), 10 s, a 4 KB answer and
+  16 MB out. It runs Windows' own codecs (`BitmapDecoder`):
+  - reads the header's size and refuses more than 100 megapixels before
+    decoding;
+  - decodes frame 0 only, upright and in sRGB;
+  - scales straight to 400 px for the thumbnail or 2,400 px for a
+    document;
+  - writes the picture again with a new encoder, so none of the original
+    metadata (GPS, camera) comes along. A photo stays JPEG; anything else
+    becomes PNG.
+
+  The child is killed and waited for before its output is read, through
+  one handle and capped. Its one-line answer must be whole, with sane
+  sizes. Like the reader process (adr/0021), the job bounds memory, time
+  and children and contains a crash. It is not a privilege boundary: the
+  child runs as the user. An AppContainer for the decoder and the reader
+  is a later step.
+- **What the model sees.** `project_files`' listing ends with the
+  pictures: id, name and size, never their pixels. When `make_document` is
+  declared, the listing also says how to use one. A project with pictures
+  and no documents gets `project_files` in its listing-only mode, so the
+  ids can be learned.
+- **In a document**, a picture comes only from the chat's project, and
+  only while the chat is still in it. That is checked before and after
+  decoding, and Make again uses the project the document was made in,
+  never another project's `p1`. A document uses at most 30 pictures and
+  60 MB of them. The pictures are decoded before printing and served from
+  the page's table as `image/<id>.jpg|png`. A missing or failed picture
+  is left out with a note to the model. Make again tells the user what it
+  left out.
+  - The project is the one the turn started in.
+  - If the chat leaves the project, or a picture is removed, while the
+    page prints, the PDF is discarded and the model is told to make it
+    again.
+- **The listing is budgeted** like the files: as many pictures as fit, then
+  a `pictures:N` cursor. In a pictures-only project, a search, read or pin
+  is told there are only pictures.
+- **A damaged manifest is never taken for empty.** If it is `{}`, is
+  missing its list, or has a name the store didn't give (a path, `..`),
+  nothing is changed or deleted until it is fixed.
+
+Not in this step:
 - **`load_tools`** and tool groups. The tool is declared in every saved
   chat while the setting is on.
 - **`format: docx` and `xlsx`**, as on the Mac.
@@ -97,6 +163,12 @@ Not in this step:
   - the chat: a document made, saved beside the chat in the Mac's shape,
     read back and made again; none in a temporary chat; a print failure
     told and nothing kept.
+- Core tests (pictures): kept apart from documents, refused ones,
+  duplicates, a private copy decoded, the listing with and without
+  documents, a pictures-only project, removal with ids never reused,
+  reconciliation, and a document's pictures only from the chat's project.
+- CI: a picture added to the demo project through the real decoder
+  child, and decoded for a document (`project-files.txt`).
 - CI: a report with a table, a stacked chart, a formula chart and math is
   printed by the real printer on the Windows runners. The PDF, its first
   page and `documents.txt` are in the `ui-*` artifact.

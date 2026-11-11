@@ -285,7 +285,8 @@ public partial class App : Application
         // waiting while a request runs.
         ProjectFiles = new LLMTray.Core.ProjectFiles.ProjectFilesService(Path.Combine(DataFolder, "projects"), () => Settings.ProjectFiles,
             () => Embedder.IsInstalled ? Embedder : null,
-            new LLMTray.Core.ProjectFiles.ChildProcessReader(Interop.ReaderProcesses.Start), () => background.IsForegroundActive);
+            new LLMTray.Core.ProjectFiles.ChildProcessReader(Interop.ReaderProcesses.Start), () => background.IsForegroundActive,
+            pictures: new Interop.PictureDecoding.ChildDecoder());
         ProjectFiles.Changed += project => dispatcher.TryEnqueue(() => ProjectFilesChanged?.Invoke(project));
         PinRatios = new LLMTray.Core.ProjectFiles.PinTokenRatios(Path.Combine(DataFolder, "pin-ratios.json"));
         Downloads.Completed += _ => ProjectFiles.Poke();
