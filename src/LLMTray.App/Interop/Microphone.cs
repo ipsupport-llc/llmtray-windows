@@ -98,37 +98,54 @@ sealed class Microphone : IDisposable
         get { lock (sync) return level; }
     }
 
+    static readonly int FlagsOffset = (int)Marshal.OffsetOf<WaveHeader>(nameof(WaveHeader.Flags));
+    static readonly int RecordedOffset = (int)Marshal.OffsetOf<WaveHeader>(nameof(WaveHeader.BytesRecorded));
+    /// <summary>The buffer the driver fills next: they come back in the order they were queued.</summary>
+    int next;
+    readonly byte[] chunk = new byte[BufferBytes];
+
+    /// <summary>
+    /// Takes the buffers that are done, in queue order, under <c>sync</c>; each is handed back for
+    /// more sound when <paramref name="requeue"/>. True when any came.
+    /// </summary>
+    bool DrainLocked(bool requeue)
+    {
+        var any = false;
+        for (var n = 0; n < Buffers && !full; n++)
+        {
+            var header = headers[next];
+            if ((Marshal.ReadInt32(header, FlagsOffset) & Done) == 0) break;
+            any = true;
+            var bytes = Math.Min(Marshal.ReadInt32(header, RecordedOffset), BufferBytes) & ~1;
+            Marshal.Copy(Marshal.ReadIntPtr(header, 0), chunk, 0, bytes);
+            pcm.Write(chunk, 0, (int)Math.Min(bytes, MaxBytes - pcm.Length));
+            var peak = 0;
+            for (var i = 0; i + 1 < bytes; i += 2) peak = Math.Max(peak, Math.Abs((int)BitConverter.ToInt16(chunk, i)));
+            level = Math.Min(1f, peak / 32768f);
+            full = pcm.Length >= MaxBytes;
+            // Clear the flag first: a buffer not handed back isn't read twice.
+            Marshal.WriteInt32(header, FlagsOffset, Marshal.ReadInt32(header, FlagsOffset) & ~Done);
+            if (requeue && !full) waveInAddBuffer(handle, header, Marshal.SizeOf<WaveHeader>());
+            next = (next + 1) % Buffers;
+        }
+        return any;
+    }
+
+    bool full;
+
     void Loop()
     {
-        var flagsOffset = (int)Marshal.OffsetOf<WaveHeader>(nameof(WaveHeader.Flags));
-        var recordedOffset = (int)Marshal.OffsetOf<WaveHeader>(nameof(WaveHeader.BytesRecorded));
-        var buffer = new byte[BufferBytes];
-        var full = false;
         while (!stopping)
         {
-            var any = false;
+            bool any, reachedEnd;
             lock (sync)
             {
                 // Closed meanwhile (a stop that didn't wait long enough): the buffers are gone.
                 if (closed) return;
-                foreach (var header in headers)
-                {
-                    if ((Marshal.ReadInt32(header, flagsOffset) & Done) == 0) continue;
-                    any = true;
-                    var bytes = Math.Min(Marshal.ReadInt32(header, recordedOffset), BufferBytes) & ~1;
-                    Marshal.Copy(Marshal.ReadIntPtr(header, 0), buffer, 0, bytes);
-                    var take = (int)Math.Min(bytes, MaxBytes - pcm.Length);
-                    pcm.Write(buffer, 0, take);
-                    var peak = 0;
-                    for (var i = 0; i + 1 < bytes; i += 2) peak = Math.Max(peak, Math.Abs((int)BitConverter.ToInt16(buffer, i)));
-                    level = Math.Min(1f, peak / 32768f);
-                    full = pcm.Length >= MaxBytes;
-                    if (full) break;
-                    // Handed back for more sound.
-                    waveInAddBuffer(handle, header, Marshal.SizeOf<WaveHeader>());
-                }
+                any = DrainLocked(requeue: true);
+                reachedEnd = full;
             }
-            if (full)
+            if (reachedEnd)
             {
                 Full?.Invoke();
                 return;
@@ -137,13 +154,21 @@ sealed class Microphone : IDisposable
         }
     }
 
-    /// <summary>Stops and returns the recording as a WAV (empty sound when nothing came).</summary>
+    /// <summary>
+    /// Stops and returns the recording as a WAV (empty sound when nothing came). The driver hands
+    /// back what it holds first, the part-filled buffer with what it got: the last syllable stays.
+    /// </summary>
     public byte[] Stop()
     {
         stopping = true;
         if (Thread.CurrentThread != thread) thread.Join(TimeSpan.FromSeconds(2));
         lock (sync)
         {
+            if (!closed)
+            {
+                waveInReset(handle);
+                DrainLocked(requeue: false);
+            }
             var wav = Wav.FromPcm16(pcm.GetBuffer().AsSpan(0, (int)pcm.Length));
             Close();
             return wav;

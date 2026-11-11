@@ -28,6 +28,8 @@ sealed partial class ChatWindow
 
     readonly Button mic = new();
     readonly List<(byte[] Wav, double Seconds)> pendingAudio = [];
+    /// <summary>The chat the clips and the recording belong to (its epoch): never sent into another.</summary>
+    int audioEpoch = -1;
     readonly Border recordingBar = new() { Visibility = Visibility.Collapsed };
     readonly TextBlock recordingText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly ProgressBar recordingLevel = new() { Width = 80, Maximum = 1, VerticalAlignment = VerticalAlignment.Center };
@@ -56,9 +58,16 @@ sealed partial class ChatWindow
         ToolTipService.SetToolTip(mic, L.T("Record a spoken message: click to start and stop, or hold to talk and release to send"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(mic, L.T("Record a spoken message"));
         // The button handles the pointer itself: these see its presses anyway.
-        mic.AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => MicPressed()), handledEventsToo: true);
-        mic.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => MicReleased(Inside(e))), handledEventsToo: true);
-        mic.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, _) => { if (holding) MicReleased(over: false); }), handledEventsToo: true);
+        // Only the primary button (a mouse's left, a touch, a pen tip): a right-click is no press of the microphone.
+        // Not the capture's loss: the button lets the capture go before its release reaches here.
+        mic.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) => { if (Primary(e)) MicPressed(); }), handledEventsToo: true);
+        mic.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (e.GetCurrentPoint(mic).Properties.PointerUpdateKind is Microsoft.UI.Input.PointerUpdateKind.LeftButtonReleased or Microsoft.UI.Input.PointerUpdateKind.Other)
+            {
+                MicReleased(Inside(e));
+            }
+        }), handledEventsToo: true);
         mic.PointerExited += (_, _) => { if (holding) movedOff = true; };
         mic.PointerEntered += (_, _) => { if (holding) movedOff = false; };
         // The keyboard (Space, Enter on the button): a click starts or stops a clip.
@@ -83,6 +92,8 @@ sealed partial class ChatWindow
             if (mic.Visibility == Visibility.Visible || recorder is not null) ToggleClip();
         });
     }
+
+    bool Primary(PointerRoutedEventArgs e) => e.GetCurrentPoint(mic).Properties.IsLeftButtonPressed;
 
     bool Inside(PointerRoutedEventArgs e)
     {
@@ -157,9 +168,12 @@ sealed partial class ChatWindow
             ShowAttachProblem(L.F("At most {0} recordings in one message.", Wav.MaxClips));
             return false;
         }
+        // Clips left from another chat (its redraw not yet run) don't go with this one.
+        if (audioEpoch != chat.Epoch) pendingAudio.Clear();
         try
         {
             recorder = Microphone.Start();
+            audioEpoch = chat.Epoch;
         }
         catch (MicrophoneException e)
         {
@@ -255,6 +269,14 @@ sealed partial class ChatWindow
     /// <summary>Takes the clips for sending: a recording still going stops and goes too.</summary>
     List<byte[]> TakeAudio()
     {
+        // Another chat came on screen since they were made (Ctrl+N, then Enter before the redraw): they stay out of it.
+        if (audioEpoch != chat.Epoch)
+        {
+            DropRecording();
+            pendingAudio.Clear();
+            RenderAttachments();
+            return [];
+        }
         FinishRecording();
         var clips = pendingAudio.Select(c => c.Wav).ToList();
         pendingAudio.Clear();
