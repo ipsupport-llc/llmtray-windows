@@ -237,8 +237,8 @@ public static class ProjectFilesTool
                 break;
             }
         }
-        // None fit on this page: only the cursor, never an empty list that reads as "no pictures".
-        if (list.Count == 0) result.Remove("pictures");
+        // None fit on this page: only the cursor, never an empty list that reads as "no pictures" (with none left, the empty list says so).
+        if (list.Count == 0 && result["pictures_next"] is not null) result.Remove("pictures");
 
         // At most 80 characters, never cut inside a pair.
         static string Short(string name)

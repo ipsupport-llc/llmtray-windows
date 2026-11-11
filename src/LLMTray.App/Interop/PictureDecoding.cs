@@ -99,6 +99,7 @@ static class PictureDecoding
             Directory.CreateDirectory(folder);
             // The child's exit, once it's started: the folder goes after it (later, when it's slow to end).
             Task exited = Task.CompletedTask;
+            Process? process = null;
             try
             {
                 var exe = Environment.ProcessPath ?? throw new PictureDecodeException("the app's path is unknown");
@@ -111,7 +112,8 @@ static class PictureDecoding
                     WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
                 };
                 foreach (var a in new[] { ArgumentName, path, folder, side.ToString(System.Globalization.CultureInfo.InvariantCulture) }) info.ArgumentList.Add(a);
-                using var process = Process.Start(info) ?? throw new PictureDecodeException("the decoder didn't start");
+                // Not disposed here: its exit is what the folder's cleanup waits for, and disposing would stop that notice.
+                process = Process.Start(info) ?? throw new PictureDecodeException("the decoder didn't start");
                 exited = process.WaitForExitAsync();
                 IDisposable job;
                 try
@@ -166,20 +168,30 @@ static class PictureDecoding
             }
             finally
             {
-                // Never waited for here (a cancel stays prompt): the folder goes as soon as the child has ended.
-                if (exited.IsCompleted) DeleteFolder(folder);
-                else _ = exited.ContinueWith(_ => DeleteFolder(folder), TaskScheduler.Default);
+                // Never waited for here (a cancel stays prompt): the folder goes once the child has ended, then the process.
+                var started = process;
+                _ = exited.ContinueWith(async _ =>
+                {
+                    started?.Dispose();
+                    await DeleteFolderAsync(folder);
+                }, TaskScheduler.Default);
             }
         }
 
-        static void DeleteFolder(string folder)
+        /// <summary>A few tries a second apart: a scanner may hold the file a moment after the child let it go.</summary>
+        static async Task DeleteFolderAsync(string folder)
         {
-            try
+            for (var attempt = 0; attempt < 5; attempt++)
             {
-                Directory.Delete(folder, recursive: true);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
+                try
+                {
+                    if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                    return;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1));
+                }
             }
         }
 

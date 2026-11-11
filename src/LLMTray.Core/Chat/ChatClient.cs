@@ -1173,12 +1173,14 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         var remade = document with { Id = Guid.NewGuid(), Filename = pdfName, Thumbnail = thumbName, Title = spec.Title, Pages = printed.Made.Pages };
         string? stale = null;
+        // Read before the chat's lock (it reads the pictures' list from disk).
+        var picturesGone = PicturesWentMeanwhile(pictures, document.Source.Project, files, projectOfChat);
         lock (sync)
         {
             // Another chat (or this one opened again: new messages), or a turn started meanwhile: left as it was.
             var at = message.Documents.IndexOf(document);
             if (mine != epoch || Id != chatId || !Messages.Contains(message) || at < 0) stale = "the chat changed meanwhile";
-            else if (PicturesWentMeanwhile(pictures, document.Source.Project, files, projectOfChat)) stale = "the chat left its project, or a picture was removed, meanwhile";
+            else if (picturesGone) stale = "the chat left its project, or a picture was removed, meanwhile";
             else if (Busy || Compacting) stale = "an answer started meanwhile";
             else message.Documents[at] = remade;
         }

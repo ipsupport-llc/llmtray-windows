@@ -82,7 +82,8 @@ public static class ProjectPictures
     static bool IsWhole(PictureManifest manifest)
     {
         if (manifest.Pictures.Any(p => p is null || p.Name is null || !IsStoredName(p.File) || (p.Thumbnail is { } t && t != p.File + ".thumb.png")
-            || IdNumber(p.Id) == 0 || p.Width <= 0 || p.Height <= 0 || p.Bytes <= 0))
+            || IdNumber(p.Id) == 0 || p.Width <= 0 || p.Height <= 0 || (long)p.Width * p.Height > MaxMegapixels * 1_000_000L
+            || p.Bytes <= 0 || p.Bytes > MaxBytes || p.Sha256 is not { Length: 64 } || !p.Sha256.All(char.IsAsciiHexDigitLower)))
         {
             return false;
         }
