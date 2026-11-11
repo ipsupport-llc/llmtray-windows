@@ -22,7 +22,9 @@ public static class Program
         var args = Environment.GetCommandLineArgs();
         if (args.Length == 4 && args[1] == LLMTray.Core.ProjectFiles.ExtractProtocol.ArgumentName)
         {
-            return LLMTray.Core.ProjectFiles.ExtractProtocol.RunChild(args[2], args[3], Console.In, Console.OpenStandardOutput());
+            // Scanned pages are read here too, with Windows' PDF renderer and text recognition (adr/0021).
+            WinRT.ComWrappersSupport.InitializeComWrappers();
+            return LLMTray.Core.ProjectFiles.ExtractProtocol.RunChild(args[2], args[3], Console.In, Console.OpenStandardOutput(), Interop.PageOcr.Recognize);
         }
         // The project pictures' decoder (adr/0024): a child too, Windows' own image codecs in it.
         if (args.Length == 5 && args[1] == Interop.PictureDecoding.ArgumentName)

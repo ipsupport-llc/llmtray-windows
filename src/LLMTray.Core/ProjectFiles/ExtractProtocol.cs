@@ -33,14 +33,15 @@ public static class ExtractProtocol
     public const string ArgumentName = "--extract";
 
     /// <summary>The child: <c>LLMTray.exe --extract &lt;path&gt; &lt;format&gt;</c>. Returns its exit code.</summary>
-    public static int RunChild(string path, string format, TextReader input, Stream output)
+    /// <param name="recognize">Reads scanned PDF pages (the app's: Windows' PDF renderer and text recognition, in this process).</param>
+    public static int RunChild(string path, string format, TextReader input, Stream output, PageRecognizer? recognize = null)
     {
         using var writer = new StreamWriter(output, new UTF8Encoding(false)) { AutoFlush = false, NewLine = "\n" };
         if (input.ReadLine()?.Trim() != "go") return 2;
         try
         {
             if (!Enum.TryParse<DocumentFormat>(format, out var kind)) throw new ExtractException("unknown format");
-            foreach (var page in DocumentExtractor.Extract(path, kind))
+            foreach (var page in DocumentExtractor.Extract(path, kind, recognize: recognize))
             {
                 var line = new JsonObject { ["p"] = page.Number, ["t"] = page.Text };
                 if (page.Label is { } label) line["l"] = label;
@@ -73,6 +74,8 @@ public static class ExtractProtocol
         using var handle = process.Handle;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(wallTime);
+        // Monotonic: a clock set back or forward doesn't move the whole read's limit.
+        var started = System.Diagnostics.Stopwatch.StartNew();
         // Escaping can take six bytes a character; framing a little more.
         var maxBytes = limits.MaxTextChars * 6 + limits.MaxPages * 64L + 4096;
         var pages = new List<ExtractedPage>();
@@ -97,6 +100,10 @@ public static class ExtractProtocol
                     line.Write(buffer, start, i - start);
                     start = i + 1;
                     if (Line(line.ToArray(), pages, limits, ref chars) is { } done) return done ? pages : throw new ExtractException("the reader stopped");
+                    // A page came: the wait starts again, up to the whole read's limit.
+                    var left = ChildProcessReader.MaxWallTime - started.Elapsed;
+                    if (left <= TimeSpan.Zero) throw new OperationCanceledException();
+                    timeout.CancelAfter(wallTime < left ? wallTime : left);
                     line.SetLength(0);
                 }
                 line.Write(buffer, start, n - start);
@@ -106,7 +113,7 @@ public static class ExtractProtocol
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new ExtractException("too slow: it took longer than " + (int)wallTime.TotalSeconds + " seconds");
+            throw new ExtractException("too slow: no page came in " + (int)wallTime.TotalSeconds + " seconds, or it took over " + (int)ChildProcessReader.MaxWallTime.TotalMinutes + " minutes in all");
         }
         catch (TimeoutException)
         {
@@ -156,8 +163,14 @@ public static class ExtractProtocol
 /// <summary>Runs <see cref="ExtractProtocol"/> against a child started by <paramref name="start"/> (the app's: its own exe in a job).</summary>
 public sealed class ChildProcessReader(Func<string, DocumentFormat, ReaderProcess> start) : IDocumentReader
 {
-    /// <summary>A minute, and a minute more per 10 MB.</summary>
+    /// <summary>
+    /// A minute, and a minute more per 10 MB, without a page coming: each page that comes starts it again (a scan's
+    /// pages are recognized one by one, so its work follows its pages, not its bytes); see <see cref="MaxWallTime"/>.
+    /// </summary>
     public static TimeSpan WallTime(long bytes) => TimeSpan.FromSeconds(60 + bytes / (10L << 20) * 60);
+
+    /// <summary>A document's whole read at most, however steadily its pages come.</summary>
+    public static readonly TimeSpan MaxWallTime = TimeSpan.FromMinutes(30);
 
     public Task<IReadOnlyList<ExtractedPage>> ReadAsync(string path, DocumentFormat format, CancellationToken cancellationToken)
     {

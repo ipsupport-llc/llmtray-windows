@@ -289,6 +289,24 @@ sealed partial class ChatWindow
         // A picture too (adr/0024): the chat's own screenshot, through the decoder process.
         var added = await app.ProjectFiles.AddAsync(demo.Id, [terms, notes, Path.Combine(folder, "chat.png")]);
         var forDocument = await app.ProjectFiles.PictureForDocumentAsync(demo.Id, "p1", CancellationToken.None);
+        // A scan (adr/0021): that picture printed alone into a PDF, which has no text but the header's; added like any file.
+        string scanReport;
+        try
+        {
+            if (forDocument is null) throw new InvalidOperationException("no picture to scan");
+            var spec = LLMTray.Core.Documents.DocumentSpec.Parse("""{"title":"Scanned page","content":"![scan](project:p1)"}""").Spec!;
+            var page = LLMTray.Core.Documents.DocumentHtml.Build(spec, Printer.Paper, Printer.BaseUrl, new Dictionary<string, string> { ["p1"] = "p1.png" });
+            var resources = new Dictionary<string, LLMTray.Core.Documents.DocumentResource>(page.Resources) { ["image/p1.png"] = new(forDocument.Data, "image/png") };
+            var printed = await Printer.PrintAsync(page with { Resources = resources }, spec.Title, CancellationToken.None);
+            var scan = Path.Combine(temp, "Scanned page.pdf");
+            await File.WriteAllBytesAsync(scan, printed.Pdf);
+            var scanAdded = await app.ProjectFiles.AddAsync(demo.Id, [scan]);
+            scanReport = $"scan added: {scanAdded.Single().Doc?.ToString() ?? scanAdded.Single().Refused}";
+        }
+        catch (Exception e)
+        {
+            scanReport = "scan failed: " + e.Message;
+        }
         var until = DateTime.UtcNow.AddSeconds(20);
         while (app.ProjectFiles.Summary(demo.Id).Waiting > 0 && DateTime.UtcNow < until) await Task.Delay(250);
         RenderChats();
@@ -299,9 +317,12 @@ sealed partial class ChatWindow
         File.WriteAllLines(Path.Combine(folder, "project-files.txt"),
             [.. added.Select(a => $"added {a.Name}: {a.Doc?.ToString() ?? a.Picture ?? a.Refused}"),
              .. app.ProjectFiles.Pictures(demo.Id).Select(p => $"picture {p.Id} {p.Name}: {p.Width}x{p.Height} {p.Bytes} bytes thumbnail={p.Thumbnail is not null}"),
+             scanReport,
              forDocument is null ? "picture for a document: none" : $"picture for a document: {forDocument.Width}x{forDocument.Height}, {forDocument.Data.Length} bytes, jpeg={forDocument.IsJpeg}",
              .. docs.Select(d => $"doc {d.Doc} {d.Name}: {d.Status} pages={d.Pages} error={d.Error}"),
-             $"search 'payment' (words only: {wordsOnly}): " + string.Join("; ", hits.Select(h => $"[{h.Doc}:{h.Page}] {h.Text}"))]);
+             $"search 'payment' (words only: {wordsOnly}): " + string.Join("; ", hits.Select(h => $"[{h.Doc}:{h.Page}] {h.Text}")),
+             // The scan's text, read from its picture ("Ask anything" is on the chat's screenshot).
+             $"search 'anything' in the scan: " + string.Join("; ", (await app.ProjectFiles.SearchAsync(demo.Id, "anything", null, 3, CancellationToken.None)).Hits.Select(h => $"[{h.Doc}:{h.Page}] {h.Text}"))]);
         _ = ProjectFilesAsync(demo);
         await Task.Delay(1500);
         if (filesDialog is { } dialog)
