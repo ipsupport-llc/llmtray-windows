@@ -35,7 +35,7 @@ sealed partial class ChatWindow
         attach.VerticalAlignment = VerticalAlignment.Bottom;
         ToolTipService.SetToolTip(attach, L.T("Attach a picture"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(attach, L.T("Attach a picture"));
-        attach.Click += async (_, _) => await PickPicturesAsync();
+        attach.Click += async (_, _) => await AttachClickedAsync();
 
         // Ctrl+V of a picture (or of copied picture files) into the message box.
         input.Paste += async (_, e) =>
@@ -167,8 +167,10 @@ sealed partial class ChatWindow
     /// <summary>Another chat is shown: what was waiting to be sent belonged to the one before.</summary>
     void ClearAttachments()
     {
-        if (pending.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
+        if (pending.Count == 0 && pendingShared.Count == 0 && attachNote.Visibility == Visibility.Collapsed) return;
         pending.Clear();
+        // What was shown belongs to the chat it was shown in (a temporary one's never reaches another).
+        pendingShared.Clear();
         RenderAttachments();
         attachNote.Visibility = Visibility.Collapsed;
     }
@@ -232,7 +234,8 @@ sealed partial class ChatWindow
             tile.Children.Add(remove);
             attachments.Children.Add(tile);
         }
-        attachments.Visibility = pending.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        RenderSharedChips();
+        attachments.Visibility = pending.Count > 0 || pendingShared.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         RenderAttachNote();
     }
 

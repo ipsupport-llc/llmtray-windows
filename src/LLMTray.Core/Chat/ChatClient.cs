@@ -60,6 +60,9 @@ public sealed class ChatMessage
     /// <summary>A user message: the files added to the chat's project since the last one, which the model was told about.</summary>
     public List<string> ProjectFilesAdded { get; init; } = [];
 
+    /// <summary>A user message: the windows or the screen it showed (Mac adr/0030).</summary>
+    public List<SharedContext> Shared { get; init; } = [];
+
     /// <summary>What the Mac app wrote and this app doesn't show yet: saved back as it was.</summary>
     public PersistedMessage? Original { get; init; }
 }
@@ -83,7 +86,8 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
     int ContextTokens = 0,
     double PinShare = 0.5,
     ProjectFiles.PinTokenRatios? PinRatios = null,
-    string? ModelKey = null);
+    string? ModelKey = null,
+    bool? SeesPictures = null);
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
@@ -251,6 +255,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     McpCalls = [.. m.McpCalls],
                     Citations = [.. m.Citations ?? []],
                     ProjectFilesAdded = [.. m.ProjectFilesAdded ?? []],
+                    Shared = [.. (m.Shared ?? []).Where(s => s is not null)],
                     Images = images,
                     ImageFilenames = names,
                     IsSummary = m.IsSummary,
@@ -265,16 +270,17 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     }
 
     /// <summary>Sends the user's message (and its pictures, PNG) and streams the answer.</summary>
-    public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null)
+    public Task SendAsync(string text, ChatOptions options, IReadOnlyList<byte[]>? images = null, IReadOnlyList<SharedContext>? shared = null)
     {
         text = text.Trim();
-        if ((text.Length == 0 && images is not { Count: > 0 }) || Busy || Compacting) return Task.CompletedTask;
+        if ((text.Length == 0 && images is not { Count: > 0 } && shared is not { Count: > 0 }) || Busy || Compacting) return Task.CompletedTask;
         var added = ProjectFilesSinceLastMessage(options);
         lock (sync) Messages.Add(new ChatMessage
         {
             Seq = ++lastSeq,
             Role = "user", Content = text, SentAt = DateTimeOffset.UtcNow, Images = [.. images ?? []], UnsavedImages = [.. images ?? []],
             ProjectFilesAdded = added,
+            Shared = [.. shared ?? []],
         });
         return AnswerAsync(options);
     }
@@ -386,6 +392,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var pinLimit = ProjectFiles.PinnedFiles.LimitTokens(options.ContextTokens, options.Profile?.MaxTokens ?? 0, options.PinShare);
         List<ProjectFiles.PinnedFileText> pinnedSent = [];
         var pinnedActive = false;
+        // A chat that showed a window or the screen (Mac adr/0030): what it showed stays in the conversation.
+        var sharedActive = false;
         lock (sync)
         {
             memory = options.Memory;
@@ -393,6 +401,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             answer.Seq = ++lastSeq;
             temporaryTurn = Temporary;
             history = History(Messages, options, block?.Text);
+            sharedActive = Messages.Any(m => m.Shared.Count > 0);
             if (!temporaryTurn && (pinnedAll.Files.Count > 0 || pinnedAll.Notes.Count > 0))
             {
                 // Pinned files (Mac adr/0012): each while it fits the limit and the request's room, the rest a line each.
@@ -426,7 +435,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var definitions = options.Tools?.Definitions(enabled);
         // A project with pinned files: its text is in the request from the start, so nothing that reaches the
         // internet is declared this turn (adr/0021); the calculator and the time stay.
-        if (pinnedActive && definitions is not null)
+        // Pinned files or something shown: outside text is in the request from the start.
+        var lockedDown = pinnedActive || sharedActive;
+        var lockedReason = pinnedActive
+            ? "this chat's project has pinned files; {0} are off in its chats (the user can unpin them in the project's Files window)"
+            : "this chat showed a window or the screen; {0} are off in it (a new chat has them again)";
+        if (lockedDown && definitions is not null)
         {
             // Only the calculator: the time tool's declaration offers a city's time, which reaches the internet.
             definitions = new JsonArray(definitions.Where(d => d?["function"]?["name"]?.GetValue<string>() is "calculate")
@@ -455,12 +469,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             folderTurn = new Folders.FolderTurn(chatVisit, temporary, options.AskFolder, options.ReviewPlan);
             definitions ??= [];
             // With pinned files, only looking: changes aren't declared (and are refused).
-            foreach (var d in folders.Definitions(temporary || pinnedActive)) definitions.Add(d);
+            foreach (var d in folders.Definitions(temporary || lockedDown)) definitions.Add(d);
         }
         // The chat's project files (adr/0021): a kept chat in a project that has files. Once file text is read, nothing reaches the internet or an MCP server this turn.
         ProjectFiles.ProjectTurn? projectTurn = null;
         // Pinned text in the request counts as file text read: the barrier is down from the start.
-        var projectText = pinnedActive;
+        var projectText = lockedDown;
         // Text another tool returned this turn (not project_files' own listing): a pin is refused after it.
         var otherText = false;
         if (!temporaryTurn && projectId is { } turnProject && projectSummary is { } summary && options.ProjectFiles is { } projectFiles && options.ProjectOfChat is not null)
@@ -493,7 +507,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             // The user's MCP servers (adr/0012): never in a temporary chat, never without someone to ask.
             // Inside the turn: a Stop while servers start ends the turn like any other.
-            if (options.Mcp is not null && options.Approve is not null && !Temporary && !pinnedActive)
+            if (options.Mcp is not null && options.Approve is not null && !Temporary && !lockedDown)
             {
                 var taken = new HashSet<string>((definitions ?? []).Select(d => d?["function"]?["name"]?.GetValue<string>() ?? ""), StringComparer.OrdinalIgnoreCase);
                 answer.Activity = "mcp";
@@ -578,10 +592,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             // File text read (an error names files too): it stays on this PC for the rest of the turn.
                             projectText = outsideText = true;
                         }
-                        else if (pinnedActive && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var pinnedChange) && pinnedChange)
+                        else if (lockedDown && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var pinnedChange) && pinnedChange)
                         {
-                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(
-                                "refused: this chat's project has pinned files; folder changes are off in its chats (the user can unpin them in the project's Files window)"), null, true);
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error("refused: " + string.Format(System.Globalization.CultureInfo.InvariantCulture, lockedReason, "folder changes")), null, true);
                         }
                         else if (folderTurn is not null && mcp is null && Folders.FolderTools.IsFolderTool(call.Name, out var change))
                         {
@@ -592,8 +605,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         }
                         else if ((folderText || projectText) && (mcp is not null || (options.Tools is { } local && !local.IsLocal(call))))
                         {
-                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(pinnedActive
-                                ? "refused: this chat's project has pinned files; tools that reach the internet or other servers are off in its chats (the user can unpin them in the project's Files window)"
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error(lockedDown
+                                ? "refused: " + string.Format(System.Globalization.CultureInfo.InvariantCulture, lockedReason, "tools that reach the internet or other servers")
                                 : "refused: this turn read the user's files; tools that reach the internet or other servers wait for the user's next message"), null, true);
                         }
                         else if (mcp is not null)
@@ -610,6 +623,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         else if (options.Tools is null)
                         {
                             outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error($"no tool called {call.Name} is available"), null, true);
+                        }
+                        else if (lockedDown && Tools.ToolNameResolver.Resolve(call.Name, ["calculate"]) is null)
+                        {
+                            // Only the calculator was declared: nothing else runs, however local.
+                            outcome = new Tools.ToolOutcome(Tools.SelectableTool.Error("refused: " + string.Format(System.Globalization.CultureInfo.InvariantCulture, lockedReason, "other tools")), null, true);
                         }
                         else
                         {
@@ -979,7 +997,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             .FirstOrDefault(i => IsTurnStart(i!.Value) || messages[i!.Value].IsSummary);
         if (start is not int s) return null;
         var end = messages.Count - keepEnd;
-        var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0);
+        var media = Enumerable.Range(s, messages.Count - s).Cast<int?>().FirstOrDefault(i => messages[i!.Value].Images.Count > 0 || messages[i!.Value].ImageFilenames.Count > 0
+            // What the user showed (Mac hasMedia): never summarized away, so the chat stays treated as having shown it.
+            || messages[i!.Value].Shared.Count > 0);
         if (media is int m) end = Math.Min(end, m);
         while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
         if (end <= s + 1 || end >= messages.Count) return null;
@@ -1121,8 +1141,19 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         (long)Encoding.UTF8.GetByteCount(history.ToJsonString(Measure)) + (definitions is null ? 0 : Encoding.UTF8.GetByteCount(definitions.ToJsonString(Measure)));
 
     /// <summary>A user message as the model reads it: the new-files note first, when files came before it.</summary>
-    static string WithNote(ChatMessage m) =>
-        m.Role == "user" && ProjectFiles.ProjectFilesNote.Text(m.ProjectFilesAdded) is { } note ? note + "\n\n" + m.Content : m.Content;
+    static string WithNote(ChatMessage m, ChatOptions options)
+    {
+        if (m.Role != "user") return m.Content;
+        // Files added to the project first, then what the user showed (Mac adr/0030). A capture's text goes only
+        // when its picture doesn't: each capture's picture is here, or every capture's text goes.
+        // A picture file that didn't load could be a capture's: then every capture's text goes.
+        var missing = m.ImageFilenames.Count > m.Images.Count;
+        var seesPictures = options.SeesPictures != false && !missing && m.Images.Count >= m.Shared.Count(s => s.HasPicture);
+        var notes = new List<string>();
+        if (ProjectFiles.ProjectFilesNote.Text(m.ProjectFilesAdded) is { } files) notes.Add(files);
+        notes.AddRange(m.Shared.Select(s => s.NoteForModel(seesPictures)));
+        return notes.Count == 0 ? m.Content : string.Join("\n", notes) + (m.Content.Length > 0 ? "\n\n" + m.Content : "");
+    }
 
     static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options, string? memoryBlock = null, string? pinnedBlock = null)
     {
@@ -1143,13 +1174,14 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             system = system.Length == 0 ? policy.Trim() : system + "\n\n" + policy.Trim();
         }
         if (system.Length > 0) history.Add(new JsonObject { ["role"] = "system", ["content"] = system });
-        foreach (var m in messages.Where(m => (m.Content.Length > 0 || m.Images.Count > 0) && m.Role is "user" or "assistant"))
+        foreach (var m in messages.Where(m => (m.Content.Length > 0 || m.Images.Count > 0 || m.Shared.Count > 0) && m.Role is "user" or "assistant"))
         {
-            if (m.Role == "user" && m.Images.Count > 0)
+            // A model that doesn't see gets no pictures (the server refuses them); what was shown goes as its text.
+            if (m.Role == "user" && m.Images.Count > 0 && options.SeesPictures != false)
             {
                 // Text first, then each picture as a data URL (always PNG: attachments are converted).
                 var parts = new JsonArray();
-                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m) });
+                if (m.Content.Length > 0 || m.ProjectFilesAdded.Count > 0 || m.Shared.Count > 0) parts.Add(new JsonObject { ["type"] = "text", ["text"] = WithNote(m, options) });
                 foreach (var png in m.Images)
                 {
                     parts.Add(new JsonObject
@@ -1161,8 +1193,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 history.Add(new JsonObject { ["role"] = "user", ["content"] = parts });
                 continue;
             }
-            if (m.Content.Length == 0) continue;
-            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m) });
+            if (m.Content.Length == 0 && m.Shared.Count == 0) continue;
+            history.Add(new JsonObject { ["role"] = m.Role, ["content"] = WithNote(m, options) });
         }
         return history;
     }
@@ -1306,6 +1338,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     McpCalls = [.. m.McpCalls],
                     Citations = m.Citations.Count > 0 ? [.. m.Citations] : null,
                     ProjectFilesAdded = m.ProjectFilesAdded.Count > 0 ? [.. m.ProjectFilesAdded] : null,
+                    Shared = m.Shared.Count > 0 ? [.. m.Shared] : null,
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],

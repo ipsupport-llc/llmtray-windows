@@ -38,6 +38,9 @@ public sealed record AppSettings
     /// <summary>Files in projects, searched by the chat (adr/0021): off until switched on; nothing is read or downloaded before.</summary>
     public bool ProjectFiles { get; init; }
 
+    /// <summary>The composer may show the model a window or the screen (adr/0022): off until switched on.</summary>
+    public bool ShowWindows { get; init; }
+
     /// <summary>How much of a model's context a project's pinned files may take together (10–90%).</summary>
     public double PinShare { get; init; } = 0.5;
 

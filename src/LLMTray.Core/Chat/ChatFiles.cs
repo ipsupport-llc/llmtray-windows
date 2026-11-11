@@ -79,6 +79,8 @@ public sealed record PersistedMessage
     public List<ProjectFiles.Citation>? Citations { get; init; }
     /// <summary>Files added to the project before this user message, as the model was told (the Mac's projectFilesAdded).</summary>
     public List<string>? ProjectFilesAdded { get; init; }
+    /// <summary>Windows or the screen shown with this user message (the Mac's shared).</summary>
+    public List<SharedContext>? Shared { get; init; }
     public AnswerStats? AnswerStats { get; init; }
     public int? Seq { get; init; }
     public DateTimeOffset? SentAt { get; init; }
