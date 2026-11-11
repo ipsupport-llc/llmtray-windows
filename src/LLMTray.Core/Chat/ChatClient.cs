@@ -480,7 +480,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var lockedDown = pinnedActive || sharedActive;
         var lockedReason = pinnedActive
             ? "this chat's project has pinned files; {0} are off in its chats (the user can unpin them in the project's Files window)"
-            : "this chat showed a window or the screen; {0} are off in it (a new chat has them again)";
+            : "this chat showed a window, the screen or a web page; {0} are off in it (a new chat has them again)";
         if (lockedDown && definitions is not null)
         {
             // Only the calculator: the time tool's declaration offers a city's time, which reaches the internet.

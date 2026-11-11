@@ -41,7 +41,7 @@ sealed partial class ChatWindow
 
     async Task ShowWindowAsync()
     {
-        if (pending.Count + pendingShared.Count >= MaxPictures)
+        if (pending.Count + pendingShared.Count(s => s.Png is not null) >= MaxPictures)
         {
             ShowAttachProblem(L.F("At most {0} pictures and windows a message.", MaxPictures));
             return;
@@ -64,39 +64,49 @@ sealed partial class ChatWindow
         input.Focus(FocusState.Programmatic);
     }
 
-    async Task AttachTabAsync()
+    /// <summary>Tabs one message may carry: each is up to 6,000 characters of text (they take no picture's place).</summary>
+    const int MaxTabs = 4;
+
+    /// <summary>A tab is being read: Send waits (the message would go without it), and another read isn't started.</summary>
+    bool attachingTab;
+
+    async Task<SharedContext?> AttachTabAsync()
     {
-        if (pending.Count + pendingShared.Count >= MaxPictures)
+        if (attachingTab) return null;
+        if (pendingShared.Count(s => s.Png is null) >= MaxTabs)
         {
-            ShowAttachProblem(L.F("At most {0} pictures and windows a message.", MaxPictures));
-            return;
+            ShowAttachProblem(L.F("At most {0} browser tabs a message.", MaxTabs));
+            return null;
         }
         var epoch = chat.Epoch;
         CurrentTab tab;
+        attachingTab = true;
         try
         {
             tab = await BrowserTab.ReadAsync(CancellationToken.None);
         }
-        catch (BrowserTabException e)
-        {
-            ShowAttachProblem(L.T(e.Message));
-            return;
-        }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
-            ShowAttachProblem(L.F("The tab couldn't be read: {0}", e.Message));
-            return;
+            // Said only in the chat it was asked in.
+            if (epoch == chat.Epoch) ShowAttachProblem(e is BrowserTabException ? L.T(e.Message) : L.F("The tab couldn't be read: {0}", e.Message));
+            return null;
         }
-        if (epoch != chat.Epoch) return;
+        finally
+        {
+            attachingTab = false;
+        }
+        if (epoch != chat.Epoch || pendingShared.Count(s => s.Png is null) >= MaxTabs) return null;
         var shared = SharedContext.Make(SharedKind.BrowserTab, tab.Title, tab.Address, tab.Text, hasPicture: false);
-        pendingShared.Add((tab.Text is null ? shared with { TitleOnly = true } : shared, null));
+        if (tab.Text is null) shared = shared with { TitleOnly = true };
+        pendingShared.Add((shared, null));
         RenderAttachments();
         if (tab.Text is null)
         {
-            // Without its text the tab still goes, title and address; say why.
+            // Without its text the tab still goes, title and address; the chip says so too.
             ShowAttachProblem(L.F("{0} didn't give the page's text, only its title and address. Reload the page and attach it again.", tab.Browser));
         }
         input.Focus(FocusState.Programmatic);
+        return shared;
     }
 
     void ShowAttachProblem(string text)
@@ -154,7 +164,7 @@ sealed partial class ChatWindow
             {
                 thumb = new FontIcon { Glyph = "\uE774", FontSize = 20, Width = 40 };
             }
-            var label = new TextBlock { Text = item.Shared.Heading, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 };
+            var label = new TextBlock { Text = item.Shared.TitleOnly ? L.F("{0} (title and address only)", item.Shared.Heading) : item.Shared.Heading, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 };
             ToolTipService.SetToolTip(label, item.Shared.Text is { } text ? (text.Length > 400 ? text[..400] + "…" : text) : item.Shared.Heading);
             attachments.Children.Add(new Border
             {
@@ -189,11 +199,9 @@ sealed partial class ChatWindow
             foreach (var a in new[] { "--new-window", "--no-first-run", "--no-default-browser-check", new Uri(page).AbsoluteUri }) start.ArgumentList.Add(a);
             System.Diagnostics.Process.Start(start)?.Dispose();
             await Task.Delay(TimeSpan.FromSeconds(8));
-            var tab = await BrowserTab.ReadAsync(CancellationToken.None);
-            report = $"browser: {tab.Browser}\ntitle: {tab.Title}\naddress: {tab.Address}\ntext: {tab.Text ?? "(none)"}";
-            var shared = SharedContext.Make(SharedKind.BrowserTab, tab.Title, tab.Address, tab.Text, hasPicture: false);
-            pendingShared.Add((shared, null));
-            RenderAttachments();
+            // The product's own path, the composer's chip included.
+            var shared = await AttachTabAsync() ?? throw new InvalidOperationException("nothing attached: " + attachNote.Text);
+            report = $"title: {shared.Title}\naddress: {shared.Source}\ntitle only: {shared.TitleOnly}\ntext: {shared.Text ?? "(none)"}";
             await Task.Delay(800);
             if (Content is UIElement content) await save(content, Path.Combine(folder, "chat-tab.png"));
             pendingShared.Clear();
