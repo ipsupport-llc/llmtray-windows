@@ -85,6 +85,8 @@ sealed partial class ChatWindow : Window
         Content = Layout();
         SetUpPictures((UIElement)Content);
         SetUpVoice();
+        // Attach Current Tab (adr/0022): the window the user was in before LLMTray, noted as it happens.
+        Interop.BrowserTab.TrackForeground();
         Size(1100, 760);
 
         search.TextChanged += (_, _) => RenderChats();
@@ -506,8 +508,9 @@ sealed partial class ChatWindow : Window
             chat.Stop();
             return;
         }
-        // While the chat is being compacted nothing is sent: the draft stays.
-        if (chat.Compacting) return;
+        // While the chat is being compacted nothing is sent: the draft stays. Nor while a tab is being read:
+        // the message would go without the page it's about.
+        if (chat.Compacting || attachingTab) return;
         var text = input.Text;
         if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0 && pendingAudio.Count == 0 && recorder is null) return;
         // Send stops a recording still going and sends it too.

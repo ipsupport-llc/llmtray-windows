@@ -34,7 +34,8 @@ public sealed record SharedContext
 
     public static SharedContext Make(SharedKind kind, string title, string source, string? text, bool hasPicture)
     {
-        var clean = text is null ? null : Clean(text);
+        // A page's text keeps its layout (code, a config in a <pre>); recognized text is mostly layout whitespace.
+        var clean = text is null ? null : kind == SharedKind.BrowserTab ? Tidy(text) : Clean(text);
         var truncated = clean is { Length: > MaxText };
         if (truncated && clean is { } whole) clean = whole[..(char.IsHighSurrogate(whole[MaxText - 1]) ? MaxText - 1 : MaxText)];
         return new SharedContext
@@ -42,6 +43,26 @@ public sealed record SharedContext
             Kind = kind, Title = title.Trim(), Source = source.Trim(), Text = clean is { Length: > 0 } ? clean : null,
             Truncated = truncated, HasPicture = hasPicture,
         };
+    }
+
+    /// <summary>A page's text as it reads: line ends made one kind, trailing spaces and runs of blank lines gone, indentation kept.</summary>
+    public static string Tidy(string text)
+    {
+        var lines = new List<string>();
+        var blank = false;
+        foreach (var raw in text.Replace("\r\n", "\n").Split('\n', '\r'))
+        {
+            var line = raw.TrimEnd();
+            if (line.Trim().Length == 0)
+            {
+                blank = lines.Count > 0;
+                continue;
+            }
+            if (blank) lines.Add("");
+            blank = false;
+            lines.Add(line);
+        }
+        return string.Join('\n', lines);
     }
 
     /// <summary>Runs of spaces and of blank lines collapsed, lines trimmed: recognized text is mostly layout whitespace.</summary>

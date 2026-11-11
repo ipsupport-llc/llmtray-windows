@@ -536,6 +536,10 @@ public sealed class ChatClientTests : IAsyncDisposable
     [Fact]
     public void AShownItemsTextGoesOnlyToAModelThatDoesntSeeIt()
     {
+        // A page keeps its layout (code, a config); recognized text is squeezed.
+        var page = SharedContext.Make(SharedKind.BrowserTab, "t", "example.com", "def f():\r\n    return 1   \n\n\n\nend", hasPicture: false);
+        Assert.Equal("def f():\n    return 1\n\nend", page.Text);
+
         var picture = SharedContext.Make(SharedKind.Screen, "", "", "OK  Cancel", hasPicture: true);
         Assert.DoesNotContain("OK Cancel", picture.NoteForModel(seesPicture: true));
         Assert.Contains("OK Cancel", picture.NoteForModel(seesPicture: false));
