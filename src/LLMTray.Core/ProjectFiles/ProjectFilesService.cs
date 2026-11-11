@@ -30,6 +30,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     readonly Dictionary<Guid, string> activity = [];
     /// <summary>Projects deleted while the app runs: never made again (a late add from an open Files window).</summary>
     readonly HashSet<Guid> deleted = [];
+    /// <summary>Documents removed while the app runs (numbers are never reused): the worker never starts on one.</summary>
+    readonly HashSet<(Guid, long)> removed = [];
     readonly object sync = new();
     readonly SemaphoreSlim poke = new(0, int.MaxValue);
     readonly CancellationTokenSource stopping = new();
@@ -66,8 +68,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     {
         lock (sync)
         {
-            if (open.TryGetValue(project, out var index)) return index;
             if (deleted.Contains(project)) return null;
+            if (open.TryGetValue(project, out var index)) return index;
             var folder = Folder(project);
             if (!create && !File.Exists(Path.Combine(folder, "index.sqlite"))) return null;
             if (File.Exists(DeletionMarker(project))) return null;
@@ -141,7 +143,9 @@ public sealed class ProjectFilesService : IAsyncDisposable
     public void Remove(Guid project, long doc)
     {
         if (Index(project) is not { } index) return;
-        // Only this document's read or embedding stops; another file's goes on.
+        // Only this document's read or embedding stops; another file's goes on. Marked under the
+        // lock the worker claims a document with, so it either sees the mark or is cancelled.
+        lock (sync) removed.Add((project, doc));
         Cancel(project, doc);
         index.Remove(doc);
         Changed?.Invoke(project);
@@ -203,6 +207,17 @@ public sealed class ProjectFilesService : IAsyncDisposable
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // A file still open (a search in flight): the next launch finishes it.
+        }
+    }
+
+    /// <summary>The worker takes <paramref name="doc"/>, unless it was removed: one lock with <see cref="Remove"/>, so a removal is never missed.</summary>
+    bool Claim(Guid project, long doc)
+    {
+        lock (sync)
+        {
+            if (removed.Contains((project, doc))) return false;
+            currentDoc = doc;
+            return true;
         }
     }
 
@@ -277,9 +292,9 @@ public sealed class ProjectFilesService : IAsyncDisposable
         {
             if (index.NextToExtract() is { } doc)
             {
-                lock (sync) currentDoc = doc.Doc;
-                // Removed between the pick and now: its Cancel found nothing to cancel yet.
-                if (index.Document(doc.Doc) is null) return true;
+                if (!Claim(project, doc.Doc)) return true;
+                // Removed before the mark existed (an earlier run of the loop): gone or going.
+                if (index.Document(doc.Doc) is not { Status: not DocumentStatus.Removing }) return true;
                 SetActivity(project, "reading");
                 index.MarkExtracting(doc.Doc);
                 var path = index.CopyPath(doc.Doc, doc.Ext);
@@ -329,7 +344,7 @@ public sealed class ProjectFilesService : IAsyncDisposable
                 }
                 return false;
             }
-            lock (sync) currentDoc = batch.Doc;
+            if (!Claim(project, batch.Doc)) return true;
             if (index.Document(batch.Doc) is not { Status: DocumentStatus.Searchable or DocumentStatus.Embedded }) return true;
             SetActivity(project, "embedding");
             float[][] vectors;
