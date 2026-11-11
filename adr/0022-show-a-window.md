@@ -44,17 +44,25 @@ is on.
 ## Attach Current Tab
 
 The same menu has **Attach Current Tab**: the browser window that was in
-front before LLMTray. It is the first app window in the z-order that isn't
-LLMTray's, and it counts only when it is Edge, Chrome, Brave, Vivaldi,
+front before LLMTray. A foreground hook notes the last window of another
+app as the user moves between apps; if that window has gone, the first
+ordinary window in the z-order is used (skipping always-on-top and
+cloaked ones). It counts only when it is Edge, Chrome, Brave, Vivaldi,
 Opera or Firefox. If another app was in front, the composer says so.
 
 - **What is read**, through UI Automation (the interface browsers give
   screen readers):
-  - the address bar's value (the window's first edit box);
-  - the page's text (the window's first document, through its text
-    pattern, at most 200,000 characters read and `SharedContext.MaxText`
-    kept);
-  - the window title, without the browser's name and profile.
+  - the address bar's value. It comes only from the browser's own bar
+    (Chromium's `OmniboxViewViews`, Firefox's `urlbar-input`), never from
+    another edit box. Text with spaces in it is a search being typed, not
+    an address, so it is left out.
+  - the page's text: the document named as the window title says (the
+    tab's content, not a sidebar's or the developer tools'), else the
+    first document. It is read through the document's text pattern, at
+    most 200,000 characters read and `SharedContext.MaxText` kept, with
+    its indentation (code, a config).
+  - the page's own title, from that document's name. Failing that, the
+    window title without the browser's name.
 
   It runs off the UI thread. Chromium builds its accessibility tree on the
   first ask, so an empty first read is tried once more after 0.7 s.
@@ -64,12 +72,17 @@ Opera or Firefox. If another app was in front, the composer says so.
   user's click is the consent, as with the picker.
 - **No text** (a browser that doesn't give it): the tab still goes, with
   its title and address only (`titleOnly`), and the composer says so.
+- **While a tab is read, Send waits**, so the message doesn't go without
+  it. A message takes at most four tabs, and they take no picture's
+  place.
 - **In the message**, it is a shared item like a window (the Mac's
   `browserTab` kind): a chip with a globe and the page title, the page's
   text for every model (it has no picture), and the same lockdown from
   then on (it is outside text).
-- CI opens a page in Edge on the runner, attaches it and writes what came
-  out to `tab.txt`. The composer with the chip is `chat-tab.png`.
+- CI opens a page in Edge on the runner and attaches it through the
+  composer's own path. It writes what came out to `tab.txt` and fails on
+  x64 if the page's text isn't there. The composer with the chip is
+  `chat-tab.png`.
 
 ## Not yet
 
