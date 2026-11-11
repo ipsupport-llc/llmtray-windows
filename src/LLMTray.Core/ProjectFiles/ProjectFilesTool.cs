@@ -141,6 +141,8 @@ public static class ProjectFilesTool
         if (query is { Length: > 0 })
         {
             var (hits, wordsOnly) = await turn.Service.SearchAsync(turn.Project, query, doc, doc is null ? 5 : 8, cancellationToken).ConfigureAwait(false);
+            // The query's embedding can take seconds: the chat may have moved meanwhile.
+            if (turn.CurrentProject() != turn.Project) return Fail("refused: this chat is no longer in that project");
             return Ok(Search(index, turn, hits, wordsOnly, room));
         }
         if (doc is null) return Fail("pages needs doc: project_files(doc: <id>, pages: \"1-3\")");
@@ -334,6 +336,15 @@ public static class ProjectFilesTool
             var start = p.Page == page ? Math.Clamp(offset, 0, p.Text.Length) : 0;
             var text = p.Text[start..];
             var entry = new JsonObject { ["cite"] = $"[{doc}:{p.Page}]", ["page"] = p.Page };
+            if (turn.Returned.Contains($"p{doc}:{d.Rev}:{p.Page}:{start}"))
+            {
+                // Read already in this answer (another range or cursor form): not sent twice.
+                entry["text"] = "(shown earlier in this answer)";
+                read.Add(entry);
+                budget -= 80;
+                shownThrough = p.Page;
+                continue;
+            }
             if (p.Label is { Length: > 0 } label) entry["part"] = label;
             var cost = Encoding.UTF8.GetByteCount(text) * 6 / 5 + 40;
             if (cost > budget)

@@ -425,6 +425,25 @@ public sealed partial class ProjectIndex
         }
     }
 
+    /// <summary>Documents left 'removing' by a removal that failed after marking them: their copies and rows go now. How many.</summary>
+    public int FinishRemovals()
+    {
+        List<ProjectDocument> left;
+        using (var db = Open()) left = Documents(db).Where(d => d.Status == DocumentStatus.Removing).ToList();
+        foreach (var d in left)
+        {
+            TryDelete(CopyPath(d.Doc, d.Ext));
+            lock (writing)
+            {
+                using var db = Open();
+                DeleteRows(db, d.Doc);
+                vectors = null;
+                vectorGeneration++;
+            }
+        }
+        return left.Count;
+    }
+
     static void DeleteDerived(SqliteConnection db, SqliteTransaction tx, long doc)
     {
         Exec(db, "DELETE FROM pages WHERE doc = $d", tx, ("$d", doc));

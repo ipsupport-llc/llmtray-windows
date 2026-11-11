@@ -167,8 +167,17 @@ public sealed class ProjectFilesService : IAsyncDisposable
         }
         catch (Exception e) when (e is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // Not removed (the index busy): it stays listed, and the worker may take it again.
-            lock (sync) removed.Remove((project, doc));
+            // Not removed (the index busy). Not yet marked removing: it stays listed and readable. Marked: the worker finishes it.
+            var marked = false;
+            try
+            {
+                marked = index.Document(doc)?.Status == DocumentStatus.Removing;
+            }
+            catch (Exception again) when (again is Microsoft.Data.Sqlite.SqliteException or IOException or InvalidOperationException)
+            {
+                marked = true;
+            }
+            if (!marked) lock (sync) removed.Remove((project, doc));
         }
         // A worker that skipped this document goes on with the next at once.
         Poke();
@@ -309,6 +318,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
     async Task<bool> StepAsync(Guid project, CancellationToken stop)
     {
         if (Index(project) is not { } index) return false;
+        // A removal cut short after it was marked: finished here.
+        if (index.FinishRemovals() > 0) Changed?.Invoke(project);
         using var work = CancellationTokenSource.CreateLinkedTokenSource(stop);
         lock (sync)
         {
@@ -452,7 +463,8 @@ public sealed class ProjectFilesService : IAsyncDisposable
             }
         }
         var hits = await Task.Run(() => index.Search(query, vector, topK, doc), cancellationToken).ConfigureAwait(false);
-        return (hits, vector is null);
+        // By words only also when no hit came by meaning (vectors not made yet, or dropped by a re-read).
+        return (hits, vector is null || hits.All(h => h.WordsOnly));
     }
 
     public async ValueTask DisposeAsync()
