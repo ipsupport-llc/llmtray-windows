@@ -13,16 +13,25 @@ namespace LLMTray.App;
 sealed partial class ChatWindow
 {
     Interop.WindowDocumentPrinter? printer;
+    /// <summary>What a card says when it's drawn (a Make again whose save failed), by document.</summary>
+    readonly Dictionary<Guid, string> cardNotes = [];
     Interop.WindowDocumentPrinter Printer => printer ??= new Interop.WindowDocumentPrinter(this, App.Current.DataFolder);
 
     async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document)
     {
+        var at = message.Documents.IndexOf(document);
         var problem = await chat.RemakeDocumentAsync(message, document, Printer);
-        // The card may be in an earlier message: everything is drawn again, not just the tail (also when the card
-        // changed but the chat's save failed).
-        renderedCount = -1;
-        Render();
-        return problem is null ? null : L.F("Make again: {0}", problem);
+        var text = problem is null ? null : L.F("Make again: {0}", problem);
+        if (at >= 0 && at < message.Documents.Count && message.Documents[at] != document)
+        {
+            // A new card took its place (maybe in an earlier message): everything is drawn again, not just the tail,
+            // and what there is to say goes on the new card.
+            if (text is not null) cardNotes[message.Documents[at].Id] = text;
+            renderedCount = -1;
+            Render();
+            return null;
+        }
+        return text;
     }
 
     UIElement? DocumentsView(ChatMessage message)
@@ -82,6 +91,7 @@ sealed partial class ChatWindow
 
         // A card whose PDF went (deleted by hand, a chat copied without its folder) says so at once.
         if (path is null || !File.Exists(path)) Say(L.T("The PDF is gone."));
+        else if (cardNotes.Remove(document.Id, out var said)) Say(said);
         var text = new StackPanel { Spacing = 4 };
         text.Children.Add(new TextBlock { Text = document.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         text.Children.Add(Ui.Caption(L.F("PDF · {0} pages", document.Pages)));
