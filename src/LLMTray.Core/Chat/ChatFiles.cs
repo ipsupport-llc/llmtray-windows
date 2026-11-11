@@ -57,6 +57,21 @@ public sealed record AnswerStats
     }
 }
 
+/// <summary>The call a document came from (Mac DocumentSource): what Make again renders again, and the project its pictures belong to.</summary>
+public sealed record DocumentSource(string Arguments, [property: JsonConverter(typeof(UpperGuidNullableConverter))] Guid? Project = null);
+
+/// <summary>
+/// A document a message made (Mac DocumentRef, adr/0024): metadata only. The PDF (up to 50 MB) and its
+/// thumbnail are files in the chat's images folder, read only to show, open or save them.
+/// </summary>
+public sealed record DocumentRef(
+    [property: JsonConverter(typeof(UpperGuidConverter))] Guid Id,
+    string Filename,
+    string? Thumbnail,
+    string Title,
+    int Pages,
+    DocumentSource? Source = null);
+
 /// <summary>One message of a saved chat (the Mac app's PersistedMessage; fields it has that this app doesn't use yet stay as they are read).</summary>
 public sealed record PersistedMessage
 {
@@ -84,6 +99,8 @@ public sealed record PersistedMessage
     public List<ProjectFiles.Citation>? Citations { get; init; }
     /// <summary>Files added to the project before this user message, as the model was told (the Mac's projectFilesAdded).</summary>
     public List<string>? ProjectFilesAdded { get; init; }
+    /// <summary>The documents an answer made (the Mac's documents).</summary>
+    public List<DocumentRef>? Documents { get; init; }
     /// <summary>Windows or the screen shown with this user message (the Mac's shared).</summary>
     public List<SharedContext>? Shared { get; init; }
     public AnswerStats? AnswerStats { get; init; }
@@ -128,6 +145,17 @@ sealed class UpperGuidConverter : JsonConverter<Guid>
     public override Guid Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         Guid.TryParse(reader.GetString(), out var id) ? id : throw new JsonException("not a UUID");
     public override void Write(Utf8JsonWriter writer, Guid value, JsonSerializerOptions options) => writer.WriteStringValue(value.ToString("D").ToUpperInvariant());
+}
+
+sealed class UpperGuidNullableConverter : JsonConverter<Guid?>
+{
+    public override Guid? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.Null ? null : Guid.TryParse(reader.GetString(), out var id) ? id : throw new JsonException("not a UUID");
+    public override void Write(Utf8JsonWriter writer, Guid? value, JsonSerializerOptions options)
+    {
+        if (value is { } id) writer.WriteStringValue(id.ToString("D").ToUpperInvariant());
+        else writer.WriteNullValue();
+    }
 }
 
 /// <summary>Swift's .iso8601 dates: whole seconds, UTC, "Z" (it can't read fractions).</summary>

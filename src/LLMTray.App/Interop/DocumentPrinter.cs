@@ -1,0 +1,177 @@
+using System.Runtime.InteropServices.WindowsRuntime;
+using Microsoft.Web.WebView2.Core;
+using Windows.Data.Pdf;
+using Windows.Storage;
+using Windows.Storage.Streams;
+
+namespace LLMTray.App.Interop;
+
+/// <summary>A printed document: the PDF, its page count and a thumbnail of the first page (PNG, at most 400 px).</summary>
+sealed record PrintedDocument(byte[] Pdf, int Pages, byte[]? Thumbnail);
+
+/// <summary>The document couldn't be printed; the reason is told to the model and the user.</summary>
+sealed class DocumentPrintException(string reason) : Exception(reason);
+
+/// <summary>
+/// Prints a document's page to PDF (adr/0024, Mac adr/0020) with WebView2,
+/// Chromium's print: it repeats a table's header on every page and lays out
+/// MathML. The page is built by Core's converter, which emits nothing that
+/// loads or runs; behind it, this web view runs no script, opens nothing,
+/// and serves only the page's own resources (its stylesheet, chart SVGs,
+/// pictures) from a fixed table under one address — every other request
+/// is refused before it leaves. It is never shown. Chromium renders in its
+/// own sandboxed processes; the output limits are checked here.
+/// </summary>
+static class DocumentPrinter
+{
+    /// <summary>The address the page's resources live under (nothing is fetched from it: requests are answered from the table).</summary>
+    public const string Base = "https://document.llmtray/";
+    public const int MaxPages = 200;
+    public const long MaxPdfBytes = 50L << 20;
+    static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
+
+    static CoreWebView2Environment? environment;
+
+    /// <param name="parent">A window to host the (hidden) view; nothing is shown in it.</param>
+    /// <param name="resources">The page's resources by path under <see cref="Base"/>: bytes and content type.</param>
+    /// <param name="paperInches">The paper's width and height.</param>
+    public static async Task<PrintedDocument> PrintAsync(IntPtr parent, string dataFolder, string html,
+        IReadOnlyDictionary<string, (byte[] Bytes, string ContentType)> resources, string title, (double Width, double Height) paperInches,
+        CancellationToken cancellationToken)
+    {
+        CoreWebView2Controller controller;
+        try
+        {
+            environment ??= await CoreWebView2Environment.CreateWithOptionsAsync(null, Path.Combine(dataFolder, "webview"), new CoreWebView2EnvironmentOptions());
+            controller = await environment.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent));
+        }
+        catch (Exception e) when (e is COMException or FileNotFoundException or WebView2RuntimeNotFoundException or InvalidOperationException)
+        {
+            throw new DocumentPrintException("Microsoft Edge WebView2, which lays out the pages, isn't available on this PC");
+        }
+        var temp = Path.Combine(Path.GetTempPath(), "llmtray-document-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            controller.IsVisible = false;
+            var view = controller.CoreWebView2;
+            var settings = view.Settings;
+            settings.IsScriptEnabled = false;
+            settings.IsWebMessageEnabled = false;
+            settings.AreDefaultScriptDialogsEnabled = false;
+            settings.AreDevToolsEnabled = false;
+            settings.AreDefaultContextMenusEnabled = false;
+            settings.IsStatusBarEnabled = false;
+            settings.AreHostObjectsAllowed = false;
+            settings.IsGeneralAutofillEnabled = false;
+            settings.IsPasswordAutosaveEnabled = false;
+
+            // Every request: the table's own resources, else refused (a remote image, file:, a CSS url() elsewhere).
+            view.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+            view.WebResourceRequested += (_, e) =>
+            {
+                var uri = e.Request.Uri;
+                if (uri.StartsWith(Base, StringComparison.Ordinal) && resources.TryGetValue(uri[Base.Length..], out var resource))
+                {
+                    var stream = new MemoryStream(resource.Bytes, writable: false).AsRandomAccessStream();
+                    e.Response = environment.CreateWebResourceResponse(stream, 200, "OK",
+                        $"Content-Type: {resource.ContentType}\r\nAccess-Control-Allow-Origin: *");
+                    return;
+                }
+                e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
+            };
+            // The page itself is the only navigation; a refresh, a link or a new window goes nowhere.
+            var loaded = false;
+            view.NavigationStarting += (_, e) =>
+            {
+                if (loaded) e.Cancel = true;
+                loaded = true;
+            };
+            view.NewWindowRequested += (_, e) => e.Handled = true;
+            view.DownloadStarting += (_, e) => e.Cancel = true;
+            view.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(Timeout);
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            view.NavigationCompleted += (_, e) => done.TrySetResult(e.IsSuccess);
+            view.NavigateToString(html);
+            using (timeout.Token.Register(() => done.TrySetCanceled()))
+            {
+                try
+                {
+                    if (!await done.Task) throw new DocumentPrintException("the page didn't load");
+                }
+                catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new DocumentPrintException("it took over a minute");
+                }
+            }
+
+            Directory.CreateDirectory(temp);
+            var path = Path.Combine(temp, "document.pdf");
+            var print = environment.CreatePrintSettings();
+            print.Orientation = CoreWebView2PrintOrientation.Portrait;
+            print.PageWidth = paperInches.Width;
+            print.PageHeight = paperInches.Height;
+            print.MarginTop = print.MarginBottom = 0.6;
+            print.MarginLeft = print.MarginRight = 0.7;
+            print.ShouldPrintBackgrounds = true;
+            // Chromium's header and footer: the title, and the page's number of all; the address left blank.
+            print.ShouldPrintHeaderAndFooter = true;
+            print.HeaderTitle = title;
+            print.FooterUri = " ";
+            var printing = view.PrintToPdfAsync(path, print).AsTask();
+            if (await Task.WhenAny(printing, Task.Delay(Timeout, timeout.Token).ContinueWith(_ => false, TaskScheduler.Default)) != printing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new DocumentPrintException("it took over a minute");
+            }
+            if (!await printing) throw new DocumentPrintException("printing to PDF failed");
+            var size = new FileInfo(path).Length;
+            if (size > MaxPdfBytes) throw new DocumentPrintException("the PDF would be over 50 MB; make it shorter");
+            var pdf = await File.ReadAllBytesAsync(path, cancellationToken);
+            var (pages, thumbnail) = await InspectAsync(path);
+            if (pages == 0) throw new DocumentPrintException("no pages came out");
+            if (pages > MaxPages) throw new DocumentPrintException($"it would be {pages} pages, over {MaxPages}; make it shorter");
+            return new PrintedDocument(pdf, pages, thumbnail);
+        }
+        finally
+        {
+            controller.Close();
+            try
+            {
+                if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The page count and a 400 px thumbnail of the first page (Windows' own PDF reader).</summary>
+    static async Task<(int Pages, byte[]? Thumbnail)> InspectAsync(string path)
+    {
+        var file = await StorageFile.GetFileFromPathAsync(path);
+        var document = await PdfDocument.LoadFromFileAsync(file);
+        byte[]? thumbnail = null;
+        try
+        {
+            using var page = document.GetPage(0);
+            using var stream = new InMemoryRandomAccessStream();
+            await page.RenderToStreamAsync(stream, new PdfPageRenderOptions { DestinationWidth = 400, BitmapEncoderId = Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId });
+            thumbnail = new byte[stream.Size];
+            stream.Seek(0);
+            await stream.ReadAsync(thumbnail.AsBuffer(), (uint)stream.Size, InputStreamOptions.None);
+        }
+        catch (Exception)
+        {
+            // No thumbnail: the card shows an icon.
+            thumbnail = null;
+        }
+        return ((int)document.PageCount, thumbnail);
+    }
+
+    /// <summary>Letter where it's the paper in use (the Americas mostly), else A4.</summary>
+    public static bool UsesLetter =>
+        System.Globalization.RegionInfo.CurrentRegion.TwoLetterISORegionName is "US" or "CA" or "MX" or "PH" or "CL" or "CO" or "VE" or "PR" or "GT" or "CR" or "SV" or "DO" or "PA" or "BZ";
+}

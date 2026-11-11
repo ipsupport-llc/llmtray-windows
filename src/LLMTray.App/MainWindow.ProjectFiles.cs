@@ -31,6 +31,20 @@ public sealed partial class MainWindow
             }, L.T("Show the model a window or the screen"))));
     }
 
+    /// <summary>Settings › Tools › Documents (adr/0024): the switch.</summary>
+    IEnumerable<UIElement> DocumentsSection()
+    {
+        var app = App.Current;
+        yield return Ui.Section(L.T("Documents"));
+        yield return Ui.Card(Ui.Row(L.T("Make documents"),
+            L.T("Saved chats can turn what the model wrote into a PDF: a report, a letter, notes or an invoice, with tables, charts and formulas. LLMTray lays it out on this PC; the PDF is kept with the chat. Temporary chats don't make documents."),
+            Ui.Toggle(app.Settings.Documents, on =>
+            {
+                app.UpdateSettings(app.Settings with { Documents = on });
+                RenderPage();
+            }, L.T("Make documents"))));
+    }
+
     IEnumerable<UIElement> ProjectFilesSection()
     {
         var app = App.Current;

@@ -41,6 +41,9 @@ public sealed record AppSettings
     /// <summary>The composer may show the model a window or the screen (adr/0022): off until switched on.</summary>
     public bool ShowWindows { get; init; }
 
+    /// <summary>Documents (adr/0024): the chat may make PDFs with charts (make_document). Off until turned on.</summary>
+    public bool Documents { get; init; }
+
     /// <summary>How much of a model's context a project's pinned files may take together (10–90%).</summary>
     public double PinShare { get; init; } = 0.5;
 

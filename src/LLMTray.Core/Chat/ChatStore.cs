@@ -141,6 +141,52 @@ public sealed class ChatStore(string folder)
         return name;
     }
 
+    /// <summary>A file of a chat's folder by its saved name, or null when the name points elsewhere.</summary>
+    public string? MediaPath(Guid id, string? name) =>
+        string.IsNullOrEmpty(name) || name.Contains('\0') || name != Path.GetFileName(name) || name.Contains("..", StringComparison.Ordinal)
+            ? null
+            : Path.Combine(ImagesFolder(id), name);
+
+    /// <summary>
+    /// Writes a document's PDF under <paramref name="baseName"/> (already a safe file name, no extension),
+    /// " 2", " 3"… on a collision, never over a file; and its thumbnail beside it. The names, for the card.
+    /// </summary>
+    public (string Pdf, string? Thumbnail) SaveDocument(Guid id, string baseName, byte[] pdf, byte[]? thumbnail)
+    {
+        var folder = ImagesFolder(id);
+        Directory.CreateDirectory(folder);
+        string name;
+        for (var n = 1; ; n++)
+        {
+            name = (n == 1 ? baseName : $"{baseName} {n}") + ".pdf";
+            try
+            {
+                using var file = new FileStream(Path.Combine(folder, name), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                file.Write(pdf);
+                break;
+            }
+            catch (IOException) when (File.Exists(Path.Combine(folder, name)) && n < 1000)
+            {
+                // Taken: the next number.
+            }
+        }
+        string? thumb = null;
+        if (thumbnail is { Length: > 0 and <= 512 * 1024 })
+        {
+            try
+            {
+                thumb = Guid.NewGuid().ToString("D").ToUpperInvariant() + ".thumb.png";
+                using var file = new FileStream(Path.Combine(folder, thumb), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                file.Write(thumbnail);
+            }
+            catch (IOException)
+            {
+                thumb = null;
+            }
+        }
+        return (name, thumb);
+    }
+
     /// <summary>A saved picture (or recording), or null when it's gone or the name points elsewhere.</summary>
     public byte[]? ReadImage(Guid id, string? name)
     {

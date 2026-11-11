@@ -893,6 +893,7 @@ sealed partial class ChatWindow : Window
 
         if (PicturesView(message, HorizontalAlignment.Left) is { } made) stack.Children.Add(made);
         if (AudioView(message, HorizontalAlignment.Left) is { } music) stack.Children.Add(music);
+        if (DocumentsView(message) is { } documents) stack.Children.Add(documents);
 
         if (message.Activity is { } activity)
         {

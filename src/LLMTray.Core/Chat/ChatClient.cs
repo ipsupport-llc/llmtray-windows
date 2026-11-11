@@ -81,6 +81,9 @@ public sealed class ChatMessage
     /// <summary>A user message: the files added to the chat's project since the last one, which the model was told about.</summary>
     public List<string> ProjectFilesAdded { get; init; } = [];
 
+    /// <summary>An answer's documents (adr/0024): their files are in the chat's images folder.</summary>
+    public List<DocumentRef> Documents { get; init; } = [];
+
     /// <summary>A user message: the windows or the screen it showed (Mac adr/0030).</summary>
     public List<SharedContext> Shared { get; init; } = [];
 
@@ -282,6 +285,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Citations = [.. m.Citations ?? []],
                     ProjectFilesAdded = [.. m.ProjectFilesAdded ?? []],
                     Shared = [.. (m.Shared ?? []).Where(s => s is not null)],
+                    // A document whose PDF is gone isn't shown (Mac).
+                    Documents = [.. (m.Documents ?? []).Where(d => d is not null && store.MediaPath(file.Id, d.Filename) is { } pdf && File.Exists(pdf))],
                     Images = images,
                     ImageFilenames = names,
                     Audios = audios,
@@ -1035,7 +1040,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // What the user showed (Mac hasMedia): never summarized away, so the chat stays treated as having shown it.
             || messages[i!.Value].Shared.Count > 0
             // A recording (Mac hasMedia): a summary can't hold what was said.
-            || messages[i!.Value].Audios.Count > 0 || messages[i!.Value].AudioFilenames.Count > 0);
+            || messages[i!.Value].Audios.Count > 0 || messages[i!.Value].AudioFilenames.Count > 0
+            // A document: its card would go with the summary.
+            || messages[i!.Value].Documents.Count > 0);
         if (media is int m) end = Math.Min(end, m);
         while (end > s && end < messages.Count && !IsTurnStart(end)) end--;
         if (end <= s + 1 || end >= messages.Count) return null;
@@ -1453,6 +1460,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     Citations = m.Citations.Count > 0 ? [.. m.Citations] : null,
                     ProjectFilesAdded = m.ProjectFilesAdded.Count > 0 ? [.. m.ProjectFilesAdded] : null,
                     Shared = m.Shared.Count > 0 ? [.. m.Shared] : null,
+                    Documents = m.Documents.Count > 0 ? [.. m.Documents] : null,
                     // The names as they were plus the ones written now: the Mac's
                     // per-picture lists (durations, prompts) stay lined up with them.
                     ImageFilenames = [.. m.ImageFilenames],
