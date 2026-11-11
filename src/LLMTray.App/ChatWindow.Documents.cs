@@ -18,11 +18,11 @@ sealed partial class ChatWindow
     async Task<string?> RemakeDocumentAsync(ChatMessage message, DocumentRef document)
     {
         var problem = await chat.RemakeDocumentAsync(message, document, Printer);
-        if (problem is not null) return L.F("It couldn't be made again: {0}", problem);
-        // The card may be in an earlier message: everything is drawn again, not just the tail.
+        // The card may be in an earlier message: everything is drawn again, not just the tail (also when the card
+        // changed but the chat's save failed).
         renderedCount = -1;
         Render();
-        return null;
+        return problem is null ? null : L.F("Make again: {0}", problem);
     }
 
     UIElement? DocumentsView(ChatMessage message)

@@ -95,18 +95,31 @@ static class DocumentPrinter
         IReadOnlyDictionary<string, (byte[] Bytes, string ContentType)> resources, string title, (double Width, double Height) paperInches,
         CancellationToken cancellationToken)
     {
+        // The page itself is served from the table too: NavigateToString takes at most 2 MB, a page may be 8.
+        // Built first (before there's a view to close): the paths are exact, as the page names them.
+        var served = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources, StringComparer.Ordinal)
+        {
+            [PageName] = (System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
+        };
         CoreWebView2Controller controller;
         // This print's own environment, used throughout (its handlers too): never a field another print may change.
         CoreWebView2Environment env;
+        Task<CoreWebView2Controller>? creating = null;
         try
         {
             env = environment ??= await CoreWebView2Environment.CreateWithOptionsAsync(null, Path.Combine(dataFolder, "webview"), new CoreWebView2EnvironmentOptions())
                 .AsTask().WaitAsync(cancellationToken);
-            controller = await env.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent))
-                .AsTask().WaitAsync(cancellationToken);
+            creating = env.CreateCoreWebView2ControllerAsync(CoreWebView2ControllerWindowReference.CreateFromWindowHandle((ulong)parent)).AsTask();
+            controller = await creating.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
+            // A view that turns up after the deadline is closed then, on this thread, as one in time would be.
+            var ui = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            _ = creating?.ContinueWith(t =>
+            {
+                if (t.Status == TaskStatus.RanToCompletion) ui?.TryEnqueue(() => t.Result.Close());
+            }, TaskScheduler.Default);
             throw;
         }
         catch (Exception e) when (e is not OutOfMemoryException)
@@ -114,12 +127,8 @@ static class DocumentPrinter
             // No runtime (an old Windows 10 without Edge's WebView2), or it wouldn't start: its own words say which.
             throw new DocumentPrintException($"Microsoft Edge WebView2, which lays out the pages, couldn't start ({e.Message})");
         }
-        // The page itself is served from the table too: NavigateToString takes at most 2 MB, a page may be 8.
-        var served = new Dictionary<string, (byte[] Bytes, string ContentType)>(resources, StringComparer.OrdinalIgnoreCase)
-        {
-            [PageName] = (System.Text.Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8"),
-        };
         var temp = Path.Combine(Path.GetTempPath(), "llmtray-document-" + Guid.NewGuid().ToString("N"));
+        Task<(int Pages, byte[]? Thumbnail)>? inspecting = null;
         try
         {
             controller.IsVisible = false;
@@ -153,7 +162,7 @@ static class DocumentPrinter
             var loaded = false;
             view.NavigationStarting += (_, e) =>
             {
-                if (loaded || !string.Equals(e.Uri, Base + PageName, StringComparison.OrdinalIgnoreCase))
+                if (loaded || !string.Equals(e.Uri, Base + PageName, StringComparison.Ordinal))
                 {
                     e.Cancel = true;
                     return;
@@ -207,7 +216,8 @@ static class DocumentPrinter
             var size = new FileInfo(path).Length;
             if (size > MaxPdfBytes) throw new DocumentPrintException("the PDF would be over 50 MB; make it shorter");
             var pdf = await File.ReadAllBytesAsync(path, cancellationToken);
-            var (pages, thumbnail) = await InspectAsync(path).WaitAsync(cancellationToken);
+            inspecting = InspectAsync(path);
+            var (pages, thumbnail) = await inspecting.WaitAsync(cancellationToken);
             if (pages == 0) throw new DocumentPrintException("no pages came out");
             if (pages > MaxPages) throw new DocumentPrintException($"it would be {pages} pages, over {MaxPages}; make it shorter");
             return new PrintedDocument(pdf, pages, thumbnail);
@@ -215,13 +225,20 @@ static class DocumentPrinter
         finally
         {
             controller.Close();
-            try
-            {
-                if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-            }
+            // Windows still reading the PDF (given up on at the deadline): the folder goes when it's done with it.
+            if (inspecting is { IsCompleted: false }) _ = inspecting.ContinueWith(_ => DeleteFolder(temp), TaskScheduler.Default);
+            else DeleteFolder(temp);
+        }
+    }
+
+    static void DeleteFolder(string folder)
+    {
+        try
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
