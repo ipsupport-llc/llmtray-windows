@@ -653,8 +653,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 .Select(d => d?["function"]?["name"]?.GetValue<string>() ?? "").Append(Documents.DocumentTool.Name).Append(Tools.ToolGroups.LoaderName)
                 .Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)]) is not null
             || options.Tools?.Knows(called) == true
-            || ProjectFiles.ProjectFilesTool.Is(called) || ProjectFiles.ProjectFilesTool.Is(Tools.ToolNameResolver.Bare(called))
-            || Folders.FolderTools.IsFolderTool(called, out _) || Folders.FolderTools.IsFolderTool(Tools.ToolNameResolver.Bare(called), out _);
+            || ProjectFiles.ProjectFilesTool.Is(called)
+            || Folders.FolderTools.IsFolderTool(called, out _);
         // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
         // In the order asked: one that waits from the start (Pending) keeps its place among the others.
         var staged = new List<(Tools.ToolGroup Group, string CallId, string Key, bool Pending)>();
@@ -731,6 +731,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 }
                 assistant["tool_calls"] = callArray;
                 history.Add(assistant);
+                // Groups already waiting before this response keep their place if asked for again.
+                List<string> waitingBefore;
+                lock (sync) waitingBefore = [.. pendingGroups];
                 foreach (var call in calls.Take(MaxCallsPerRound))
                 {
                     // The same call twice in one message never runs twice.
@@ -875,6 +878,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                                 var (group, _, _, pending) = staged[i];
                                 // A group asked for twice in this response: its first call sets its place.
                                 if (staged.FindIndex(st => st.Group == group) != i || loadedGroups.Contains(group.Name)) continue;
+                                if ((after || pending) && waitingBefore.Contains(group.Name))
+                                {
+                                    if (!pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                    continue;
+                                }
                                 if (after || pending)
                                 {
                                     // In the order this response asked, after the ones waiting from earlier responses.
