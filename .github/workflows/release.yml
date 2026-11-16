@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The version to build as (vX.Y.Z-beta.N); nothing is published
+        description: The version to build as (vX.Y.Z or vX.Y.Z-beta.N); nothing is published
         required: true
 
 permissions:
@@ -40,11 +40,6 @@ jobs:
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: dotnet run --project tools/LLMTray.Version -- "$TAG" | tee -a "$GITHUB_OUTPUT"
-      - name: Betas only for now (a stable release is the maintainer's call)
-        if: steps.v.outputs.prerelease != 'true'
-        run: |
-          echo "::error::Only betas (vX.Y.Z-beta.N) are released so far; a stable release waits for the maintainer's OK and a PR lifting this check."
-          exit 1
 
   # Built on each platform's own runner, unsigned: the signing action runs on
   # x64 Windows only, so the sign job below signs everything in one place.

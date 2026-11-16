@@ -41,4 +41,9 @@ builds and signs everything and publishes nothing.
    into `bucket/llmtray.json` there, pushed with the bucket's deploy key
    (secret `SCOOP_BUCKET_DEPLOY_KEY`). Nothing to do by hand.
 
-Stable tags fail until there is a public certificate.
+## A stable release
+
+The same steps with a `vX.Y.Z` tag, on the maintainer's OK. The release is
+not a pre-release, so the stable update channel (adr/0003) and GitHub's
+*Latest* pick it up; beta users move to it too, as it sorts above every
+beta of that version (adr/0002). Scoop follows it as it follows betas.
