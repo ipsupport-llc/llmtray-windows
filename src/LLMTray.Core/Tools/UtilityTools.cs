@@ -91,20 +91,21 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
     static DateOnly? Make(int year, int month, int day) =>
         year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
 
+    // ASCII digits only: \d takes any script's digits, which int.Parse refuses.
     // A date, then nothing or a time ("T15:00", " 12:00", "15:00+03:00").
-    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?$";
+    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)(?:[01]?[0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-][0-9]{2}:?[0-9]{2})?)?$";
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})" + TimeAfter)]
+    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{4})[-/.]([0-9]{1,2})[-/.]([0-9]{1,2})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex IsoDate();
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{1,2})\.(\d{1,2})\.(\d{4})" + TimeAfter)]
+    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex DottedDate();
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})" + TimeAfter)]
+    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{1,2})[-/]([0-9]{1,2})[-/]([0-9]{4})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex SlashedDate();
 
     // "Apr 10, 2024", "April 10th 2024", "10 April 2024", "10-Apr-2024", "Wednesday, 10 April 2024"; the weekday must be one.
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:(?<weekday>[A-Za-z]+)\.?,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?[\s/-]+(?<day1>\d{1,2})(?:st|nd|rd|th)?|(?<day2>\d{1,2})(?:st|nd|rd|th)?[\s/-]+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?)(?:,\s*|[\s/-]+)(?<year>\d{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:(?<weekday>[A-Za-z]+)\.?,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?[\s/-]+(?<day1>[0-9]{1,2})(?:st|nd|rd|th)?|(?<day2>[0-9]{1,2})(?:st|nd|rd|th)?[\s/-]+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?)(?:,\s*|[\s/-]+)(?<year>[0-9]{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex WordDate();
 
     /// <summary>A date's weekday, with today (in the user's zone) and the days between.</summary>
