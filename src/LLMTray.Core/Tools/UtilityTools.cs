@@ -24,13 +24,14 @@ public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [Loca
     public override ToolSchema Schema(IReadOnlyList<string> offering)
     {
         var city = offering.Contains(CityEntry);
-        IReadOnlyList<ToolParam> ps = city ? [PlaceParams.City("timezone", "tz", "zone", "time_zone"), PlaceParams.CountryCode] : [];
-        return new ToolSchema(Name, $"Current date, weekday and time{(city ? ", here or in a city" : "")}. "
-            + "Call it for today, tomorrow, a weekday or now: you don't know the date otherwise.", ps);
+        IReadOnlyList<ToolParam> ps = city ? [DateParam, PlaceParams.City("timezone", "tz", "zone", "time_zone"), PlaceParams.CountryCode] : [DateParam];
+        return new ToolSchema(Name, $"Current date, weekday and time{(city ? ", here or in a city" : "")}, or the weekday of any date. "
+            + "Call it for today, tomorrow, a weekday, a past or future date, or now: you don't know the date otherwise.", ps);
     }
 
+    /// <summary>A date's weekday needs no city: the date wins over one given beside it.</summary>
     public override string Entry(ToolArguments a) =>
-        a.String("city") is { Length: > 0 } city && Zone(city) is null ? CityEntry : LocalEntry;
+        a.String("date") is not { Length: > 0 } && a.String("city") is { Length: > 0 } city && Zone(city) is null ? CityEntry : LocalEntry;
 
     public override string ModeLabel(string entry) => entry == CityEntry ? "city" : "local time";
 
@@ -40,8 +41,48 @@ public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [Loca
     public override bool IsModeOn(string entry, IReadOnlySet<string> enabled) =>
         entry == LocalEntry ? Offered(enabled).Count > 0 : base.IsModeOn(entry, enabled);
 
+    /// <summary>A date to look up: its weekday and how far it is from today. Models pass one on their own.</summary>
+    static readonly ToolParam DateParam = new("date", ParamKind.String, "A date to get the weekday of, e.g. 2024-04-10. Omit for now.",
+        Aliases: ["day", "for_date", "target_date", "on"]);
+
+    /// <summary>The forms a date comes in, day before month where it's dotted (10.04.2024).</summary>
+    static readonly string[] DateForms = ["yyyy-MM-dd", "yyyy-M-d", "yyyy/MM/dd", "yyyy/M/d", "yyyy.MM.dd", "dd.MM.yyyy", "d.M.yyyy", "yyyyMMdd"];
+
+    /// <summary>A date the model wrote: ISO, dotted day-first, or English words ("Apr 10, 2024", "10 April 2024"); null if it doesn't read.</summary>
+    public static DateOnly? ParseDate(string? raw)
+    {
+        var text = raw?.Trim().TrimEnd('.') ?? "";
+        if (text.Length == 0) return null;
+        if (DateTime.TryParseExact(text, DateForms, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var exact)) return DateOnly.FromDateTime(exact);
+        // A time or offset after the date is fine; only the day is used.
+        if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var any))
+        {
+            return DateOnly.FromDateTime(any.DateTime);
+        }
+        return null;
+    }
+
+    /// <summary>A date's weekday, with today (in the user's zone) and the days between.</summary>
+    public static JsonObject DescribeDate(DateOnly date, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, zone).DateTime);
+        return new JsonObject
+        {
+            ["date"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["weekday"] = date.DayOfWeek.ToString(),
+            ["today"] = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["days_from_today"] = date.DayNumber - today.DayNumber,
+        };
+    }
+
     public override async Task<string> RunAsync(ToolArguments a, ToolContext context, CancellationToken cancellationToken)
     {
+        if (a.String("date") is { Length: > 0 } asked)
+        {
+            return ParseDate(asked) is { } date
+                ? Json(DescribeDate(date, context.Now, Zone(context.HomeZone) ?? TimeZoneInfo.Local))
+                : Error($"can't read the date \"{asked}\"; write it as YYYY-MM-DD");
+        }
         if (a.String("city") is not { Length: > 0 } city)
         {
             return Json(Describe(context.Now, Zone(context.HomeZone) ?? TimeZoneInfo.Local, context.HomeZone));

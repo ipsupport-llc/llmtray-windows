@@ -52,8 +52,10 @@ public static class Thinking
     public static int? BudgetToTell(ThinkingStyle style, ThinkingEffort effort) => style == ThinkingStyle.Budget ? Budget(effort) : null;
 
     /// <summary>
-    /// The request's fields: Off is the template's switch plus a budget of
-    /// nothing (for a template that thinks regardless); High sends nothing.
+    /// The request's fields: Off is the template's switch alone; High sends nothing.
+    /// No budget of 0 at Off: Gemma 4's template doesn't close the thought after a
+    /// tool's answer, a budget of 0 closes the one the model starts at once, and the
+    /// model then reasons on in the answer. Unbudgeted, that thought stays a thought.
     /// </summary>
     public static System.Text.Json.Nodes.JsonObject Fields(ThinkingStyle style, ThinkingEffort effort)
     {
@@ -62,7 +64,6 @@ public static class Thinking
         {
             case (ThinkingStyle.Budget, ThinkingEffort.Off):
                 o["chat_template_kwargs"] = new System.Text.Json.Nodes.JsonObject { ["enable_thinking"] = false };
-                o["thinking_budget_tokens"] = 0;
                 break;
             case (ThinkingStyle.Budget, ThinkingEffort.Low or ThinkingEffort.Medium):
                 o["thinking_budget_tokens"] = Budget(effort);

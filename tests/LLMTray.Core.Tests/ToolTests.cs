@@ -106,7 +106,30 @@ public sealed class ToolTests
         Assert.Contains("switched off", city.Result);
         var zone = await box.RunAsync(new ToolCall { Name = "get_current_time", Arguments = """{"city": "Asia/Tokyo"}""" }, on, default);
         Assert.Contains("\"time\":\"07:30\"", zone.Result);
+
+        // A date's weekday, from what a small model passed on its own; a city beside it doesn't need the city switch.
+        var past = await box.RunAsync(new ToolCall { Name = "get_current_time", Arguments = """{"date": "Apr 10, 2024", "city": "Rome"}""" }, on, default);
+        Assert.False(past.Failed, past.Result);
+        var day = JsonNode.Parse(past.Result)!;
+        Assert.Equal("2024-04-10", day["date"]!.GetValue<string>());
+        Assert.Equal("Wednesday", day["weekday"]!.GetValue<string>());
+        Assert.Equal("2026-11-11", day["today"]!.GetValue<string>());
+        Assert.Equal(-945, day["days_from_today"]!.GetValue<int>());
+        var bad = await box.RunAsync(new ToolCall { Name = "get_current_time", Arguments = """{"date": "someday"}""" }, on, default);
+        Assert.True(bad.Failed);
+        Assert.Contains("YYYY-MM-DD", bad.Result);
     }
+
+    [Theory]
+    [InlineData("2024-04-10")]
+    [InlineData("Apr 10, 2024")]
+    [InlineData("April 10 2024")]
+    [InlineData("10 April 2024")]
+    [InlineData("10.04.2024")]
+    [InlineData("2024/4/10")]
+    [InlineData("2024-04-10T15:00:00")]
+    public void DatesReadInTheFormsModelsWrite(string raw) =>
+        Assert.Equal(new DateOnly(2024, 4, 10), CurrentTimeTool.ParseDate(raw));
 
     [Fact]
     public void WebSearchQueriesAreCleanedUp()
