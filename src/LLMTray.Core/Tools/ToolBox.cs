@@ -40,6 +40,9 @@ public sealed class ToolBox(IReadOnlyList<SelectableTool> tools, Func<IReadOnlyS
 
     public IReadOnlyList<SelectableTool> Tools => tools;
 
+    /// <summary>Whether a call by this name would reach one of the chat tools (any case, or a former name).</summary>
+    public bool Knows(string called) => ToolNameResolver.Resolve(called, tools.Select(t => t.Name).ToList(), Former) is not null;
+
     /// <summary>The request's <c>tools</c>: only the switched-on modes; null when none is on.</summary>
     public JsonArray? Definitions(IReadOnlySet<string> enabled)
     {

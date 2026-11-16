@@ -1,3 +1,4 @@
+using LLMTray.Core.Tools;
 using LLMTray.App.Interop;
 using LLMTray.Core.Chat;
 using Microsoft.UI.Xaml;
@@ -20,23 +21,72 @@ sealed partial class ChatWindow
     /// <summary>The attach button: a menu when windows may be shown, else the picture picker.</summary>
     async Task AttachClickedAsync()
     {
-        if (!App.Current.Settings.ShowWindows)
+        var groups = ToolGroupItems();
+        if (!App.Current.Settings.ShowWindows && groups.Count == 0)
         {
             await PickPicturesAsync();
             return;
         }
         var menu = new MenuFlyout();
-        var pictures = new MenuFlyoutItem { Text = L.T("Attach Pictures…"), Icon = new FontIcon { Glyph = "" } };
+        var pictures = new MenuFlyoutItem { Text = L.T("Attach Pictures…"), Icon = new FontIcon { Glyph = "\uE8B9" } };
         pictures.Click += async (_, _) => await PickPicturesAsync();
-        var window = new MenuFlyoutItem { Text = L.T("Show a Window or the Screen…"), Icon = new FontIcon { Glyph = "" } };
-        window.Click += async (_, _) => await ShowWindowAsync();
-        // The browser tab that was in front before LLMTray (Mac adr/0030): its title, address and text.
-        var tab = new MenuFlyoutItem { Text = L.T("Attach Current Tab"), Icon = new FontIcon { Glyph = "\uE774" } };
-        tab.Click += async (_, _) => await AttachTabAsync();
         menu.Items.Add(pictures);
-        if (ScreenCapture.IsSupported) menu.Items.Add(window);
-        menu.Items.Add(tab);
+        if (App.Current.Settings.ShowWindows)
+        {
+            var window = new MenuFlyoutItem { Text = L.T("Show a Window or the Screen…"), Icon = new FontIcon { Glyph = "\uE7F4" } };
+            window.Click += async (_, _) => await ShowWindowAsync();
+            // The browser tab that was in front before LLMTray (Mac adr/0030): its title, address and text.
+            var tab = new MenuFlyoutItem { Text = L.T("Attach Current Tab"), Icon = new FontIcon { Glyph = "\uE774" } };
+            tab.Click += async (_, _) => await AttachTabAsync();
+            if (ScreenCapture.IsSupported) menu.Items.Add(window);
+            menu.Items.Add(tab);
+        }
+        if (groups.Count > 0)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            foreach (var item in groups) menu.Items.Add(item);
+        }
         menu.ShowAt(attach);
+    }
+
+    /// <summary>
+    /// Tools loaded when needed (Mac adr/0020, adr/0027): in a saved chat, Make a Document… and Use &lt;server&gt;
+    /// load their tools from the next message, for a model that wouldn't think of load_tools. Already on: shown checked.
+    /// </summary>
+    List<MenuFlyoutItemBase> ToolGroupItems()
+    {
+        var app = App.Current;
+        var items = new List<MenuFlyoutItemBase>();
+        if (chat.Temporary) return items;
+        var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
+        var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
+        var loading = app.Profiles.ResolvedFor(entry?.FullPath).ToolLoading;
+        bool On(string group) => ToolGroups.LoadingOf(loading, group) == ToolLoading.Always || chat.HasToolGroup(group);
+        MenuFlyoutItemBase Item(string group, string load, string on, string notice, string glyph)
+        {
+            if (On(group)) return new ToggleMenuFlyoutItem { Text = on, IsChecked = true, IsEnabled = false };
+            var item = new MenuFlyoutItem { Text = load, Icon = new FontIcon { Glyph = glyph } };
+            item.Click += (_, _) =>
+            {
+                chat.LoadToolGroup(group);
+                attachNote.Text = notice;
+                attachNote.Foreground = Ui.Secondary;
+                attachNote.Visibility = Visibility.Visible;
+                input.Focus(FocusState.Programmatic);
+            };
+            return item;
+        }
+        if (app.Settings.Documents)
+        {
+            items.Add(Item(ToolGroups.Documents, L.T("Make a Document…"), L.T("Documents On in This Chat"),
+                L.T("Documents are on in this chat: ask for one (a report, a letter…)."), "\uE8A5"));
+        }
+        foreach (var server in app.Mcp.Store.Load().Where(s => s.Enabled && s.Key.Length > 0 && s.Key != ToolGroups.Documents))
+        {
+            items.Add(Item(server.Key, L.F("Use {0}", server.Name), L.F("{0} On in This Chat", server.Name),
+                L.F("{0} is on in this chat: you'll be asked before each call.", server.Name), "\uE943"));
+        }
+        return items;
     }
 
     async Task ShowWindowAsync()

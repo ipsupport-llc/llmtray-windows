@@ -140,13 +140,13 @@ public static class McpNames
         return candidate;
     }
 
-    public static string ToolName(string serverKey, string tool, ISet<string> taken)
+    public static string ToolName(string serverKey, string tool, ISet<string> taken, Func<string, bool>? reserved = null)
     {
         var clean = new string(tool.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_').ToArray());
         var name = $"{serverKey}_{clean}";
         if (name.Length > 64) name = name[..64];
         var candidate = name;
-        for (var n = 2; taken.Contains(candidate); n++)
+        for (var n = 2; taken.Contains(candidate) || reserved?.Invoke(candidate) == true; n++)
         {
             var suffix = n.ToString(System.Globalization.CultureInfo.InvariantCulture);
             candidate = (name.Length + suffix.Length > 64 ? name[..(64 - suffix.Length)] : name) + suffix;

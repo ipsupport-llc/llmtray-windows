@@ -404,14 +404,21 @@ public static class ToolNameResolver
 {
     public sealed record Resolved(string Name, IReadOnlyDictionary<string, string> ImpliedArguments, bool Repaired);
 
-    public static Resolved? Resolve(string called, IReadOnlyCollection<string> known, IReadOnlyDictionary<string, (string Tool, Dictionary<string, string> Arguments)>? former = null)
+    /// <summary>A called name without the namespace some templates put before it (<c>functions.</c>, <c>tools.</c>).</summary>
+    public static string Bare(string called)
     {
-        if (known.Contains(called)) return new Resolved(called, new Dictionary<string, string>(), false);
         var bare = called.Trim();
         foreach (var prefix in new[] { "functions.", "function.", "tools.", "tool." })
         {
             if (bare.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) bare = bare[prefix.Length..];
         }
+        return bare;
+    }
+
+    public static Resolved? Resolve(string called, IReadOnlyCollection<string> known, IReadOnlyDictionary<string, (string Tool, Dictionary<string, string> Arguments)>? former = null)
+    {
+        if (known.Contains(called)) return new Resolved(called, new Dictionary<string, string>(), false);
+        var bare = Bare(called);
         var folded = ToolArguments.NormalizedKey(bare);
         var matches = known.Where(k => ToolArguments.NormalizedKey(k) == folded).ToList();
         if (matches.Count == 1) return new Resolved(matches[0], new Dictionary<string, string>(), true);
