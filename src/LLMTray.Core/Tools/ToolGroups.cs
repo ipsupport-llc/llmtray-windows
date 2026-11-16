@@ -45,26 +45,58 @@ public static class ToolGroups
     /// <summary>The Mac's spelling, written back to the profile.</summary>
     public static string Name(ToolLoading loading) => loading == ToolLoading.Always ? "always" : "onDemand";
 
-    /// <summary>The value as a profile stores it.</summary>
-    public static JsonElement Element(ToolLoading loading)
+    /// <summary>A list of names (the chat file's loaded and pending groups) read leniently: only string entries; anything else reads as none.</summary>
+    public static List<string> Names(JsonElement? raw) =>
+        raw is { ValueKind: JsonValueKind.Array } a
+            ? [.. a.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).Where(n => n.Length > 0)]
+            : [];
+
+    /// <summary>Names as the chat file stores them; null for none.</summary>
+    public static JsonElement? NamesElement(IEnumerable<string> names)
     {
-        using var document = JsonDocument.Parse("\"" + Name(loading) + "\"");
+        var list = names.Order(StringComparer.Ordinal).ToList();
+        if (list.Count == 0) return null;
+        using var document = JsonDocument.Parse(new JsonArray([.. list.Select(n => (JsonNode)JsonValue.Create(n)!)]).ToJsonString());
         return document.RootElement.Clone();
     }
 
-    /// <summary>A profile's <c>tools.toolLoading</c> read leniently: an entry that isn't a known value is skipped, never the whole map.</summary>
-    public static Dictionary<string, ToolLoading> Read(IReadOnlyDictionary<string, JsonElement>? raw)
+    /// <summary>
+    /// A profile's <c>tools.toolLoading</c> read leniently: an entry that isn't a known value is skipped,
+    /// and a field that isn't an object reads as none -- never failing the whole profile.
+    /// </summary>
+    public static Dictionary<string, ToolLoading> Read(JsonElement? raw)
     {
         var map = new Dictionary<string, ToolLoading>(StringComparer.Ordinal);
-        foreach (var (group, value) in raw ?? new Dictionary<string, JsonElement>())
+        if (raw is not { ValueKind: JsonValueKind.Object } o) return map;
+        foreach (var entry in o.EnumerateObject())
         {
-            if (value.ValueKind == JsonValueKind.String && Parse(value.GetString()) is { } loading) map[group] = loading;
+            if (entry.Value.ValueKind == JsonValueKind.String && Parse(entry.Value.GetString()) is { } loading) map[entry.Name] = loading;
         }
         return map;
     }
 
+    /// <summary>Whether the field sets this group (to a value that reads).</summary>
+    public static bool Sets(JsonElement? raw, string group) => Read(raw).ContainsKey(group);
+
+    /// <summary>The field with one group set (null: removed), every other entry kept as written; null when nothing is left.</summary>
+    public static JsonElement? With(JsonElement? raw, string group, ToolLoading? loading)
+    {
+        var o = new JsonObject();
+        if (raw is { ValueKind: JsonValueKind.Object } current)
+        {
+            foreach (var entry in current.EnumerateObject())
+            {
+                if (entry.Name != group) o[entry.Name] = JsonNode.Parse(entry.Value.GetRawText());
+            }
+        }
+        if (loading is { } value) o[group] = Name(value);
+        if (o.Count == 0) return null;
+        using var document = JsonDocument.Parse(o.ToJsonString());
+        return document.RootElement.Clone();
+    }
+
     /// <summary>Per group, not per field: the overlay's value, else the base's, else on demand.</summary>
-    public static IReadOnlyDictionary<string, ToolLoading> Merged(IReadOnlyDictionary<string, JsonElement>? overlay, IReadOnlyDictionary<string, JsonElement>? @base)
+    public static IReadOnlyDictionary<string, ToolLoading> Merged(JsonElement? overlay, JsonElement? @base)
     {
         var merged = Read(@base);
         foreach (var (group, loading) in Read(overlay)) merged[group] = loading;
@@ -116,5 +148,8 @@ public static class ToolGroups
 
     /// <summary>The answer to a call of a tool whose group this chat hasn't loaded (a model that saw it elsewhere).</summary>
     public static string NotLoaded(string tool, string group) =>
-        SelectableTool.Error($"{tool} isn't loaded in this chat. Call {LoaderName}({{\"group\":\"{group}\"}}) first, then call it.");
+        SelectableTool.Error($"{tool}{NotLoadedMark} Call {LoaderName}({{\"group\":\"{group}\"}}) first, then call it.");
+
+    /// <summary>What every "load it first" answer has: a load makes those answers stale.</summary>
+    public const string NotLoadedMark = " isn't loaded in this chat.";
 }

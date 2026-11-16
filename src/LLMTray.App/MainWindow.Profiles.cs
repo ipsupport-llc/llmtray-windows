@@ -156,13 +156,11 @@ public sealed partial class MainWindow
                     loading.SelectedItem = loading.Items.OfType<ComboBoxItem>().First(i => (LLMTray.Core.Tools.ToolLoading)i.Tag == now);
                     loading.SelectionChanged += (_, _) =>
                     {
-                        if (loading.SelectedItem is not ComboBoxItem { Tag: LLMTray.Core.Tools.ToolLoading value } || value == now) return;
-                        Set(p =>
-                        {
-                            // Only this group: the profile's other groups stay as they are.
-                            p.Tools.ToolLoading ??= [];
-                            p.Tools.ToolLoading[LLMTray.Core.Tools.ToolGroups.Documents] = LLMTray.Core.Tools.ToolGroups.Element(value);
-                        });
+                        // Compared with the profile as it is now: the page may not have been drawn again since the last pick.
+                        var current = LLMTray.Core.Tools.ToolGroups.LoadingOf(profiles.Resolved(id).ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents);
+                        if (loading.SelectedItem is not ComboBoxItem { Tag: LLMTray.Core.Tools.ToolLoading value } || value == current) return;
+                        // Only this group: the profile's other groups stay as written.
+                        Set(p => p.Tools.ToolLoading = LLMTray.Core.Tools.ToolGroups.With(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents, value));
                     };
                     return loading;
                 }),

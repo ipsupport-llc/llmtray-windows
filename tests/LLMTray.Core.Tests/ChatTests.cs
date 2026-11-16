@@ -129,6 +129,16 @@ public sealed class ChatClientTests : IAsyncDisposable
             {
                 forced = Call("l2", "load_tools", """{"group":"fake"}""");
             }
+            else if (body["tool_choice"] is null && lastRole == "user" && lastText.Contains("load and make at once"))
+            {
+                // Both in one response: make_document was never declared to the model.
+                var both = new JsonArray(Call("l4", "load_tools", """{"group":"documents"}"""), Call("d4", "make_document", """{"title":"T","content":"x"}"""));
+                both[1]!["index"] = 1;
+                var chunk = new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["delta"] = new JsonObject { ["tool_calls"] = both } }) };
+                await context.Response.WriteAsync("data: " + chunk.ToJsonString() + "\n\n");
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
             else if (body["tool_choice"] is null && lastRole == "user" && lastText.Contains("make_document directly"))
             {
                 forced = Call("l3", "make_document", """{"title":"T","content":"x"}""");
@@ -327,7 +337,7 @@ public sealed class ChatClientTests : IAsyncDisposable
 
         // "always" in the profile: declared from the first request, and load_tools isn't (nothing is left to load).
         var profile = new LLMTray.Core.Profiles.Profile();
-        profile.Tools.ToolLoading = new() { ["documents"] = System.Text.Json.JsonSerializer.SerializeToElement("Always") };
+        profile.Tools.ToolLoading = System.Text.Json.JsonDocument.Parse("""{"documents":"Always"}""").RootElement.Clone();
         var resolved = LLMTray.Core.Profiles.ProfileResolver.Resolve(null, profile);
         var always = new ChatClient(http, api, new ChatStore(root));
         await always.SendAsync("hi", new ChatOptions(null, Profile: resolved, Documents: printer));
@@ -375,6 +385,36 @@ public sealed class ChatClientTests : IAsyncDisposable
         await chat.SendAsync("load fake", options);
         Assert.Equal("done", Assert.Single(chat.Messages[^1].McpCalls).Outcome);
         Assert.True(starts > before);
+    }
+
+    [Fact]
+    public async Task ALoadWorksFromTheNextRequestNotTheSameResponse()
+    {
+        var printer = new FakePrinter();
+        var store = new ChatStore(root);
+        var chat = new ChatClient(http, api, store);
+        await chat.SendAsync("load and make at once", new ChatOptions(null, Documents: printer));
+        Assert.Empty(printer.Printed);
+        Assert.Contains("isn't loaded in this chat", chat.Messages[^1].Content);
+        // Loaded for what follows.
+        Assert.True(chat.HasToolGroup("documents"));
+        Assert.Contains("make_document", Declared(bodies.Last(b => b["stream"]!.GetValue<bool>())));
+    }
+
+    [Fact]
+    public void ADamagedGroupListNeverMakesAChatUnreadable()
+    {
+        var store = new ChatStore(root);
+        var id = Guid.NewGuid();
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, id.ToString("D").ToUpperInvariant() + ".json"), $$"""
+            {"id":"{{id}}","title":"T","createdAt":"2026-11-01T00:00:00Z","updatedAt":"2026-11-01T00:00:00Z","loadedToolGroups":"documents","pendingToolGroups":[1,"notion"],
+             "messages":[{"role":"user","content":"hi","reasoning":"","isSummary":false}]}
+            """);
+        var chat = new ChatClient(http, api, store);
+        Assert.True(chat.Load(id));
+        Assert.False(chat.HasToolGroup("documents"));
+        Assert.True(chat.HasToolGroup("notion"));
     }
 
     [Fact]

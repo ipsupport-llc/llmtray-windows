@@ -286,8 +286,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             projectFilesSeen = file.ProjectFilesSeen;
             loadedGroups.Clear();
             pendingGroups.Clear();
-            foreach (var g in file.LoadedToolGroups ?? []) if (g is { Length: > 0 }) loadedGroups.Add(g);
-            foreach (var g in file.PendingToolGroups ?? []) if (g is { Length: > 0 } && !loadedGroups.Contains(g)) pendingGroups.Add(g);
+            loadedGroups.UnionWith(Tools.ToolGroups.Names(file.LoadedToolGroups));
+            pendingGroups.UnionWith(Tools.ToolGroups.Names(file.PendingToolGroups));
+            pendingGroups.ExceptWith(loadedGroups);
             lastSeq = Math.Max(file.LastSeq ?? 0, file.Messages.Max(m => m.Seq) ?? 0);
             Id = file.Id;
             loaded = file;
@@ -405,6 +406,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             if (Messages.Count == 0) return Task.CompletedTask;
             if (Messages[^1].Role == "assistant") Messages.RemoveAt(Messages.Count - 1);
             if (Messages.Count == 0 || Messages[^1].Role != "user") return Task.CompletedTask;
+            // Asking again is the user's own step too: groups waiting for it are loaded (Mac adr/0020).
+            loadedGroups.UnionWith(pendingGroups);
+            pendingGroups.Clear();
         }
         return AnswerAsync(options);
     }
@@ -618,6 +622,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         async Task DeclareMcpAsync(Func<Mcp.McpServerConfig, bool> which)
         {
             var taken = new HashSet<string>((definitions ?? []).Select(d => d?["function"]?["name"]?.GetValue<string>() ?? ""), StringComparer.OrdinalIgnoreCase);
+            // Built-in names declared later (a group loaded after the servers) are never a server's.
+            taken.Add(Tools.ToolGroups.LoaderName);
+            taken.Add(Documents.DocumentTool.Name);
             answer.Activity = "mcp";
             if (mine == epoch) Changed?.Invoke();
             var keys = mcpServers.Where(which).Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
@@ -631,8 +638,18 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 definitions.Add(t.Tool.Definition(t.ModelName));
             }
         }
+        // A name one of ours answers to (declared now, a chat tool or a former name of one, a project or folder tool): never taken for a server's.
+        bool KnownName(string called) =>
+            (definitions ?? []).Any(d => string.Equals(d?["function"]?["name"]?.GetValue<string>(), called, StringComparison.OrdinalIgnoreCase))
+            || options.Tools?.Knows(called) == true
+            || ProjectFiles.ProjectFilesTool.Is(called)
+            || Folders.FolderTools.IsFolderTool(called, out _)
+            || string.Equals(called, Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(called, Tools.ToolGroups.LoaderName, StringComparison.OrdinalIgnoreCase);
+        // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
+        var staged = new List<Tools.ToolGroup>();
         // The on-demand server (not loaded) whose tool a call names: the longest key that prefixes it.
-        Mcp.McpServerConfig? NotLoadedServer(string called) => mcpServers
+        Mcp.McpServerConfig? NotLoadedServer(string called) => KnownName(called) ? null : mcpServers
             .Where(s => ServerOnDemand(s) && !chatGroups.Contains(s.Key) && called.StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(s => s.Key.Length).FirstOrDefault();
         var rounds = options.Profile?.ToolRounds ?? 10;
@@ -716,35 +733,19 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             var load = Tools.ToolGroups.Load(call.Arguments, offeredGroups, chatGroups, outsideText || projectText || folderText || mcpText,
                                 g => g.McpServer is null ? Documents.DocumentTool.Name : $"the {g.Name}_ tools");
                             outcome = new Tools.ToolOutcome(load.Text, null, load.Failed);
-                            if (load.Group is { } group && mine == epoch)
+                            if (load.Group is { } group)
                             {
-                                lock (sync)
+                                if (load.Pending)
                                 {
-                                    if (load.Pending)
+                                    lock (sync)
                                     {
-                                        if (!loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
-                                    }
-                                    else
-                                    {
-                                        loadedGroups.Add(group.Name);
-                                        pendingGroups.Remove(group.Name);
+                                        // The chat this turn is for, checked under the lock that guards a switch of chats.
+                                        if (mine == epoch && !loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
                                     }
                                 }
-                                if (!load.Pending)
+                                else if (!staged.Contains(group))
                                 {
-                                    chatGroups.Add(group.Name);
-                                    // "Call load_tools first" answers are stale now.
-                                    ran.Clear();
-                                    if (group.McpServer is null)
-                                    {
-                                        documentsDeclared = true;
-                                        definitions ??= [];
-                                        definitions.Add(Documents.DocumentTool.Definition());
-                                    }
-                                    else
-                                    {
-                                        await DeclareMcpAsync(s => s.Key == group.McpServer).ConfigureAwait(false);
-                                    }
+                                    staged.Add(group);
                                 }
                             }
                         }
@@ -831,6 +832,51 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = outcome.Result });
                 }
                 answer.Activity = null;
+                if (staged.Count > 0)
+                {
+                    // Outside text read by a later call of the same response: the loads wait for the user's next message after all.
+                    var after = outsideText || projectText || folderText || mcpText;
+                    var applied = new List<Tools.ToolGroup>();
+                    lock (sync)
+                    {
+                        if (mine == epoch)
+                        {
+                            foreach (var group in staged)
+                            {
+                                if (after)
+                                {
+                                    if (!loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                }
+                                else
+                                {
+                                    loadedGroups.Add(group.Name);
+                                    pendingGroups.Remove(group.Name);
+                                    applied.Add(group);
+                                }
+                            }
+                        }
+                    }
+                    staged.Clear();
+                    foreach (var group in applied)
+                    {
+                        chatGroups.Add(group.Name);
+                        if (group.McpServer is null)
+                        {
+                            documentsDeclared = true;
+                            definitions ??= [];
+                            definitions.Add(Documents.DocumentTool.Definition());
+                        }
+                        else
+                        {
+                            await DeclareMcpAsync(s => s.Key == group.McpServer).ConfigureAwait(false);
+                        }
+                    }
+                    if (applied.Count > 0)
+                    {
+                        // Only the "load it first" answers are stale now; every other repeated call still answers as it ran.
+                        foreach (var stale in ran.Where(r => r.Value.Contains(Tools.ToolGroups.NotLoadedMark, StringComparison.Ordinal)).Select(r => r.Key).ToList()) ran.Remove(stale);
+                    }
+                }
                 token.ThrowIfCancellationRequested();
                 // The next round's text follows on a new paragraph.
                 if (answer.Content.Length > 0 && !answer.Content.EndsWith("\n\n", StringComparison.Ordinal)) answer.Content += "\n\n";
@@ -1848,8 +1894,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 LastSeq = lastSeq,
                 WindowsMemorySnapshot = memorySnapshot,
                 ProjectFilesSeen = projectFilesSeen,
-                LoadedToolGroups = loadedGroups.Count == 0 ? null : [.. loadedGroups.Order(StringComparer.Ordinal)],
-                PendingToolGroups = pendingGroups.Count == 0 ? null : [.. pendingGroups.Order(StringComparer.Ordinal)],
+                LoadedToolGroups = Tools.ToolGroups.NamesElement(loadedGroups),
+                PendingToolGroups = Tools.ToolGroups.NamesElement(pendingGroups),
             };
             loaded = file;
         }

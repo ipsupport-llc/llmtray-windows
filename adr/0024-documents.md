@@ -157,27 +157,36 @@ servers). Every declared tool costs tokens in every request, and
 - **The profile's `tools.toolLoading`**: `group → always | onDemand`, the
   Mac's field and spelling. It is merged per group (the overlay's value,
   else Default's, else on demand) and read leniently: a value that isn't
-  one of the two is skipped, never the whole profile, and is written back as
-  it was. Settings › Profiles has a "Documents tools" row. A server's
-  group is set in the profile's file, as on the Mac.
+  one of the two, or a field that isn't an object, is skipped, never the
+  whole profile, and is written back as it was. Settings › Profiles has a
+  "Documents tools" row; its Reset clears the documents entry only. A
+  server's group is set in the profile's file, as on the Mac.
 - **Declared** when the group is `always` or loaded in this chat. An MCP
   server is started only then, so a chat that never loads it never starts
   it.
 - **`load_tools(group)`** is declared while any on-demand group is offered.
-  It stays declared after loading, so the list changes once. A load takes
-  effect from the next request of the same turn: the group's tools are
-  added after the ones declared, and the turn's repeated-call answers are
-  dropped.
+  It stays declared after loading, so the list changes once (the Mac's
+  rule, also in later turns). A load takes effect from the next request of
+  the same turn, once every call of the response that asked for it has run:
+  a tool called beside `load_tools` in that response is answered "call
+  load_tools first". The group's tools are added after the ones declared,
+  and only the turn's "load it first" answers are dropped from the
+  repeated-call answers. Built-in names are reserved before any server's
+  tools are named, so a server's tool never takes `make_document`.
 - **After outside text** (file, folder, web, MCP or shown text, pinned
   files included) a load waits in `pendingToolGroups` and becomes loaded
-  when the user sends the next message, so a file can't hand the model a
-  new tool in its own turn.
+  when the user sends the next message (or asks again), so a file can't
+  hand the model a new tool in its own turn. Outside text read by another
+  call of the same response counts too.
 - **The + menu**: Make a Document… and Use <server> load the group in a
   saved chat. A group already on shows checked.
 - **Saved with the chat**: `loadedToolGroups` and `pendingToolGroups` in the
-  session file, the Mac's names. A new chat starts with none.
+  session file, the Mac's names, read leniently (a damaged list reads as
+  none, never an unreadable chat). A new chat starts with none. A load is
+  recorded only while the turn's chat is still the one shown.
 - A call of `make_document`, or of an on-demand server's tool (by its key
-  prefix), before the group is loaded is answered "call load_tools first".
+  prefix, for a name none of our tools answers to), before the group is
+  loaded is answered "call load_tools first".
 
 Not in this step:
 - **`format: docx` and `xlsx`**, as on the Mac.

@@ -6,7 +6,7 @@ namespace LLMTray.Core.Tests;
 
 public sealed class ToolGroupTests
 {
-    static JsonElement S(string value) => JsonSerializer.SerializeToElement(value);
+    static JsonElement J(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     [Fact]
     public void ValuesAreReadLenientlyAndMergedPerGroup()
@@ -17,14 +17,18 @@ public sealed class ToolGroupTests
         Assert.Null(ToolGroups.Parse("sometimes"));
 
         // A bad value is skipped, the rest kept.
-        var @base = new Dictionary<string, JsonElement> { ["documents"] = S("always"), ["notion"] = S("always"), ["x"] = JsonSerializer.SerializeToElement(3) };
-        var overlay = new Dictionary<string, JsonElement> { ["notion"] = S("onDemand"), ["y"] = S("typo") };
+        var @base = J("""{"documents":"always","notion":"always","x":3}""");
+        var overlay = J("""{"notion":"onDemand","y":"typo"}""");
         var merged = ToolGroups.Merged(overlay, @base);
         Assert.Equal(ToolLoading.Always, merged["documents"]);
         Assert.Equal(ToolLoading.OnDemand, merged["notion"]);
         Assert.Equal(2, merged.Count);
         Assert.Equal(ToolLoading.OnDemand, ToolGroups.LoadingOf(merged, "github"));
         Assert.Equal(ToolLoading.OnDemand, ToolGroups.LoadingOf(null, "documents"));
+        // Not an object at all: none, not a failure.
+        Assert.Empty(ToolGroups.Read(J("\"always\"")));
+        Assert.Empty(ToolGroups.Names(J("""{"a":1}""")));
+        Assert.Equal(["a", "b"], ToolGroups.Names(J("""["a", 2, null, "", "b"]""")));
     }
 
     [Fact]
@@ -32,14 +36,27 @@ public sealed class ToolGroupTests
     {
         var file = """{"id":"A","name":"Hot","tools":{"toolLoading":{"documents":"always","notion":"always","bad":4}}}""";
         var profile = JsonSerializer.Deserialize(file, ProfileJson.Default.Profile)!;
-        Assert.Equal(3, profile.OverrideCount);
+        // Each group that reads counts; the bad entry doesn't.
+        Assert.Equal(2, profile.OverrideCount);
         var resolved = ProfileResolver.Resolve(profile, new Profile { Id = Profile.DefaultId });
         Assert.Equal(ToolLoading.Always, resolved.ToolLoading["documents"]);
         // Written back as it was, the hand-edited value included.
         Assert.Contains("\"bad\": 4", JsonSerializer.Serialize(profile, ProfileJson.Default.Profile));
-        Assert.Equal("always", ToolGroups.Element(ToolLoading.Always).GetString());
+        // The editor's reset clears the documents entry only; the server's and the hand-edited one stay.
         ProfileField.ToolLoading.Clear(profile);
-        Assert.Equal(0, profile.OverrideCount);
+        Assert.False(ProfileField.ToolLoading.IsSet(profile));
+        Assert.Equal(1, profile.OverrideCount);
+        var kept = JsonSerializer.Serialize(profile, ProfileJson.Default.Profile);
+        Assert.Contains("\"notion\": \"always\"", kept);
+        Assert.Contains("\"bad\": 4", kept);
+        // Setting one group keeps the rest.
+        profile.Tools.ToolLoading = ToolGroups.With(profile.Tools.ToolLoading, "documents", ToolLoading.OnDemand);
+        Assert.Equal(ToolLoading.OnDemand, ToolGroups.Read(profile.Tools.ToolLoading)["documents"]);
+        Assert.Equal(ToolLoading.Always, ToolGroups.Read(profile.Tools.ToolLoading)["notion"]);
+
+        // A field that isn't an object never takes the profile out.
+        var odd = JsonSerializer.Deserialize("""{"id":"B","name":"Odd","tools":{"toolLoading":"always"}}""", ProfileJson.Default.Profile)!;
+        Assert.Empty(ProfileResolver.Resolve(odd, new Profile { Id = Profile.DefaultId }).ToolLoading);
     }
 
     [Fact]

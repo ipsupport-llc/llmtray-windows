@@ -60,7 +60,7 @@ public sealed class Profile
         /// Per tool group (Mac adr/0020): "always" or "onDemand"; a group not here is on demand.
         /// Kept as written: a hand-edited value that isn't one is skipped when read, never the whole profile.
         /// </summary>
-        public Dictionary<string, JsonElement>? ToolLoading { get; set; }
+        public JsonElement? ToolLoading { get; set; }
 
         [JsonExtensionData]
         public Dictionary<string, JsonElement>? Other { get; set; }
@@ -124,7 +124,8 @@ public sealed class Profile
     };
 
     /// <summary>Fields this profile sets: "overrides N settings".</summary>
-    public int OverrideCount => ProfileField.All.Count(f => f.IsSet(this)) + Math.Max(0, (Tools.ToolLoading?.Count ?? 0) - 1);
+    public int OverrideCount => ProfileField.All.Count(f => f.IsSet(this))
+        + LLMTray.Core.Tools.ToolGroups.Read(Tools.ToolLoading).Keys.Count(g => g != LLMTray.Core.Tools.ToolGroups.Documents);
 }
 
 /// <summary>One optional profile field, for counting, resetting and the editor.</summary>
@@ -138,7 +139,10 @@ public sealed record ProfileField(string Name, Func<Profile, bool> IsSet, Action
     public static readonly ProfileField EnabledTools = new("enabledTools", p => p.Tools.EnabledTools is not null, p => p.Tools.EnabledTools = null);
     public static readonly ProfileField ToolUsePolicy = new("toolUsePolicy", p => p.Tools.ToolUsePolicy is not null, p => p.Tools.ToolUsePolicy = null);
     public static readonly ProfileField ToolRounds = new("toolRounds", p => p.Tools.ToolRounds is not null, p => p.Tools.ToolRounds = null);
-    public static readonly ProfileField ToolLoading = new("toolLoading", p => p.Tools.ToolLoading is { Count: > 0 }, p => p.Tools.ToolLoading = null);
+    /// <summary>The documents group's entry of <c>toolLoading</c> (the editor's row): a reset leaves the other groups' entries alone.</summary>
+    public static readonly ProfileField ToolLoading = new("toolLoading",
+        p => LLMTray.Core.Tools.ToolGroups.Sets(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents),
+        p => p.Tools.ToolLoading = LLMTray.Core.Tools.ToolGroups.With(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents, null));
     public static readonly ProfileField ContextSize = new("contextSize", p => p.Launch.ContextSize is not null, p => p.Launch.ContextSize = null);
     public static readonly ProfileField KvCacheType = new("kvCacheType", p => p.Launch.KvCacheType is not null, p => p.Launch.KvCacheType = null);
     public static readonly ProfileField Parallel = new("parallel", p => p.Launch.Parallel is not null, p => p.Launch.Parallel = null);

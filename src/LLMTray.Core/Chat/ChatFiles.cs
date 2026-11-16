@@ -147,10 +147,11 @@ public sealed record ChatSessionFile
     public List<string>? ProjectFilesSeen { get; init; }
 
     /// <summary>The on-demand tool groups this chat loaded (Mac adr/0020): declared in every request from then on.</summary>
-    public List<string>? LoadedToolGroups { get; init; }
+    /// <remarks>Read leniently (<see cref="Tools.ToolGroups.Names"/>): a damaged list never makes the chat unreadable.</remarks>
+    public JsonElement? LoadedToolGroups { get; init; }
 
     /// <summary>Groups loaded after outside text: loaded at the user's next message.</summary>
-    public List<string>? PendingToolGroups { get; init; }
+    public JsonElement? PendingToolGroups { get; init; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Other { get; set; }
