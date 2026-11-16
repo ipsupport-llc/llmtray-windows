@@ -146,6 +146,12 @@ public sealed record ChatSessionFile
     /// <summary>The project's file names as of the chat's last message (the Mac's projectFilesSeen); null: never recorded.</summary>
     public List<string>? ProjectFilesSeen { get; init; }
 
+    /// <summary>The on-demand tool groups this chat loaded (Mac adr/0020): declared in every request from then on.</summary>
+    public List<string>? LoadedToolGroups { get; init; }
+
+    /// <summary>Groups loaded after outside text: loaded at the user's next message.</summary>
+    public List<string>? PendingToolGroups { get; init; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Other { get; set; }
 }

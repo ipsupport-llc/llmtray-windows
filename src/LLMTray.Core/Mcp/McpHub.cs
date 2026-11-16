@@ -461,11 +461,12 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     /// <summary>
     /// The tools the chat may declare: of the servers switched on, those
     /// still as reviewed. A server that doesn't start is skipped (its log says why).
+    /// <paramref name="only"/>: the servers this chat declares (loaded, or always); the others aren't started.
     /// </summary>
-    public async Task<IReadOnlyList<McpDeclared>> DeclaredAsync(ISet<string> takenNames, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<McpDeclared>> DeclaredAsync(ISet<string> takenNames, CancellationToken cancellationToken, Func<McpServerConfig, bool>? only = null)
     {
         var declared = new List<McpDeclared>();
-        foreach (var server in store.Load().Where(s => s.Enabled))
+        foreach (var server in store.Load().Where(s => s.Enabled && (only is null || only(s))))
         {
             IReadOnlyList<McpTool> tools;
             try
