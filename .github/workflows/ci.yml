@@ -177,6 +177,52 @@ jobs:
           path: smoke/
           retention-days: 7
 
+  # The Store package script (adr/0025) on this build's two packages, with a
+  # stand-in identity: the bundle must come out, restamped, with nothing of
+  # the throwaway signature. Nothing is submitted.
+  store-package:
+    needs: app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: LLMTray-ci-*
+          path: built
+          merge-multiple: true
+      - name: Make and check the Store package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force msix | Out-Null
+          Get-ChildItem built -Recurse -Filter *.msix | Copy-Item -Destination msix
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $first = [IO.Compression.ZipFile]::OpenRead((Get-ChildItem msix -Filter *.msix | Select-Object -First 1).FullName)
+          try { [xml]$m = [IO.StreamReader]::new($first.GetEntry('AppxManifest.xml').Open()).ReadToEnd() } finally { $first.Dispose() }
+          $version = $m.Package.Identity.Version
+          scripts/store-package.ps1 -Msix msix -Version $version -Name 'StandIn.LLMTray' -Publisher 'CN=00000000-1111-2222-3333-444444444444' -PublisherDisplayName 'Stand-in' -Out store
+          # The upload holds one bundle; the bundle one package per architecture, each with the new identity and no signature.
+          $upload = Get-ChildItem store -Filter *.msixupload
+          # Expand-Archive takes .zip names only.
+          [IO.Compression.ZipFile]::ExtractToDirectory($upload.FullName, (Join-Path $PWD 'check'))
+          $bundle = @(Get-ChildItem check -Filter *.msixbundle)
+          if ($bundle.Count -ne 1) { throw 'the upload has no single bundle' }
+          [IO.Compression.ZipFile]::ExtractToDirectory($bundle[0].FullName, (Join-Path $PWD 'check/bundle'))
+          $inner = @(Get-ChildItem check/bundle -Filter *.msix)
+          if ($inner.Count -ne 2) { throw "the bundle has $($inner.Count) packages, not 2" }
+          foreach ($p in $inner) {
+            $zip = [IO.Compression.ZipFile]::OpenRead($p.FullName)
+            try {
+              if ($zip.GetEntry('AppxSignature.p7x')) { throw "$($p.Name) is still signed" }
+              [xml]$pm = [IO.StreamReader]::new($zip.GetEntry('AppxManifest.xml').Open()).ReadToEnd()
+            } finally { $zip.Dispose() }
+            if ($pm.Package.Identity.Name -ne 'StandIn.LLMTray' -or $pm.Package.Identity.Publisher -ne 'CN=00000000-1111-2222-3333-444444444444' -or $pm.Package.Properties.PublisherDisplayName -ne 'Stand-in') {
+              throw "$($p.Name) kept its old identity"
+            }
+            Write-Host "$($p.Name): $($pm.Package.Identity.ProcessorArchitecture), restamped, unsigned"
+          }
+
   # The portable ZIP (adr/0004): built, unpacked, started, the API checked.
   portable:
     name: portable (${{ matrix.platform }})

@@ -37,7 +37,8 @@ sealed class AppUpdater
         {
             var id = Package.Current.Id;
             Current = ReleaseTag.FromPackageVersion(new Version(id.Version.Major, id.Version.Minor, id.Version.Build, id.Version.Revision));
-            Kind = InstallKind.Package;
+            // Signed by the Store (adr/0025): the Store updates it, never this app.
+            Kind = Package.Current.SignatureKind == PackageSignatureKind.Store ? InstallKind.Store : InstallKind.Package;
         }
         catch (InvalidOperationException)
         {
@@ -149,7 +150,7 @@ sealed class AppUpdater
     /// <summary>The running release; null in a development build.</summary>
     public ReleaseTag? Current { get; }
     public string Architecture { get; }
-    public bool CanUpdate => Current is not null;
+    public bool CanUpdate => Current is not null && Kind != InstallKind.Store;
 
     public UpdateInfo? Available { get; private set; }
     public string? Status { get; private set; }
@@ -208,6 +209,8 @@ sealed class AppUpdater
 
     public async Task InstallAsync()
     {
+        // A Store copy (adr/0025) is updated by the Store only, whatever set Available.
+        if (!CanUpdate) return;
         if (Available is not { } update || Busy) return;
         if (ScoopManaged)
         {

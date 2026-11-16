@@ -352,6 +352,11 @@ public sealed partial class MainWindow : Window
         var app = App.Current;
         var updater = app.Updater;
         yield return Ui.Section(L.T("LLMTray"));
+        if (updater.Kind == InstallKind.Store && updater.Current is { } store)
+        {
+            yield return Ui.Card(Ui.Row(L.T("Version"), L.T("Installed from the Microsoft Store, which keeps it up to date."), Ui.Value(store.DisplayVersion)));
+            yield break;
+        }
         if (!updater.CanUpdate)
         {
             yield return Ui.Card(Ui.Row(L.T("Updates are off"), L.T("This is a development build: it has no release to compare."), null));
@@ -418,7 +423,7 @@ public sealed partial class MainWindow : Window
     {
         var folder = Path.Combine(AppContext.BaseDirectory, "cli");
         var help = L.T("llmtray status, models, start, stop, pull, chat: LLMTray from a terminal or a script. llmtray help lists them.");
-        if (App.Current.Updater.Kind == InstallKind.Package)
+        if (App.Current.Updater.Kind is InstallKind.Package or InstallKind.Store)
         {
             return Ui.Row(L.T("Command line"), help, Ui.Value("llmtray", mono: true));
         }

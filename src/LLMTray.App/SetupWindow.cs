@@ -416,12 +416,16 @@ sealed class SetupWindow : Window
         channelBox.SelectedIndex = channel == UpdateChannel.Beta ? 1 : 0;
         channelBox.SelectionChanged += (_, _) => channel = channelBox.SelectedIndex == 1 ? UpdateChannel.Beta : UpdateChannel.Stable;
         var usage = Ui.Toggle(shareUsage, on => shareUsage = on, L.T("Share anonymous usage statistics"));
-        body.Children.Add(Ui.Card(
+        // A Store copy (adr/0025): the Store updates it, so there's nothing to choose about updates.
+        var store = App.Current.Updater.Kind == InstallKind.Store;
+        body.Children.Add(Ui.Card(new UIElement?[]
+        {
             Ui.Row(L.T("Start LLMTray when you sign in"), L.T("It starts in the notification area, without opening this window."), startup),
-            Ui.Row(L.T("Check for updates automatically"), null, check),
-            Ui.Row(L.T("Update channel"), L.T("Beta: pre-release builds with features still being tested."), channelBox),
+            store ? null : Ui.Row(L.T("Check for updates automatically"), null, check),
+            store ? null : Ui.Row(L.T("Update channel"), L.T("Beta: pre-release builds with features still being tested."), channelBox),
             // The first report goes only after today ends: there's time to turn it off.
-            Ui.Row(L.T("Share anonymous usage statistics"), MainWindow.UsageConsent, usage)));
+            Ui.Row(L.T("Share anonymous usage statistics"), MainWindow.UsageConsent, usage),
+        }.OfType<UIElement>().ToArray()));
     }
 
     void Done()
@@ -437,7 +441,7 @@ sealed class SetupWindow : Window
         var tools = webTools.Where(Core.Tools.ToolCatalog.UsesNetwork).Select(t => MainWindow.ToolTitle(t, t)).ToList();
         rows.Add(Ui.Row(L.T("Web tools"), null, Ui.Value(tools.Count == 0 ? L.T("Off") : string.Join(", ", tools))));
         rows.Add(Ui.Row(L.T("Start LLMTray when you sign in"), null, Ui.Value(signIn == true ? L.T("On") : L.T("Off"))));
-        rows.Add(Ui.Row(L.T("Update channel"), null, Ui.Value(channel == UpdateChannel.Beta ? L.T("Beta") : L.T("Stable"))));
+        if (App.Current.Updater.Kind != InstallKind.Store) rows.Add(Ui.Row(L.T("Update channel"), null, Ui.Value(channel == UpdateChannel.Beta ? L.T("Beta") : L.T("Stable"))));
         body.Children.Add(Ui.Card(rows.ToArray()));
     }
 

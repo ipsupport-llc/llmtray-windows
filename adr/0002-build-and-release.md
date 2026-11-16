@@ -86,7 +86,7 @@ Status: accepted (2026-11-09)
 
 ## Not yet
 
-- The Store build. Partner Center assigns the package `Name` and
+- The Store build (done in adr/0025, by restamping the built packages rather than a StoreUpload build). Partner Center assigns the package `Name` and
   `Publisher` (`CN=<account GUID>`), so the Store flavor gets them stamped
   in CI like the version, is built with `UapAppxPackageBuildMode=StoreUpload`
   unsigned, and goes up as `.msixupload` by the maintainer. Check then

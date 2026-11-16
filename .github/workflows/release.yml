@@ -322,6 +322,115 @@ jobs:
           gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --verify-tag \
             --title "LLMTray for Windows ${TAG#v}" --notes-file notes.md "${flags[@]}"
 
+  # The Microsoft Store (adr/0025). The same unsigned packages, given the
+  # identity Partner Center assigned (repository variables STORE_PACKAGE_NAME,
+  # STORE_PUBLISHER, STORE_PUBLISHER_DISPLAY_NAME), bundled into one
+  # .msixupload. Made for a stable tag and for a dry run; skipped until the
+  # variables are set. The Store signs it.
+  store-package:
+    needs: [version, package]
+    # Any of the four set means the Store is being set up: then all of them must be (the step below says which is missing).
+    if: (vars.STORE_PACKAGE_NAME != '' || vars.STORE_PUBLISHER != '' || vars.STORE_PUBLISHER_DISPLAY_NAME != '' || vars.STORE_PRODUCT_ID != '') && (github.event_name == 'workflow_dispatch' || needs.version.outputs.prerelease != 'true')
+    runs-on: windows-latest
+    steps:
+      - name: Every Store variable is set
+        shell: pwsh
+        env:
+          STORE_PACKAGE_NAME: ${{ vars.STORE_PACKAGE_NAME }}
+          STORE_PUBLISHER: ${{ vars.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $missing = 'STORE_PACKAGE_NAME', 'STORE_PUBLISHER', 'STORE_PUBLISHER_DISPLAY_NAME', 'STORE_PRODUCT_ID' | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
+          if ($missing) { throw "repository variables missing for the Store: $($missing -join ', ')" }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: unsigned-msix-*
+          path: unsigned
+          merge-multiple: true
+      - name: Make the Store package
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
+          STORE_PACKAGE_NAME: ${{ vars.STORE_PACKAGE_NAME }}
+          STORE_PUBLISHER: ${{ vars.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}
+        run: >
+          scripts/store-package.ps1 -Msix unsigned -Version $env:PACKAGE_VERSION
+          -Name $env:STORE_PACKAGE_NAME -Publisher $env:STORE_PUBLISHER
+          -PublisherDisplayName $env:STORE_PUBLISHER_DISPLAY_NAME -Out store
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: store
+          path: store/*.msixupload
+          if-no-files-found: error
+
+  # Submitted to Partner Center for certification once the GitHub release is
+  # out: stable tags only, through the `store` environment (its reviewers
+  # approve each run; its secrets are the Partner Center app's). The app
+  # needs one submission made by hand in Partner Center first (adr/0025).
+  store-submit:
+    needs: [version, store-package, publish]
+    if: github.event_name == 'push' && needs.version.outputs.prerelease != 'true' && vars.STORE_PRODUCT_ID != ''
+    runs-on: windows-latest
+    environment: store
+    concurrency:
+      group: store-submission
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Reading the environment's protection rules.
+      actions: read
+    steps:
+      # The environment's approval is the human step before the Store (adr/0025): without a required reviewer, nothing goes.
+      - name: The store environment asks the maintainer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $rules = gh api "repos/$env:GITHUB_REPOSITORY/environments/store" --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length'
+          if ($LASTEXITCODE -ne 0) { throw "the store environment's settings couldn't be read" }
+          if ([int]$rules -lt 1) { throw 'the store environment has no required reviewer: add the maintainer before anything is submitted' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: store
+          path: store
+      - name: Set up the Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.4
+      - name: Sign in to Partner Center
+        shell: pwsh
+        env:
+          TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          foreach ($n in 'TENANT_ID', 'SELLER_ID', 'CLIENT_ID', 'CLIENT_SECRET') {
+            if (-not [Environment]::GetEnvironmentVariable($n)) { throw "the store environment has no PARTNER_CENTER_$n secret" }
+          }
+          msstore reconfigure --tenantId $env:TENANT_ID --sellerId $env:SELLER_ID --clientId $env:CLIENT_ID --clientSecret $env:CLIENT_SECRET
+          if ($LASTEXITCODE -ne 0) { throw 'Partner Center refused the credentials' }
+      - name: Submit for certification
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $upload = @(Get-ChildItem store -Filter *.msixupload)
+          if ($upload.Count -ne 1) { throw "expected one .msixupload, found $($upload.Count)" }
+          # A new submission from the last published one (listing, pricing kept), this package in it, committed.
+          # msstore v0.4.4: the package file is the argument (.msix, .msixbundle or .msixupload).
+          msstore publish $upload[0].FullName --appId $env:PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'the submission failed' }
+          # Where it stands now, for the log only: certification takes hours to days. A failure here mustn't
+          # fail the job (a re-run would publish again and replace the submission just committed).
+          msstore submission status $env:PRODUCT_ID
+          exit 0
+
   # The Scoop bucket (ipsupport-llc/scoop-bucket, adr/0005) follows the
   # release by itself: the ZIPs' own SHA-256, pushed with that repo's deploy
   # key (write access to the bucket only). A job of its own, so a failed
