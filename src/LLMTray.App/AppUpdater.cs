@@ -151,6 +151,7 @@ sealed class AppUpdater
     public ReleaseTag? Current { get; }
     public string Architecture { get; }
     public bool CanUpdate => Current is not null && Kind != InstallKind.Store;
+    // InstallAsync and the checks all start from CanUpdate: a Store copy never reaches them.
 
     public UpdateInfo? Available { get; private set; }
     public string? Status { get; private set; }

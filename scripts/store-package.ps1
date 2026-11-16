@@ -32,14 +32,19 @@ if ($packages.Count -ne 2) { throw "expected the x64 and ARM64 .msix in $Msix, f
 $work = Join-Path ([IO.Path]::GetTempPath()) ('llmtray-store-' + [guid]::NewGuid().ToString('N'))
 $bundleIn = Join-Path $work 'bundle'
 New-Item -ItemType Directory -Force $bundleIn, $Out | Out-Null
+$seen = @()
 try {
     foreach ($package in $packages) {
         $unpacked = Join-Path $work $package.BaseName
         & $makeappx unpack /p $package.FullName /d $unpacked /o /nv | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "makeappx couldn't unpack $($package.Name)" }
-        # An unsigned package carries no signature, but a signed one given by mistake would: the Store signs it anew.
-        Remove-Item -ErrorAction SilentlyContinue (Join-Path $unpacked 'AppxSignature.p7x'), (Join-Path $unpacked 'AppxBlockMap.xml'), (Join-Path $unpacked '[Content_Types].xml')
-        Remove-Item -ErrorAction SilentlyContinue -Recurse (Join-Path $unpacked 'AppxMetadata')
+        # The footprint files makeappx writes anew (a signature too, if a signed package was given: the Store signs it anew).
+        # -LiteralPath: [Content_Types] would otherwise be read as a wildcard.
+        foreach ($f in 'AppxSignature.p7x', 'AppxBlockMap.xml', '[Content_Types].xml', 'AppxMetadata') {
+            $p = Join-Path $unpacked $f
+            if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
+            if (Test-Path -LiteralPath $p) { throw "couldn't remove $f from the unpacked $($package.Name)" }
+        }
 
         $manifestPath = Join-Path $unpacked 'AppxManifest.xml'
         [xml]$m = Get-Content -Raw $manifestPath
@@ -50,7 +55,10 @@ try {
         $m.Save($manifestPath)
 
         $arch = $m.Package.Identity.ProcessorArchitecture
-        & $makeappx pack /d $unpacked /p (Join-Path $bundleIn "LLMTray_$($Version)_$arch.msix") /o /nv | Out-Null
+        if (-not $arch) { throw "$($package.Name) names no processor architecture" }
+        if ($seen -contains $arch) { throw "two packages for $arch" }
+        $seen += $arch
+        & $makeappx pack /d $unpacked /p (Join-Path $bundleIn "LLMTray_$($Version)_$arch.msix") /o | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "makeappx couldn't pack the $arch package" }
         Write-Host "$arch package: $Name, $Version"
     }
@@ -59,11 +67,15 @@ try {
     & $makeappx bundle /d $bundleIn /p $bundle /bv $Version /o | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "makeappx couldn't bundle the packages" }
 
-    # A .msixupload is a ZIP of the bundle (symbols would go beside it).
+    # A .msixupload is a ZIP of the bundle (symbols would go beside it). ZipFile, not Compress-Archive: no 2 GB limit, any name.
     $upload = Join-Path (Resolve-Path $Out) "LLMTray_$Version.msixupload"
-    if (Test-Path $upload) { Remove-Item $upload }
-    Compress-Archive -Path $bundle -DestinationPath ($upload + '.zip')
-    Move-Item ($upload + '.zip') $upload
+    if (Test-Path -LiteralPath $upload) { Remove-Item -LiteralPath $upload }
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::Open($upload, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $bundle, (Split-Path $bundle -Leaf), [IO.Compression.CompressionLevel]::NoCompression)
+    }
+    finally { $zip.Dispose() }
     Write-Host "$upload $([math]::Round((Get-Item $upload).Length / 1MB)) MB"
 }
 finally {

@@ -25,20 +25,26 @@ of adr/0001.
 - **`store-submit`** runs only for a pushed stable tag, after the GitHub
   release is published, in the `store` environment:
   - the environment's required reviewer (the maintainer) approves each run
-    in GitHub, so nothing reaches the Store without a person's click;
+    in GitHub, so nothing reaches the Store without a person's click. The
+    job's first step reads the environment's protection rules and stops if
+    it has no required reviewer;
   - its secrets are the Partner Center app's: `PARTNER_CENTER_TENANT_ID`,
     `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`,
     `PARTNER_CENTER_CLIENT_SECRET` (an Entra app added to Partner Center
     with the Manager role);
-  - the Microsoft Store Developer CLI (`msstore`, pinned) makes a new
-    submission from the last published one (listing, pricing and the rest
-    kept), puts this package in it and commits it to certification;
+  - the Microsoft Store Developer CLI (`msstore` v0.4.4, `msstore publish
+    <the .msixupload> --appId <Store ID>`) makes a new submission from the
+    last published one (listing, pricing and the rest kept), puts this
+    package in it and commits it to certification;
   - one run at a time across tags.
 - **Betas don't go to the Store.** They stay on GitHub, Scoop and the
   app's beta channel. Package flights can come later.
 - **In the app**, a copy installed from the Store (its package's signature
   kind is Store) never updates itself: Settings › Updates says the Store
-  keeps it up to date, and the updater never starts (adr/0003).
+  keeps it up to date, the updater never starts (adr/0003), and the setup
+  wizard doesn't offer update choices. The `store` artifact installed by
+  hand for testing isn't Store-signed: it's for Partner Center, not for
+  daily use.
 
 ## What the maintainer does once
 
