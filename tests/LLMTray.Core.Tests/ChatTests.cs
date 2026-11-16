@@ -142,8 +142,9 @@ public sealed class ChatClientTests : IAsyncDisposable
             else if (body["tool_choice"] is null && lastRole == "user" && lastText.Contains("load and echo") && named.Contains("fake_echo"))
             {
                 // A load, then a call that brings outside text, in one response.
-                var both = new JsonArray(Call("l5", "load_tools", """{"group":"documents"}"""), Call("e5", "fake_echo", """{"text":"page text"}"""));
-                both[1]!["index"] = 1;
+                var both = new JsonArray(Call("l5", "load_tools", """{"group":"documents"}"""), Call("l6", "load_tools", """{"group":"documents"}"""),
+                    Call("l7", "Load_Tools", """{"name":"documents"}"""), Call("e5", "fake_echo", """{"text":"page text"}"""));
+                for (var i = 1; i < both.Count; i++) both[i]!["index"] = i;
                 var chunk = new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["delta"] = new JsonObject { ["tool_calls"] = both } }) };
                 await context.Response.WriteAsync("data: " + chunk.ToJsonString() + "\n\n");
                 await context.Response.WriteAsync("data: [DONE]\n\n");
@@ -443,8 +444,12 @@ public sealed class ChatClientTests : IAsyncDisposable
         var last = bodies.Last(b => b["stream"]!.GetValue<bool>());
         // The next request of the turn: not declared, and the load's own answer says it waits.
         Assert.DoesNotContain("make_document", Declared(last));
-        var loadAnswer = last["messages"]!.AsArray().Single(m => m!["tool_call_id"]?.GetValue<string>() == "l5")!["content"]!.GetValue<string>();
-        Assert.Contains("from the user's next message", loadAnswer);
+        // Each load's answer, a repeat and a re-spelled one too.
+        foreach (var id in new[] { "l5", "l6", "l7" })
+        {
+            var loadAnswer = last["messages"]!.AsArray().Single(m => m!["tool_call_id"]?.GetValue<string>() == id)!["content"]!.GetValue<string>();
+            Assert.Contains("from the user's next message", loadAnswer);
+        }
         Assert.True(chat.HasToolGroup("documents"));
         await chat.SendAsync("hi", options);
         Assert.Contains("make_document", Declared(bodies.Last(b => b["stream"]!.GetValue<bool>())));

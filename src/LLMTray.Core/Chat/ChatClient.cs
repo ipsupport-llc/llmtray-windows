@@ -648,8 +648,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         // A name one of ours answers to (declared now, a chat tool or a former name of one, a project or folder tool): never taken for a server's.
         bool KnownName(string called) =>
+            // Each name once: the resolver takes a spelling only when one name matches it.
             Tools.ToolNameResolver.Resolve(called, [.. (definitions ?? []).Where(d => mcpTools.All(t => t.ModelName != d?["function"]?["name"]?.GetValue<string>()))
-                .Select(d => d?["function"]?["name"]?.GetValue<string>() ?? ""), Documents.DocumentTool.Name, Tools.ToolGroups.LoaderName]) is not null
+                .Select(d => d?["function"]?["name"]?.GetValue<string>() ?? "").Append(Documents.DocumentTool.Name).Append(Tools.ToolGroups.LoaderName)
+                .Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)]) is not null
             || options.Tools?.Knows(called) == true
             || ProjectFiles.ProjectFilesTool.Is(called)
             || Folders.FolderTools.IsFolderTool(called, out _);
@@ -740,6 +742,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     if (ran.TryGetValue(key, out var earlier))
                     {
                         history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = earlier });
+                        // A repeated load in this response: its answer follows the first one's, demoted or not.
+                        foreach (var (group, _, _) in staged.Where(st => st.Key == key).ToList()) staged.Add((group, call.Id, key));
                         continue;
                     }
                     answer.Activity = call.Name;
@@ -748,7 +752,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
                     try
                     {
-                        if (mcp is null && string.Equals(call.Name.Trim(), Tools.ToolGroups.LoaderName, StringComparison.OrdinalIgnoreCase) && offeredGroups.Count > 0)
+                        if (mcp is null && Tools.ToolNameResolver.Resolve(call.Name, [Tools.ToolGroups.LoaderName]) is not null && offeredGroups.Count > 0)
                         {
                             // Ordinary trust: it reaches nothing; after outside text the group waits for the user (a file can't hand the model a tool).
                             var load = Tools.ToolGroups.Load(call.Arguments, offeredGroups, chatGroups, outsideText || projectText || folderText || mcpText,
@@ -761,11 +765,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                                     lock (sync)
                                     {
                                         // The chat this turn is for, checked under the lock that guards a switch of chats.
-                                        if (mine == epoch && !loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                        if (mine == epoch && !loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
                                     }
                                 }
-                                else if (!staged.Any(st => st.Group == group))
+                                else
                                 {
+                                    // Every call that asked (a repeat in other words too): a demotion rewrites each answer.
                                     staged.Add((group, call.Id, key));
                                 }
                             }
@@ -781,7 +786,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             outcome = new Tools.ToolOutcome(Tools.ToolGroups.NotLoaded(call.Name.Trim(), waiting.Key), null, true);
                             notLoadedKeys[key] = waiting.Key;
                         }
-                        else if (mcp is null && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
+                        else if (mcp is null && Tools.ToolNameResolver.Resolve(call.Name, [Documents.DocumentTool.Name]) is not null)
                         {
                             // The project the turn started in: a chat moved meanwhile gets no pictures (never the new project's p1).
                             (outcome, var made) = await MakeDocumentAsync(call.Arguments, documents, temporaryTurn, madeDocument,
