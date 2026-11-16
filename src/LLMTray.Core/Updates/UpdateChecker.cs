@@ -7,7 +7,8 @@ namespace LLMTray.Core.Updates;
 public enum UpdateChannel { Stable, Beta }
 
 /// <summary>How this copy was installed: an MSIX package, the portable ZIP (adr/0004) or the installer (adr/0007).</summary>
-public enum InstallKind { Package, Portable, Installer }
+/// <summary>How this copy was installed. <see cref="Store"/>: from the Microsoft Store, which updates it (adr/0025); never updated by the app.</summary>
+public enum InstallKind { Package, Portable, Installer, Store }
 
 /// <summary>A release asset: the package for one architecture.</summary>
 public sealed record ReleaseAsset(string Name, Uri Url, long Size, string? Sha256);

@@ -47,3 +47,23 @@ The same steps with a `vX.Y.Z` tag, on the maintainer's OK. The release is
 not a pre-release, so the stable update channel (adr/0003) and GitHub's
 *Latest* pick it up; beta users move to it too, as it sorts above every
 beta of that version (adr/0002). Scoop follows it as it follows betas.
+
+## The Microsoft Store (adr/0025)
+
+A stable tag also makes the Store package (`store` artifact, a
+`.msixupload` with the Partner Center identity) and, once the GitHub
+release is out, waits in the `store` environment for the maintainer's
+approval; then it submits the package to Partner Center for certification.
+Betas don't go to the Store. A dry run makes the package without
+submitting it.
+
+Set up once (details in adr/0025):
+
+- **Repository variables:** `STORE_PACKAGE_NAME`, `STORE_PUBLISHER`
+  (`CN=<GUID>`), `STORE_PUBLISHER_DISPLAY_NAME`, `STORE_PRODUCT_ID`. Until
+  they're set, the Store jobs are skipped.
+- **`store` environment:** the maintainer as required reviewer; secrets
+  `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`,
+  `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET`.
+- **The first submission** is made by hand in Partner Center with the
+  `store` artifact.

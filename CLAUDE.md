@@ -28,7 +28,9 @@
 - `main` changes only through PRs. Releases are tags: `vX.Y.Z-beta.N` for
   betas, `vX.Y.Z` for stable. A stable tag needs the maintainer's OK. Never
   move or re-push an existing tag; use the next number.
-- Agents never upload to the Microsoft Store. The maintainer does that.
+- Agents never upload to the Microsoft Store by hand. Store submissions go
+  only through `release.yml`'s `store-submit` job on a stable tag, approved
+  by the maintainer in the `store` environment (adr/0025).
 - Look at UI before shipping it: run the app (or a VM) and screenshot the
   window.
 - Repo text (code, comments, ADRs, commits) is in English. Translations come
