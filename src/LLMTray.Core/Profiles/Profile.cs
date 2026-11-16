@@ -125,7 +125,7 @@ public sealed class Profile
 
     /// <summary>Fields this profile sets: "overrides N settings".</summary>
     public int OverrideCount => ProfileField.All.Count(f => f.IsSet(this))
-        + LLMTray.Core.Tools.ToolGroups.Read(Tools.ToolLoading).Keys.Count(g => g != LLMTray.Core.Tools.ToolGroups.Documents);
+        + LLMTray.Core.Tools.ToolGroups.Read(Tools.ToolLoading).Keys.Count(g => !string.Equals(g, LLMTray.Core.Tools.ToolGroups.Documents, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>One optional profile field, for counting, resetting and the editor.</summary>

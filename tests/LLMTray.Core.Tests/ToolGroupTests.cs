@@ -25,6 +25,12 @@ public sealed class ToolGroupTests
         Assert.Equal(2, merged.Count);
         Assert.Equal(ToolLoading.OnDemand, ToolGroups.LoadingOf(merged, "github"));
         Assert.Equal(ToolLoading.OnDemand, ToolGroups.LoadingOf(null, "documents"));
+        // A group's name in another case is the same group; setting it replaces that entry.
+        var cased = J("""{"Documents":"always"}""");
+        Assert.Equal(ToolLoading.Always, ToolGroups.LoadingOf(ToolGroups.Read(cased), "documents"));
+        Assert.Equal("""{"documents":"onDemand"}""", ToolGroups.With(cased, "documents", ToolLoading.OnDemand)!.Value.GetRawText());
+        // A server's tool never takes a name one of ours answers to.
+        Assert.Equal("get_current_date2", LLMTray.Core.Mcp.McpNames.ToolName("get", "current_date", new HashSet<string>(), n => n == "get_current_date"));
         // Not an object at all: none, not a failure.
         Assert.Empty(ToolGroups.Read(J("\"always\"")));
         Assert.Empty(ToolGroups.Names(J("""{"a":1}""")));

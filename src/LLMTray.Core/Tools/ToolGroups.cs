@@ -48,13 +48,14 @@ public static class ToolGroups
     /// <summary>A list of names (the chat file's loaded and pending groups) read leniently: only string entries; anything else reads as none.</summary>
     public static List<string> Names(JsonElement? raw) =>
         raw is { ValueKind: JsonValueKind.Array } a
-            ? [.. a.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).Where(n => n.Length > 0)]
+            ? [.. a.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!.Trim()).Where(n => n.Length > 0).Distinct(StringComparer.Ordinal)]
             : [];
 
     /// <summary>Names as the chat file stores them; null for none.</summary>
     public static JsonElement? NamesElement(IEnumerable<string> names)
     {
-        var list = names.Order(StringComparer.Ordinal).ToList();
+        // In the order given: the order they were loaded is the order they're declared.
+        var list = names.ToList();
         if (list.Count == 0) return null;
         using var document = JsonDocument.Parse(new JsonArray([.. list.Select(n => (JsonNode)JsonValue.Create(n)!)]).ToJsonString());
         return document.RootElement.Clone();
@@ -66,11 +67,12 @@ public static class ToolGroups
     /// </summary>
     public static Dictionary<string, ToolLoading> Read(JsonElement? raw)
     {
-        var map = new Dictionary<string, ToolLoading>(StringComparer.Ordinal);
+        // Group names in any case (keys are lower case; a hand edit may not be).
+        var map = new Dictionary<string, ToolLoading>(StringComparer.OrdinalIgnoreCase);
         if (raw is not { ValueKind: JsonValueKind.Object } o) return map;
         foreach (var entry in o.EnumerateObject())
         {
-            if (entry.Value.ValueKind == JsonValueKind.String && Parse(entry.Value.GetString()) is { } loading) map[entry.Name] = loading;
+            if (entry.Value.ValueKind == JsonValueKind.String && Parse(entry.Value.GetString()) is { } loading) map[entry.Name.Trim()] = loading;
         }
         return map;
     }
@@ -86,7 +88,8 @@ public static class ToolGroups
         {
             foreach (var entry in current.EnumerateObject())
             {
-                if (entry.Name != group) o[entry.Name] = JsonNode.Parse(entry.Value.GetRawText());
+                // The group's entry in any case is replaced, not left beside the new one.
+                if (!string.Equals(entry.Name.Trim(), group, StringComparison.OrdinalIgnoreCase)) o[entry.Name] = JsonNode.Parse(entry.Value.GetRawText());
             }
         }
         if (loading is { } value) o[group] = Name(value);
@@ -98,7 +101,7 @@ public static class ToolGroups
     /// <summary>Per group, not per field: the overlay's value, else the base's, else on demand.</summary>
     public static IReadOnlyDictionary<string, ToolLoading> Merged(JsonElement? overlay, JsonElement? @base)
     {
-        var merged = Read(@base);
+        var merged = Read(@base);  // keyed in any case
         foreach (var (group, loading) in Read(overlay)) merged[group] = loading;
         return merged;
     }
@@ -124,7 +127,7 @@ public static class ToolGroups
     /// loaded -- from the user's next message when the turn has read outside
     /// text (a file can't hand the model a new tool in its own turn).
     /// </summary>
-    public static LoadResult Load(string arguments, IReadOnlyList<ToolGroup> offered, IReadOnlySet<string> loaded, bool outsideText, Func<ToolGroup, string> tools)
+    public static LoadResult Load(string arguments, IReadOnlyList<ToolGroup> offered, IReadOnlyCollection<string> loaded, bool outsideText, Func<ToolGroup, string> tools)
     {
         var parsed = ToolArguments.Parse(arguments, LoaderSchema(offered));
         var name = parsed.String("group");
@@ -137,19 +140,16 @@ public static class ToolGroups
         {
             return new LoadResult($"{LoaderName}: {group.Name} is already loaded; its tools ({tools(group)}) are available.", null, false, false);
         }
-        if (outsideText)
-        {
-            return new LoadResult($"{LoaderName}: {group.Name} will be available from the user's next message "
-                + "(it can't be loaded after file, web or server text in the same turn). Tell the user to ask again.", group, true, false);
-        }
+        if (outsideText) return new LoadResult(Waits(group.Name), group, true, false);
         return new LoadResult($"{LoaderName}: {group.Name} is loaded; {tools(group)} can be called from the next step. Call it now if the user's request needs it.",
             group, false, false);
     }
 
+    /// <summary>A load that waits for the user's next message.</summary>
+    public static string Waits(string group) => $"{LoaderName}: {group} will be available from the user's next message "
+        + "(it can't be loaded after file, web or server text in the same turn). Tell the user to ask again.";
+
     /// <summary>The answer to a call of a tool whose group this chat hasn't loaded (a model that saw it elsewhere).</summary>
     public static string NotLoaded(string tool, string group) =>
-        SelectableTool.Error($"{tool}{NotLoadedMark} Call {LoaderName}({{\"group\":\"{group}\"}}) first, then call it.");
-
-    /// <summary>What every "load it first" answer has: a load makes those answers stale.</summary>
-    public const string NotLoadedMark = " isn't loaded in this chat.";
+        SelectableTool.Error($"{tool} isn't loaded in this chat. Call {LoaderName}({{\"group\":\"{group}\"}}) first, then call it.");
 }

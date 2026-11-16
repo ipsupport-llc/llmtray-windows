@@ -139,6 +139,16 @@ public sealed class ChatClientTests : IAsyncDisposable
                 await context.Response.WriteAsync("data: [DONE]\n\n");
                 return;
             }
+            else if (body["tool_choice"] is null && lastRole == "user" && lastText.Contains("load and echo") && named.Contains("fake_echo"))
+            {
+                // A load, then a call that brings outside text, in one response.
+                var both = new JsonArray(Call("l5", "load_tools", """{"group":"documents"}"""), Call("e5", "fake_echo", """{"text":"page text"}"""));
+                both[1]!["index"] = 1;
+                var chunk = new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["delta"] = new JsonObject { ["tool_calls"] = both } }) };
+                await context.Response.WriteAsync("data: " + chunk.ToJsonString() + "\n\n");
+                await context.Response.WriteAsync("data: [DONE]\n\n");
+                return;
+            }
             else if (body["tool_choice"] is null && lastRole == "user" && lastText.Contains("make_document directly"))
             {
                 forced = Call("l3", "make_document", """{"title":"T","content":"x"}""");
@@ -319,7 +329,8 @@ public sealed class ChatClientTests : IAsyncDisposable
         var again = new ChatClient(http, api, store);
         again.Load(chat.Id!.Value);
         await again.SendAsync("hi", new ChatOptions(null, Documents: printer));
-        Assert.Contains("make_document", Declared(bodies.Last(b => b["stream"]!.GetValue<bool>())));
+        // In the order the loading turn ended with: the declarations change once.
+        Assert.Equal(["load_tools", "make_document"], Declared(bodies.Last(b => b["stream"]!.GetValue<bool>())));
 
         // A new chat starts without it.
         again.New();
@@ -415,6 +426,28 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.True(chat.Load(id));
         Assert.False(chat.HasToolGroup("documents"));
         Assert.True(chat.HasToolGroup("notion"));
+    }
+
+    [Fact]
+    public async Task ALoadBesideOutsideTextWaitsAndTheModelIsToldSo()
+    {
+        var store = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(root, "mcp.json"));
+        await using var hub = new LLMTray.Core.Mcp.McpHub(store, new HttpClient(), "test", root, transport: _ => new FakeMcpServer());
+        await hub.ReviewAndEnableAsync(store.Add(new LLMTray.Core.Mcp.McpServerConfig { Name = "Fake", Command = "fake" }), default);
+        var profile = new LLMTray.Core.Profiles.Profile();
+        profile.Tools.ToolLoading = System.Text.Json.JsonDocument.Parse("""{"fake":"always"}""").RootElement.Clone();
+        var options = new ChatOptions(null, Profile: LLMTray.Core.Profiles.ProfileResolver.Resolve(null, profile), Documents: new FakePrinter(),
+            Mcp: hub, Approve: (_, _) => Task.FromResult(McpApproval.Allow));
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        await chat.SendAsync("load and echo", options);
+        var last = bodies.Last(b => b["stream"]!.GetValue<bool>());
+        // The next request of the turn: not declared, and the load's own answer says it waits.
+        Assert.DoesNotContain("make_document", Declared(last));
+        var loadAnswer = last["messages"]!.AsArray().Single(m => m!["tool_call_id"]?.GetValue<string>() == "l5")!["content"]!.GetValue<string>();
+        Assert.Contains("from the user's next message", loadAnswer);
+        Assert.True(chat.HasToolGroup("documents"));
+        await chat.SendAsync("hi", options);
+        Assert.Contains("make_document", Declared(bodies.Last(b => b["stream"]!.GetValue<bool>())));
     }
 
     [Fact]

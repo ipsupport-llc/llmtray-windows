@@ -210,8 +210,16 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     }
 
     /// <summary>On-demand tool groups this chat loaded (Mac adr/0020), and those waiting for the user's next message.</summary>
-    readonly HashSet<string> loadedGroups = new(StringComparer.Ordinal);
-    readonly HashSet<string> pendingGroups = new(StringComparer.Ordinal);
+    /// <remarks>In the order they were loaded: a turn declares them in that order, as the turn that loaded them did.</remarks>
+    readonly List<string> loadedGroups = [];
+    readonly List<string> pendingGroups = [];
+
+    /// <summary>Groups waiting for the user's step become loaded, in the order they were asked for. Under <c>sync</c>.</summary>
+    void PromotePendingLocked()
+    {
+        foreach (var g in pendingGroups) if (!loadedGroups.Contains(g)) loadedGroups.Add(g);
+        pendingGroups.Clear();
+    }
 
     /// <summary>Whether this chat has loaded a tool group (or will at the next message).</summary>
     public bool HasToolGroup(string group)
@@ -227,7 +235,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     {
         lock (sync)
         {
-            if (!loadedGroups.Add(group)) return;
+            if (loadedGroups.Contains(group)) return;
+            loadedGroups.Add(group);
             pendingGroups.Remove(group);
         }
         Save();
@@ -286,9 +295,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             projectFilesSeen = file.ProjectFilesSeen;
             loadedGroups.Clear();
             pendingGroups.Clear();
-            loadedGroups.UnionWith(Tools.ToolGroups.Names(file.LoadedToolGroups));
-            pendingGroups.UnionWith(Tools.ToolGroups.Names(file.PendingToolGroups));
-            pendingGroups.ExceptWith(loadedGroups);
+            loadedGroups.AddRange(Tools.ToolGroups.Names(file.LoadedToolGroups));
+            pendingGroups.AddRange(Tools.ToolGroups.Names(file.PendingToolGroups).Where(g => !loadedGroups.Contains(g)));
             lastSeq = Math.Max(file.LastSeq ?? 0, file.Messages.Max(m => m.Seq) ?? 0);
             Id = file.Id;
             loaded = file;
@@ -347,8 +355,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         lock (sync)
         {
             // Groups loaded after outside text in an earlier turn: from this message on (Mac adr/0020).
-            loadedGroups.UnionWith(pendingGroups);
-            pendingGroups.Clear();
+            PromotePendingLocked();
         }
         lock (sync) Messages.Add(new ChatMessage
         {
@@ -407,8 +414,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             if (Messages[^1].Role == "assistant") Messages.RemoveAt(Messages.Count - 1);
             if (Messages.Count == 0 || Messages[^1].Role != "user") return Task.CompletedTask;
             // Asking again is the user's own step too: groups waiting for it are loaded (Mac adr/0020).
-            loadedGroups.UnionWith(pendingGroups);
-            pendingGroups.Clear();
+            PromotePendingLocked();
         }
         return AnswerAsync(options);
     }
@@ -580,7 +586,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // Tools loaded when needed (Mac adr/0020, adr/0027): documents and each MCP server are declared only when
         // set to always or loaded in this chat; load_tools offers the rest, and stays declared once they're loaded.
         var loading = options.Profile?.ToolLoading;
-        HashSet<string> chatGroups;
+        List<string> chatGroups;
         lock (sync) chatGroups = [.. loadedGroups];
         bool Declares(string group) => Tools.ToolGroups.LoadingOf(loading, group) == Tools.ToolLoading.Always || chatGroups.Contains(group);
         var offeredGroups = new List<Tools.ToolGroup>();
@@ -589,11 +595,6 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             offeredGroups.Add(Tools.ToolGroups.DocumentsGroup);
         }
         var documentsDeclared = documents is not null && Declares(Tools.ToolGroups.Documents);
-        if (documentsDeclared)
-        {
-            definitions ??= [];
-            definitions.Add(Documents.DocumentTool.Definition());
-        }
         // The MCP servers this turn may use: never in a temporary chat, never without someone to ask, not with outside text from the start.
         var mcpServers = options.Mcp is not null && options.Approve is not null && !Temporary && !lockedDown
             ? options.Mcp.Store.Load().Where(s => s.Enabled && s.Key.Length > 0).ToList()
@@ -601,11 +602,18 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // A server named like a built-in group can't be loaded by that name: it's declared as before.
         bool ServerOnDemand(Mcp.McpServerConfig s) => s.Key != Tools.ToolGroups.Documents && Tools.ToolGroups.LoadingOf(loading, s.Key) == Tools.ToolLoading.OnDemand;
         foreach (var server in mcpServers.Where(ServerOnDemand)) offeredGroups.Add(Tools.ToolGroups.McpGroup(server.Key, server.Name));
-        bool ServerDeclared(Mcp.McpServerConfig s) => !ServerOnDemand(s) || chatGroups.Contains(s.Key);
+        // In one order every turn: load_tools, the groups set to always, then the loaded ones in the order they were
+        // loaded -- where a load mid-turn puts them -- so loading changes the declarations once.
         if (offeredGroups.Count > 0)
         {
             definitions ??= [];
             definitions.Add(Tools.ToolGroups.LoaderDefinition(offeredGroups));
+        }
+        var documentsAlways = documents is not null && Tools.ToolGroups.LoadingOf(loading, Tools.ToolGroups.Documents) == Tools.ToolLoading.Always;
+        if (documentsAlways)
+        {
+            definitions ??= [];
+            definitions.Add(Documents.DocumentTool.Definition());
         }
         // What the last request weighed and what the server counted for it: the next one's size is estimated from them.
         long lastRequestBytes = 0;
@@ -628,7 +636,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             answer.Activity = "mcp";
             if (mine == epoch) Changed?.Invoke();
             var keys = mcpServers.Where(which).Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
-            var more = await options.Mcp!.DeclaredAsync(taken, token, s => keys.Contains(s.Key)).ConfigureAwait(false);
+            var more = await options.Mcp!.DeclaredAsync(taken, token, s => keys.Contains(s.Key), reserved: KnownName).ConfigureAwait(false);
             answer.Activity = null;
             if (more.Count == 0) return;
             definitions ??= [];
@@ -640,14 +648,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         // A name one of ours answers to (declared now, a chat tool or a former name of one, a project or folder tool): never taken for a server's.
         bool KnownName(string called) =>
-            (definitions ?? []).Any(d => string.Equals(d?["function"]?["name"]?.GetValue<string>(), called, StringComparison.OrdinalIgnoreCase))
+            Tools.ToolNameResolver.Resolve(called, [.. (definitions ?? []).Where(d => mcpTools.All(t => t.ModelName != d?["function"]?["name"]?.GetValue<string>()))
+                .Select(d => d?["function"]?["name"]?.GetValue<string>() ?? ""), Documents.DocumentTool.Name, Tools.ToolGroups.LoaderName]) is not null
             || options.Tools?.Knows(called) == true
             || ProjectFiles.ProjectFilesTool.Is(called)
-            || Folders.FolderTools.IsFolderTool(called, out _)
-            || string.Equals(called, Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(called, Tools.ToolGroups.LoaderName, StringComparison.OrdinalIgnoreCase);
+            || Folders.FolderTools.IsFolderTool(called, out _);
         // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
-        var staged = new List<Tools.ToolGroup>();
+        var staged = new List<(Tools.ToolGroup Group, string CallId, string Key)>();
+        // The calls answered "load it first", by group: a load drops only those from the repeated-call answers.
+        var notLoadedKeys = new Dictionary<string, string>(StringComparer.Ordinal);
         // The on-demand server (not loaded) whose tool a call names: the longest key that prefixes it.
         Mcp.McpServerConfig? NotLoadedServer(string called) => KnownName(called) ? null : mcpServers
             .Where(s => ServerOnDemand(s) && !chatGroups.Contains(s.Key) && called.StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
@@ -658,10 +667,22 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             // The user's MCP servers (adr/0012): never in a temporary chat, never without someone to ask.
             // Inside the turn: a Stop while servers start ends the turn like any other.
-            // Only the servers this chat declares are started.
-            if (mcpServers.Any(ServerDeclared))
+            // Only the servers this chat declares are started: those set to always, then the ones loaded, in that order.
+            if (mcpServers.Any(s => !ServerOnDemand(s)))
             {
-                await DeclareMcpAsync(ServerDeclared).ConfigureAwait(false);
+                await DeclareMcpAsync(s => !ServerOnDemand(s)).ConfigureAwait(false);
+            }
+            foreach (var group in chatGroups)
+            {
+                if (group == Tools.ToolGroups.Documents && documents is not null && !documentsAlways)
+                {
+                    definitions ??= [];
+                    definitions.Add(Documents.DocumentTool.Definition());
+                }
+                else if (mcpServers.FirstOrDefault(s => s.Key == group) is { } server && ServerOnDemand(server))
+                {
+                    await DeclareMcpAsync(s => s.Key == server.Key).ConfigureAwait(false);
+                }
             }
             for (var round = 0; ; round++)
             {
@@ -743,20 +764,22 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                                         if (mine == epoch && !loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
                                     }
                                 }
-                                else if (!staged.Contains(group))
+                                else if (!staged.Any(st => st.Group == group))
                                 {
-                                    staged.Add(group);
+                                    staged.Add((group, call.Id, key));
                                 }
                             }
                         }
                         else if (mcp is null && documents is not null && !documentsDeclared
-                            && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
+                            && Tools.ToolNameResolver.Resolve(call.Name, [Documents.DocumentTool.Name]) is not null)
                         {
                             outcome = new Tools.ToolOutcome(Tools.ToolGroups.NotLoaded(Documents.DocumentTool.Name, Tools.ToolGroups.Documents), null, true);
+                            notLoadedKeys[key] = Tools.ToolGroups.Documents;
                         }
                         else if (mcp is null && NotLoadedServer(call.Name.Trim()) is { } waiting)
                         {
                             outcome = new Tools.ToolOutcome(Tools.ToolGroups.NotLoaded(call.Name.Trim(), waiting.Key), null, true);
+                            notLoadedKeys[key] = waiting.Key;
                         }
                         else if (mcp is null && string.Equals(call.Name.Trim(), Documents.DocumentTool.Name, StringComparison.OrdinalIgnoreCase))
                         {
@@ -841,18 +864,31 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         if (mine == epoch)
                         {
-                            foreach (var group in staged)
+                            foreach (var (group, _, _) in staged)
                             {
                                 if (after)
                                 {
-                                    if (!loadedGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                    if (!loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
                                 }
-                                else
+                                else if (!loadedGroups.Contains(group.Name))
                                 {
                                     loadedGroups.Add(group.Name);
                                     pendingGroups.Remove(group.Name);
                                     applied.Add(group);
                                 }
+                            }
+                        }
+                    }
+                    if (after)
+                    {
+                        // The model was told "loaded": its answer says what happened instead, and a repeat gets the same.
+                        foreach (var (group, callId, key) in staged)
+                        {
+                            var waits = Tools.ToolGroups.Waits(group.Name);
+                            ran[key] = waits;
+                            foreach (var m in history.OfType<JsonObject>().Where(m => m["role"]?.GetValue<string>() == "tool" && m["tool_call_id"]?.GetValue<string>() == callId))
+                            {
+                                m["content"] = waits;
                             }
                         }
                     }
@@ -870,11 +906,12 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                         {
                             await DeclareMcpAsync(s => s.Key == group.McpServer).ConfigureAwait(false);
                         }
-                    }
-                    if (applied.Count > 0)
-                    {
-                        // Only the "load it first" answers are stale now; every other repeated call still answers as it ran.
-                        foreach (var stale in ran.Where(r => r.Value.Contains(Tools.ToolGroups.NotLoadedMark, StringComparison.Ordinal)).Select(r => r.Key).ToList()) ran.Remove(stale);
+                        // Only this group's "load it first" answers are stale now; every other repeated call still answers as it ran.
+                        foreach (var stale in notLoadedKeys.Where(k => k.Value == group.Name).Select(k => k.Key).ToList())
+                        {
+                            ran.Remove(stale);
+                            notLoadedKeys.Remove(stale);
+                        }
                     }
                 }
                 token.ThrowIfCancellationRequested();

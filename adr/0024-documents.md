@@ -157,7 +157,8 @@ servers). Every declared tool costs tokens in every request, and
 - **The profile's `tools.toolLoading`**: `group → always | onDemand`, the
   Mac's field and spelling. It is merged per group (the overlay's value,
   else Default's, else on demand) and read leniently: a value that isn't
-  one of the two, or a field that isn't an object, is skipped, never the
+  one of the two, or a field that isn't an object, is skipped (group names
+  in any case), never the
   whole profile, and is written back as it was. Settings › Profiles has a
   "Documents tools" row; its Reset clears the documents entry only. A
   server's group is set in the profile's file, as on the Mac.
@@ -170,14 +171,20 @@ servers). Every declared tool costs tokens in every request, and
   the same turn, once every call of the response that asked for it has run:
   a tool called beside `load_tools` in that response is answered "call
   load_tools first". The group's tools are added after the ones declared,
-  and only the turn's "load it first" answers are dropped from the
-  repeated-call answers. Built-in names are reserved before any server's
-  tools are named, so a server's tool never takes `make_document`.
+  and only that group's "load it first" answers are dropped from the
+  repeated-call answers. Every name one of ours answers to (declared, a
+  former name, an alias) is reserved before a server's tools are named, so
+  a server's tool never takes `make_document` or `get_current_date`.
+- **One order every turn**: `load_tools`, the groups set to always, then the
+  loaded groups in the order they were loaded (as saved). A load mid-turn
+  puts its tools at the end, where the next turn has them too, so the
+  declarations change once.
 - **After outside text** (file, folder, web, MCP or shown text, pinned
   files included) a load waits in `pendingToolGroups` and becomes loaded
   when the user sends the next message (or asks again), so a file can't
   hand the model a new tool in its own turn. Outside text read by another
-  call of the same response counts too.
+  call of the same response counts too: that load's answer is rewritten to
+  say it waits.
 - **The + menu**: Make a Document… and Use <server> load the group in a
   saved chat. A group already on shows checked.
 - **Saved with the chat**: `loadedToolGroups` and `pendingToolGroups` in the

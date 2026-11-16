@@ -463,7 +463,9 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
     /// still as reviewed. A server that doesn't start is skipped (its log says why).
     /// <paramref name="only"/>: the servers this chat declares (loaded, or always); the others aren't started.
     /// </summary>
-    public async Task<IReadOnlyList<McpDeclared>> DeclaredAsync(ISet<string> takenNames, CancellationToken cancellationToken, Func<McpServerConfig, bool>? only = null)
+    /// <paramref name="reserved"/>: names one of the app's own tools answers to (a former name, an alias): never given to a server's tool.
+    public async Task<IReadOnlyList<McpDeclared>> DeclaredAsync(ISet<string> takenNames, CancellationToken cancellationToken, Func<McpServerConfig, bool>? only = null,
+        Func<string, bool>? reserved = null)
     {
         var declared = new List<McpDeclared>();
         foreach (var server in store.Load().Where(s => s.Enabled && (only is null || only(s))))
@@ -485,7 +487,7 @@ public sealed class McpHub(McpServerStore store, HttpClient http, string clientV
             foreach (var tool in tools)
             {
                 if (!server.Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) continue;
-                declared.Add(new McpDeclared(McpNames.ToolName(server.Key, tool.Name, takenNames), server, tool));
+                declared.Add(new McpDeclared(McpNames.ToolName(server.Key, tool.Name, takenNames, reserved), server, tool));
             }
         }
         return declared;
