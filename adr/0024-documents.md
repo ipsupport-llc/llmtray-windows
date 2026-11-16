@@ -145,9 +145,57 @@ unchanged.
   missing its list, or has a name the store didn't give (a path, `..`),
   nothing is changed or deleted until it is fixed.
 
+## Tools loaded when needed
+
+As on the Mac (Mac adr/0020, "Tools loaded when needed"; adr/0027 for MCP
+servers). Every declared tool costs tokens in every request, and
+`make_document` is one of the larger declarations.
+
+- **Groups.** `documents` (`make_document`), and one group per MCP server
+  switched on, named by the server's key (adr/0012). A server whose key is
+  `documents` can't be loaded by that name, so it is declared as before.
+- **The profile's `tools.toolLoading`**: `group → always | onDemand`, the
+  Mac's field and spelling. It is merged per group (the overlay's value,
+  else Default's, else on demand) and read leniently: a value that isn't
+  one of the two, or a field that isn't an object, is skipped (group names
+  in any case), never the
+  whole profile, and is written back as it was. Settings › Profiles has a
+  "Documents tools" row; its Reset clears the documents entry only. A
+  server's group is set in the profile's file, as on the Mac.
+- **Declared** when the group is `always` or loaded in this chat. An MCP
+  server is started only then, so a chat that never loads it never starts
+  it.
+- **`load_tools(group)`** is declared while any on-demand group is offered.
+  It stays declared after loading, so the list changes once (the Mac's
+  rule, also in later turns). A load takes effect from the next request of
+  the same turn, once every call of the response that asked for it has run:
+  a tool called beside `load_tools` in that response is answered "call
+  load_tools first". The group's tools are added after the ones declared,
+  and only that group's "load it first" answers are dropped from the
+  repeated-call answers. Every name one of ours answers to (declared, a
+  former name, an alias) is reserved before a server's tools are named, so
+  a server's tool never takes `make_document` or `get_current_date`.
+- **One order every turn**: `load_tools`, the groups set to always, then the
+  loaded groups in the order they were loaded (as saved). A load mid-turn
+  puts its tools at the end, where the next turn has them too, so the
+  declarations change once.
+- **After outside text** (file, folder, web, MCP or shown text, pinned
+  files included) a load waits in `pendingToolGroups` and becomes loaded
+  when the user sends the next message (or asks again), so a file can't
+  hand the model a new tool in its own turn. Outside text read by another
+  call of the same response counts too: that load's answer is rewritten to
+  say it waits.
+- **The + menu**: Make a Document… and Use <server> load the group in a
+  saved chat. A group already on shows checked.
+- **Saved with the chat**: `loadedToolGroups` and `pendingToolGroups` in the
+  session file, the Mac's names, read leniently (a damaged list reads as
+  none, never an unreadable chat). A new chat starts with none. A load is
+  recorded only while the turn's chat is still the one shown.
+- A call of `make_document`, or of an on-demand server's tool (by its key
+  prefix, for a name none of our tools answers to), before the group is
+  loaded is answered "call load_tools first".
+
 Not in this step:
-- **`load_tools`** and tool groups. The tool is declared in every saved
-  chat while the setting is on.
 - **`format: docx` and `xlsx`**, as on the Mac.
 
 ## Verification
@@ -162,7 +210,11 @@ Not in this step:
   - the declaration;
   - the chat: a document made, saved beside the chat in the Mac's shape,
     read back and made again; none in a temporary chat; a print failure
-    told and nothing kept.
+    told and nothing kept;
+  - tool groups: values read leniently and merged per group; `load_tools`
+    loading now, after outside text at the next message, and once only; a
+    chat loading documents and making one in the same turn, saved and
+    declared on reopening; an on-demand MCP server not started until loaded.
 - Core tests (pictures): kept apart from documents, refused ones,
   duplicates, a private copy decoded, the listing with and without
   documents, a pictures-only project, removal with ids never reused,

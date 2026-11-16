@@ -56,6 +56,11 @@ public sealed class Profile
         public string? ToolUsePolicy { get; set; }
         /// <summary>Rounds of tool calls one message may take before the answer.</summary>
         public int? ToolRounds { get; set; }
+        /// <summary>
+        /// Per tool group (Mac adr/0020): "always" or "onDemand"; a group not here is on demand.
+        /// Kept as written: a hand-edited value that isn't one is skipped when read, never the whole profile.
+        /// </summary>
+        public JsonElement? ToolLoading { get; set; }
 
         [JsonExtensionData]
         public Dictionary<string, JsonElement>? Other { get; set; }
@@ -119,7 +124,8 @@ public sealed class Profile
     };
 
     /// <summary>Fields this profile sets: "overrides N settings".</summary>
-    public int OverrideCount => ProfileField.All.Count(f => f.IsSet(this));
+    public int OverrideCount => ProfileField.All.Count(f => f.IsSet(this))
+        + LLMTray.Core.Tools.ToolGroups.Read(Tools.ToolLoading).Keys.Count(g => !string.Equals(g, LLMTray.Core.Tools.ToolGroups.Documents, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>One optional profile field, for counting, resetting and the editor.</summary>
@@ -133,13 +139,17 @@ public sealed record ProfileField(string Name, Func<Profile, bool> IsSet, Action
     public static readonly ProfileField EnabledTools = new("enabledTools", p => p.Tools.EnabledTools is not null, p => p.Tools.EnabledTools = null);
     public static readonly ProfileField ToolUsePolicy = new("toolUsePolicy", p => p.Tools.ToolUsePolicy is not null, p => p.Tools.ToolUsePolicy = null);
     public static readonly ProfileField ToolRounds = new("toolRounds", p => p.Tools.ToolRounds is not null, p => p.Tools.ToolRounds = null);
+    /// <summary>The documents group's entry of <c>toolLoading</c> (the editor's row): a reset leaves the other groups' entries alone.</summary>
+    public static readonly ProfileField ToolLoading = new("toolLoading",
+        p => LLMTray.Core.Tools.ToolGroups.Sets(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents),
+        p => p.Tools.ToolLoading = LLMTray.Core.Tools.ToolGroups.With(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents, null));
     public static readonly ProfileField ContextSize = new("contextSize", p => p.Launch.ContextSize is not null, p => p.Launch.ContextSize = null);
     public static readonly ProfileField KvCacheType = new("kvCacheType", p => p.Launch.KvCacheType is not null, p => p.Launch.KvCacheType = null);
     public static readonly ProfileField Parallel = new("parallel", p => p.Launch.Parallel is not null, p => p.Launch.Parallel = null);
     public static readonly ProfileField LlamaServerArgs = new("llamaServerArgs", p => p.Launch.LlamaServerArgs is not null, p => p.Launch.LlamaServerArgs = null);
 
     public static readonly IReadOnlyList<ProfileField> All =
-        [Temperature, TopP, TopK, MaxTokens, SystemPrompt, EnabledTools, ToolUsePolicy, ToolRounds, ContextSize, KvCacheType, Parallel, LlamaServerArgs];
+        [Temperature, TopP, TopK, MaxTokens, SystemPrompt, EnabledTools, ToolUsePolicy, ToolRounds, ToolLoading, ContextSize, KvCacheType, Parallel, LlamaServerArgs];
 }
 
 /// <summary>Which layer a field's value comes from, for the editor.</summary>
@@ -164,6 +174,9 @@ public sealed record ResolvedProfile(
 {
     /// <summary>What a launch depends on: a change here asks for a restart.</summary>
     public Runtime.ServerOptions ServerOptions => new(ContextSize, KvCacheType, Parallel, LlamaServerArgs);
+
+    /// <summary>Per tool group, merged per group (overlay, else Default, else on demand): Mac adr/0020.</summary>
+    public IReadOnlyDictionary<string, LLMTray.Core.Tools.ToolLoading> ToolLoading { get; init; } = new Dictionary<string, LLMTray.Core.Tools.ToolLoading>();
 }
 
 /// <summary>Field-by-field layered lookup: overlay → base → built-in.</summary>
@@ -203,7 +216,10 @@ public static class ProfileResolver
             Math.Clamp(Value(p => p.Launch.ContextSize, overlay, @base), 0, 4_194_304),
             Profile.KvCacheTypes.Contains(kv) ? kv : "f16",
             Math.Clamp(Value(p => p.Launch.Parallel, overlay, @base), 0, 64),
-            Value(p => p.Launch.LlamaServerArgs, overlay, @base).Trim());
+            Value(p => p.Launch.LlamaServerArgs, overlay, @base).Trim())
+        {
+            ToolLoading = LLMTray.Core.Tools.ToolGroups.Merged(overlay?.Tools.ToolLoading, @base.Tools.ToolLoading),
+        };
     }
 }
 

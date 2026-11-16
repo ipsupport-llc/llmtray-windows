@@ -144,6 +144,26 @@ public sealed partial class MainWindow
             Field(ProfileField.ToolRounds, L.T("Tool rounds per message"),
                 L.T("How many rounds of tool calls the model may make for one message before it has to answer. The same call twice in one message never runs twice."),
                 () => Number(resolved.ToolRounds, 1, 30, 1, "0", v => Set(p => p.Tools.ToolRounds = (int)v))),
+            // Tools loaded when needed (Mac adr/0020): when make_document is declared. MCP servers' groups are set the same way in the profile's file.
+            Field(ProfileField.ToolLoading, L.T("Documents tools"),
+                L.T("When make_document is declared, once Documents are on (Settings > Tools). When needed: the model loads it with load_tools, or you from the + menu, once per chat -- fewer tokens in every request. Always: in every saved chat."),
+                () =>
+                {
+                    var loading = new ComboBox { MinWidth = 160 };
+                    loading.Items.Add(new ComboBoxItem { Content = L.T("When needed"), Tag = LLMTray.Core.Tools.ToolLoading.OnDemand });
+                    loading.Items.Add(new ComboBoxItem { Content = L.T("Always"), Tag = LLMTray.Core.Tools.ToolLoading.Always });
+                    var now = LLMTray.Core.Tools.ToolGroups.LoadingOf(resolved.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents);
+                    loading.SelectedItem = loading.Items.OfType<ComboBoxItem>().First(i => (LLMTray.Core.Tools.ToolLoading)i.Tag == now);
+                    loading.SelectionChanged += (_, _) =>
+                    {
+                        // Compared with the profile as it is now: the page may not have been drawn again since the last pick.
+                        var current = LLMTray.Core.Tools.ToolGroups.LoadingOf(profiles.Resolved(id).ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents);
+                        if (loading.SelectedItem is not ComboBoxItem { Tag: LLMTray.Core.Tools.ToolLoading value } || value == current) return;
+                        // Only this group: the profile's other groups stay as written.
+                        Set(p => p.Tools.ToolLoading = LLMTray.Core.Tools.ToolGroups.With(p.Tools.ToolLoading, LLMTray.Core.Tools.ToolGroups.Documents, value));
+                    };
+                    return loading;
+                }),
             Field(ProfileField.ToolUsePolicy, L.T("Tool-use rule"),
                 L.T("Added to the system prompt whenever tools are offered. The model's own tool template only says how to call a tool, never when not to. Empty disables it."),
                 () => Text(resolved.ToolUsePolicy, multiline: true, v => Set(p => p.Tools.ToolUsePolicy = v))),
