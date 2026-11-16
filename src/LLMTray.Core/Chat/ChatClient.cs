@@ -656,12 +656,14 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             || ProjectFiles.ProjectFilesTool.Is(called)
             || Folders.FolderTools.IsFolderTool(called, out _);
         // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
-        var staged = new List<(Tools.ToolGroup Group, string CallId, string Key)>();
+        // In the order asked: one that waits from the start (Pending) keeps its place among the others.
+        var staged = new List<(Tools.ToolGroup Group, string CallId, string Key, bool Pending)>();
         // The calls answered "load it first", by group: a load drops only those from the repeated-call answers.
         var notLoadedKeys = new Dictionary<string, string>(StringComparer.Ordinal);
         // The on-demand server (not loaded) whose tool a call names: the longest key that prefixes it.
         Mcp.McpServerConfig? NotLoadedServer(string called) => KnownName(called) ? null : mcpServers
-            .Where(s => ServerOnDemand(s) && !chatGroups.Contains(s.Key) && called.StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
+            .Where(s => ServerOnDemand(s) && !chatGroups.Contains(s.Key)
+                && Tools.ToolNameResolver.Bare(called).Replace('-', '_').StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(s => s.Key.Length).FirstOrDefault();
         var rounds = options.Profile?.ToolRounds ?? 10;
         var ran = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -743,13 +745,15 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         history.Add(new JsonObject { ["role"] = "tool", ["tool_call_id"] = call.Id, ["content"] = earlier });
                         // A repeated load in this response: its answer follows the first one's, demoted or not.
-                        foreach (var (group, _, _) in staged.Where(st => st.Key == key).ToList()) staged.Add((group, call.Id, key));
+                        foreach (var (group, _, _, pending) in staged.Where(st => st.Key == key).ToList()) staged.Add((group, call.Id, key, pending));
                         continue;
                     }
                     answer.Activity = call.Name;
                     if (mine == epoch) Changed?.Invoke();
                     Tools.ToolOutcome outcome;
-                    var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase));
+                    // As leniently as our own tools' names: another case, a template's namespace, - for _.
+                    var mcpName = Tools.ToolNameResolver.Resolve(call.Name, [.. mcpTools.Select(t => t.ModelName)])?.Name;
+                    var mcp = mcpName is null ? null : mcpTools.FirstOrDefault(t => t.ModelName == mcpName);
                     try
                     {
                         if (mcp is null && Tools.ToolNameResolver.Resolve(call.Name, [Tools.ToolGroups.LoaderName]) is not null && offeredGroups.Count > 0)
@@ -760,19 +764,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             outcome = new Tools.ToolOutcome(load.Text, null, load.Failed);
                             if (load.Group is { } group)
                             {
-                                if (load.Pending)
-                                {
-                                    lock (sync)
-                                    {
-                                        // The chat this turn is for, checked under the lock that guards a switch of chats.
-                                        if (mine == epoch && !loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
-                                    }
-                                }
-                                else
-                                {
-                                    // Every call that asked (a repeat in other words too): a demotion rewrites each answer.
-                                    staged.Add((group, call.Id, key));
-                                }
+                                // Every call that asked (a repeat in other words too): a demotion rewrites each answer.
+                                staged.Add((group, call.Id, key, load.Pending));
                             }
                         }
                         else if (mcp is null && documents is not null && !documentsDeclared
@@ -869,9 +862,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         if (mine == epoch)
                         {
-                            foreach (var (group, _, _) in staged)
+                            foreach (var (group, _, _, pending) in staged)
                             {
-                                if (after)
+                                // The chat this turn is for, checked under the lock that guards a switch of chats.
+                                if (after || pending)
                                 {
                                     if (!loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
                                 }
@@ -887,7 +881,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     if (after)
                     {
                         // The model was told "loaded": its answer says what happened instead, and a repeat gets the same.
-                        foreach (var (group, callId, key) in staged)
+                        foreach (var (group, callId, key, _) in staged)
                         {
                             var waits = Tools.ToolGroups.Waits(group.Name);
                             ran[key] = waits;
