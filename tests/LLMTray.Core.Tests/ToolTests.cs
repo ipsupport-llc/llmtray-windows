@@ -133,6 +133,13 @@ public sealed class ToolTests
     [InlineData("Apr. 10th, 2024")]
     [InlineData("Wednesday, 10 April 2024")]
     [InlineData("10th of April 2024")]
+    [InlineData("10-Apr-2024")]
+    [InlineData("10/Apr/2024")]
+    [InlineData("Apr-10-2024")]
+    [InlineData("April 10,2024")]
+    [InlineData("April 10, 2024 3:00 PM")]
+    [InlineData("April 10, 2024 at 15:00 UTC")]
+    [InlineData("Wed, Apr 10, 2024")]
     public void DatesReadInTheFormsModelsWrite(string raw) =>
         Assert.Equal(new DateOnly(2024, 4, 10), CurrentTimeTool.ParseDate(raw));
 
@@ -141,6 +148,7 @@ public sealed class ToolTests
     [InlineData("04/13/2024", 2024, 4, 13)]
     [InlineData("04-04-2024", 2024, 4, 4)]
     [InlineData("Sept 1, 2024", 2024, 9, 1)]
+    [InlineData("04.13.2024", 2024, 4, 13)]
     public void UnambiguousSlashesAndWordsRead(string raw, int year, int month, int day) =>
         Assert.Equal(new DateOnly(year, month, day), CurrentTimeTool.ParseDate(raw));
 
@@ -153,6 +161,9 @@ public sealed class ToolTests
     [InlineData("12:00")]
     [InlineData("2024-02-30")]
     [InlineData("Junk 10, 2024")]
+    [InlineData("Junk 10 April 2024")]
+    [InlineData("before April 10, 2024")]
+    [InlineData("March April 10, 2024")]
     [InlineData("someday")]
     [InlineData("")]
     public void UncertainDatesAreRefused(string raw) => Assert.Null(CurrentTimeTool.ParseDate(raw));

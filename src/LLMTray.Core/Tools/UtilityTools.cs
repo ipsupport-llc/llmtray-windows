@@ -55,7 +55,8 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
     {
         var text = (raw ?? "").Trim().TrimEnd('.');
         if (DateMatch(IsoDate(), text) is { } iso) return Make(iso[0], iso[1], iso[2]);
-        if (DateMatch(DottedDate(), text) is { } dotted) return Make(dotted[2], dotted[1], dotted[0]);
+        // Dotted is day first unless only month first makes a date (04.13.2024).
+        if (DateMatch(DottedDate(), text) is { } dotted) return dotted[1] <= 12 ? Make(dotted[2], dotted[1], dotted[0]) : Make(dotted[2], dotted[0], dotted[1]);
         if (DateMatch(SlashedDate(), text) is { } slashed)
         {
             var (first, second, year) = (slashed[0], slashed[1], slashed[2]);
@@ -63,12 +64,12 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
             if (first > 12) return Make(year, second, first);
             return null;
         }
-        if (WordDate().Match(text) is { Success: true } words)
+        if (WordDate().Match(text) is { Success: true } words
+            && (!words.Groups["weekday"].Success || IsNamePrefix(CultureInfo.InvariantCulture.DateTimeFormat.DayNames, words.Groups["weekday"].Value)))
         {
             // A month's name or its start ("Apr", "Sept"), nothing else.
             var name = words.Groups["month"].Value;
-            var month = Array.FindIndex(CultureInfo.InvariantCulture.DateTimeFormat.MonthNames,
-                m => m.Length > 0 && m.StartsWith(name, StringComparison.OrdinalIgnoreCase)) + 1;
+            var month = name.Length >= 3 ? Array.FindIndex(CultureInfo.InvariantCulture.DateTimeFormat.MonthNames, m => m.Length > 0 && m.StartsWith(name, StringComparison.OrdinalIgnoreCase)) + 1 : 0;
             var day = words.Groups["day1"].Success ? words.Groups["day1"].Value : words.Groups["day2"].Value;
             if (month > 0) return Make(int.Parse(words.Groups["year"].Value, CultureInfo.InvariantCulture), month, int.Parse(day, CultureInfo.InvariantCulture));
         }
@@ -78,11 +79,15 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
     static int[]? DateMatch(System.Text.RegularExpressions.Regex pattern, string text) =>
         pattern.Match(text) is { Success: true } m ? [.. m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).Select(g => int.Parse(g.Value, CultureInfo.InvariantCulture))] : null;
 
+    /// <summary>A day's or month's name or its start ("Wed", "Sept"), at least three letters.</summary>
+    static bool IsNamePrefix(string[] names, string word) =>
+        word.Length >= 3 && names.Any(n => n.Length > 0 && n.StartsWith(word, StringComparison.OrdinalIgnoreCase));
+
     static DateOnly? Make(int year, int month, int day) =>
         year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
 
     // A date, then nothing or a time ("T15:00", " 12:00", "15:00+03:00").
-    const string TimeAfter = @"(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2})?)?$";
+    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?$";
 
     [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex IsoDate();
@@ -93,8 +98,8 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
     [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex SlashedDate();
 
-    // "Apr 10, 2024", "April 10th 2024", "10 April 2024", "Wednesday, 10 April 2024".
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[A-Za-z]+,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?\s+(?<day1>\d{1,2})(?:st|nd|rd|th)?|(?<day2>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?),?\s+(?<year>\d{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    // "Apr 10, 2024", "April 10th 2024", "10 April 2024", "10-Apr-2024", "Wednesday, 10 April 2024"; the weekday must be one.
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:(?<weekday>[A-Za-z]+)\.?,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?[\s/-]+(?<day1>\d{1,2})(?:st|nd|rd|th)?|(?<day2>\d{1,2})(?:st|nd|rd|th)?[\s/-]+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?)(?:,\s*|[\s/-]+)(?<year>\d{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex WordDate();
 
     /// <summary>A date's weekday, with today (in the user's zone) and the days between.</summary>
