@@ -18,7 +18,9 @@ of adr/0001.
 - **The identity is public**, so it lives in repository variables:
   `STORE_PACKAGE_NAME`, `STORE_PUBLISHER`, `STORE_PUBLISHER_DISPLAY_NAME`,
   and `STORE_PRODUCT_ID` (the Store ID). The script checks their shape
-  before writing anything. Until they're set, the Store jobs are skipped.
+  before writing anything. Until any is set, the Store jobs are skipped;
+  once one is, a release fails until all four are (a half-done setup is
+  never a silent skip).
 - **`store-package`** runs for a stable tag and for a dry run
   (workflow_dispatch). Its artifact `store` holds the `.msixupload`, which
   is also what the maintainer uploads by hand for the first submission.
@@ -27,7 +29,8 @@ of adr/0001.
   - the environment's required reviewer (the maintainer) approves each run
     in GitHub, so nothing reaches the Store without a person's click. The
     job's first step reads the environment's protection rules and stops if
-    it has no required reviewer;
+    it has no required reviewer. Who the reviewers are is the environment's
+    setting: the maintainer only;
   - its secrets are the Partner Center app's: `PARTNER_CENTER_TENANT_ID`,
     `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`,
     `PARTNER_CENTER_CLIENT_SECRET` (an Entra app added to Partner Center

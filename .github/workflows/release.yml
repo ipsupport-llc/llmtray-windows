@@ -329,9 +329,20 @@ jobs:
   # variables are set. The Store signs it.
   store-package:
     needs: [version, package]
-    if: vars.STORE_PACKAGE_NAME != '' && (github.event_name == 'workflow_dispatch' || needs.version.outputs.prerelease != 'true')
+    # Any of the four set means the Store is being set up: then all of them must be (the step below says which is missing).
+    if: (vars.STORE_PACKAGE_NAME != '' || vars.STORE_PUBLISHER != '' || vars.STORE_PUBLISHER_DISPLAY_NAME != '' || vars.STORE_PRODUCT_ID != '') && (github.event_name == 'workflow_dispatch' || needs.version.outputs.prerelease != 'true')
     runs-on: windows-latest
     steps:
+      - name: Every Store variable is set
+        shell: pwsh
+        env:
+          STORE_PACKAGE_NAME: ${{ vars.STORE_PACKAGE_NAME }}
+          STORE_PUBLISHER: ${{ vars.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $missing = 'STORE_PACKAGE_NAME', 'STORE_PUBLISHER', 'STORE_PUBLISHER_DISPLAY_NAME', 'STORE_PRODUCT_ID' | Where-Object { -not [Environment]::GetEnvironmentVariable($_) }
+          if ($missing) { throw "repository variables missing for the Store: $($missing -join ', ')" }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -371,6 +382,8 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      # Reading the environment's protection rules.
+      actions: read
     steps:
       # The environment's approval is the human step before the Store (adr/0025): without a required reviewer, nothing goes.
       - name: The store environment asks the maintainer
@@ -379,7 +392,8 @@ jobs:
         shell: pwsh
         run: |
           $rules = gh api "repos/$env:GITHUB_REPOSITORY/environments/store" --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length'
-          if ($LASTEXITCODE -ne 0 -or [int]$rules -lt 1) { throw 'the store environment has no required reviewer: add the maintainer before anything is submitted' }
+          if ($LASTEXITCODE -ne 0) { throw "the store environment's settings couldn't be read" }
+          if ([int]$rules -lt 1) { throw 'the store environment has no required reviewer: add the maintainer before anything is submitted' }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: store
@@ -412,8 +426,10 @@ jobs:
           # msstore v0.4.4: the package file is the argument (.msix, .msixbundle or .msixupload).
           msstore publish $upload[0].FullName --appId $env:PRODUCT_ID
           if ($LASTEXITCODE -ne 0) { throw 'the submission failed' }
-          # Where it stands now, for the log only: certification takes hours to days.
+          # Where it stands now, for the log only: certification takes hours to days. A failure here mustn't
+          # fail the job (a re-run would publish again and replace the submission just committed).
           msstore submission status $env:PRODUCT_ID
+          exit 0
 
   # The Scoop bucket (ipsupport-llc/scoop-bucket, adr/0005) follows the
   # release by itself: the ZIPs' own SHA-256, pushed with that repo's deploy

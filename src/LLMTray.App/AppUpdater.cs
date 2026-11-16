@@ -151,7 +151,6 @@ sealed class AppUpdater
     public ReleaseTag? Current { get; }
     public string Architecture { get; }
     public bool CanUpdate => Current is not null && Kind != InstallKind.Store;
-    // InstallAsync and the checks all start from CanUpdate: a Store copy never reaches them.
 
     public UpdateInfo? Available { get; private set; }
     public string? Status { get; private set; }
@@ -210,6 +209,8 @@ sealed class AppUpdater
 
     public async Task InstallAsync()
     {
+        // A Store copy (adr/0025) is updated by the Store only, whatever set Available.
+        if (!CanUpdate) return;
         if (Available is not { } update || Busy) return;
         if (ScoopManaged)
         {
