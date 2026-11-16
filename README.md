@@ -8,11 +8,13 @@ Windows, on [llama.cpp](https://github.com/ggml-org/llama.cpp). The goal is
 the same features and the same local API at `http://localhost:8765/v1`, in an
 app that lives in the notification area.
 
-Status: early beta. It downloads GGUF models (Hugging Face or Kaggle), serves
-them through the local API, loads the model a request names, and lives in the
-notification area.
-Chat, the model browser and the rest of the Mac app's features come next. The plan is in [adr/0001](adr/0001-windows-app.md), and how it is
-built and released is in [adr/0002](adr/0002-build-and-release.md).
+Status: 0.1, the first stable release. It downloads GGUF models (Hugging
+Face or Kaggle) and serves them through the local API, loading the model a
+request names. The chat window has projects with their own files, tools
+(web, folders, MCP servers), memory, spoken messages, documents (PDF), and
+can show the model a window or a browser tab. The plan is in
+[adr/0001](adr/0001-windows-app.md), and how it is built and released is in
+[adr/0002](adr/0002-build-and-release.md).
 
 ## Layout
 
