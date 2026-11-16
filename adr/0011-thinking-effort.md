@@ -13,7 +13,8 @@ template in its GGUF header (`tokenizer.chat_template`, cached per file):
   `chat_template_kwargs.reasoning_effort`; Off is low.
 - `enable_thinking`, `<think>`, `<|channel>` or `<|think` (Qwen 3.5,
   Gemma 4, Nemotron, LFM2.5 Thinking): a budget. Off is
-  `enable_thinking: false` and `thinking_budget_tokens: 0`; Low and Medium
+  `enable_thinking: false` alone (see below), or `thinking_budget_tokens: 0`
+  for a template with tags but no `enable_thinking` switch; Low and Medium
   are 512 and 2048 tokens; High sends nothing.
 
 The budget is llama-server's own per request (`thinking_budget_tokens`,
@@ -31,3 +32,9 @@ External clients send what they want; the proxy adds nothing.
   tags it knows; for others Low and Medium rely on the note alone.
 - The template is read from the GGUF header off the UI thread; until it
   has been read the picker stays hidden.
+- Off sends no budget of 0 (2026-11-16; the Mac still does). Gemma 4's
+  template closes the thought on a new turn but not after a tool's answer.
+  The model starts one, a budget of 0 closes it at once, and the model then
+  reasons on in the answer. Checked on llama-server b11889 with Gemma 4 E2B:
+  without the budget the thought stays in the reasoning block. The app's own
+  one-shot requests (titles), which have no tool rounds, keep it.

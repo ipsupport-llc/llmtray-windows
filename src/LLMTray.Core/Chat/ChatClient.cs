@@ -1830,7 +1830,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             {
                 body["chat_template_kwargs"]!["reasoning_effort"] = "low";
             }
-            else if (options.Style == ThinkingStyle.Budget)
+            else if (Chat.Thinking.UsesBudget(options.Style))
             {
                 body["thinking_budget_tokens"] = 0;
             }
