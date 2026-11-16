@@ -653,8 +653,8 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 .Select(d => d?["function"]?["name"]?.GetValue<string>() ?? "").Append(Documents.DocumentTool.Name).Append(Tools.ToolGroups.LoaderName)
                 .Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)]) is not null
             || options.Tools?.Knows(called) == true
-            || ProjectFiles.ProjectFilesTool.Is(called)
-            || Folders.FolderTools.IsFolderTool(called, out _);
+            || ProjectFiles.ProjectFilesTool.Is(called) || ProjectFiles.ProjectFilesTool.Is(Tools.ToolNameResolver.Bare(called))
+            || Folders.FolderTools.IsFolderTool(called, out _) || Folders.FolderTools.IsFolderTool(Tools.ToolNameResolver.Bare(called), out _);
         // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
         // In the order asked: one that waits from the start (Pending) keeps its place among the others.
         var staged = new List<(Tools.ToolGroup Group, string CallId, string Key, bool Pending)>();
@@ -663,7 +663,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // The on-demand server (not loaded) whose tool a call names: the longest key that prefixes it.
         Mcp.McpServerConfig? NotLoadedServer(string called) => KnownName(called) ? null : mcpServers
             .Where(s => ServerOnDemand(s) && !chatGroups.Contains(s.Key)
-                && Tools.ToolNameResolver.Bare(called).Replace('-', '_').StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
+                && Tools.ToolNameResolver.Bare(called).StartsWith(s.Key + "_", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(s => s.Key.Length).FirstOrDefault();
         var rounds = options.Profile?.ToolRounds ?? 10;
         var ran = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -751,9 +751,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     answer.Activity = call.Name;
                     if (mine == epoch) Changed?.Invoke();
                     Tools.ToolOutcome outcome;
-                    // As leniently as our own tools' names: another case, a template's namespace, - for _.
-                    var mcpName = Tools.ToolNameResolver.Resolve(call.Name, [.. mcpTools.Select(t => t.ModelName)])?.Name;
-                    var mcp = mcpName is null ? null : mcpTools.FirstOrDefault(t => t.ModelName == mcpName);
+                    // The declared name in any case, also after a template's namespace (functions.); nothing looser: two servers' names may differ by one separator.
+                    var mcp = mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, call.Name.Trim(), StringComparison.OrdinalIgnoreCase))
+                        ?? mcpTools.FirstOrDefault(t => string.Equals(t.ModelName, Tools.ToolNameResolver.Bare(call.Name), StringComparison.OrdinalIgnoreCase));
                     try
                     {
                         if (mcp is null && Tools.ToolNameResolver.Resolve(call.Name, [Tools.ToolGroups.LoaderName]) is not null && offeredGroups.Count > 0)
@@ -764,6 +764,14 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                             outcome = new Tools.ToolOutcome(load.Text, null, load.Failed);
                             if (load.Group is { } group)
                             {
+                                if (load.Pending)
+                                {
+                                    // Recorded at once (a turn that ends early or a chat switched meanwhile keeps it); its place is set after the response.
+                                    lock (sync)
+                                    {
+                                        if (mine == epoch && !loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                    }
+                                }
                                 // Every call that asked (a repeat in other words too): a demotion rewrites each answer.
                                 staged.Add((group, call.Id, key, load.Pending));
                             }
@@ -862,14 +870,18 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                     {
                         if (mine == epoch)
                         {
-                            foreach (var (group, _, _, pending) in staged)
+                            for (var i = 0; i < staged.Count; i++)
                             {
-                                // The chat this turn is for, checked under the lock that guards a switch of chats.
+                                var (group, _, _, pending) = staged[i];
+                                // A group asked for twice in this response: its first call sets its place.
+                                if (staged.FindIndex(st => st.Group == group) != i || loadedGroups.Contains(group.Name)) continue;
                                 if (after || pending)
                                 {
-                                    if (!loadedGroups.Contains(group.Name) && !pendingGroups.Contains(group.Name)) pendingGroups.Add(group.Name);
+                                    // In the order this response asked, after the ones waiting from earlier responses.
+                                    pendingGroups.Remove(group.Name);
+                                    pendingGroups.Add(group.Name);
                                 }
-                                else if (!loadedGroups.Contains(group.Name))
+                                else
                                 {
                                     loadedGroups.Add(group.Name);
                                     pendingGroups.Remove(group.Name);
