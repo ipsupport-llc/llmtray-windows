@@ -10,6 +10,8 @@ public enum ThinkingStyle
     None,
     /// <summary>Thinks in a reasoning block (Qwen 3.5, Gemma 4, Nemotron, LFM2.5 Thinking): Off by the template's switch, Low and Medium by a budget.</summary>
     Budget,
+    /// <summary>Thinks in a reasoning block with no switch in its template: Off too is a budget, of nothing.</summary>
+    BudgetOnly,
     /// <summary>Its own effort levels (gpt-oss's reasoning_effort).</summary>
     Levels,
 }
@@ -41,18 +43,23 @@ public static class Thinking
     {
         if (string.IsNullOrEmpty(chatTemplate)) return ThinkingStyle.None;
         if (chatTemplate.Contains("reasoning_effort", StringComparison.Ordinal)) return ThinkingStyle.Levels;
-        foreach (var marker in new[] { "enable_thinking", "<think>", "<|channel>", "<|think" })
+        if (chatTemplate.Contains("enable_thinking", StringComparison.Ordinal)) return ThinkingStyle.Budget;
+        foreach (var marker in new[] { "<think>", "<|channel>", "<|think" })
         {
-            if (chatTemplate.Contains(marker, StringComparison.Ordinal)) return ThinkingStyle.Budget;
+            if (chatTemplate.Contains(marker, StringComparison.Ordinal)) return ThinkingStyle.BudgetOnly;
         }
         return ThinkingStyle.None;
     }
 
+    /// <summary>Whether the server's budget steers it.</summary>
+    public static bool UsesBudget(ThinkingStyle style) => style is ThinkingStyle.Budget or ThinkingStyle.BudgetOnly;
+
     /// <summary>The budget to tell the model, for a budget model at Low or Medium.</summary>
-    public static int? BudgetToTell(ThinkingStyle style, ThinkingEffort effort) => style == ThinkingStyle.Budget ? Budget(effort) : null;
+    public static int? BudgetToTell(ThinkingStyle style, ThinkingEffort effort) => UsesBudget(style) ? Budget(effort) : null;
 
     /// <summary>
-    /// The request's fields: Off is the template's switch alone; High sends nothing.
+    /// The request's fields: Off is the template's switch alone (a budget of nothing where
+    /// there's no switch: nothing else stops the thinking); High sends nothing.
     /// No budget of 0 at Off: Gemma 4's template doesn't close the thought after a
     /// tool's answer, a budget of 0 closes the one the model starts at once, and the
     /// model then reasons on in the answer. Unbudgeted, that thought stays a thought.
@@ -65,7 +72,10 @@ public static class Thinking
             case (ThinkingStyle.Budget, ThinkingEffort.Off):
                 o["chat_template_kwargs"] = new System.Text.Json.Nodes.JsonObject { ["enable_thinking"] = false };
                 break;
-            case (ThinkingStyle.Budget, ThinkingEffort.Low or ThinkingEffort.Medium):
+            case (ThinkingStyle.BudgetOnly, ThinkingEffort.Off):
+                o["thinking_budget_tokens"] = 0;
+                break;
+            case (ThinkingStyle.Budget or ThinkingStyle.BudgetOnly, ThinkingEffort.Low or ThinkingEffort.Medium):
                 o["thinking_budget_tokens"] = Budget(effort);
                 o["reasoning_budget_message"] = CutOffMessage;
                 break;

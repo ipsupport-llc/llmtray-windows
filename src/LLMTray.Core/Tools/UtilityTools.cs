@@ -16,7 +16,7 @@ static class PlaceParams
 /// get_current_time: the date and time here (local, no network) or in a
 /// city (looked up: the "Time in a city" switch).
 /// </summary>
-public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [LocalEntry, CityEntry])
+public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time", [LocalEntry, CityEntry])
 {
     public const string LocalEntry = "get_current_date";
     public const string CityEntry = "get_current_time_in_city";
@@ -45,22 +45,57 @@ public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [Loca
     static readonly ToolParam DateParam = new("date", ParamKind.String, "A date to get the weekday of, e.g. 2024-04-10. Omit for now.",
         Aliases: ["day", "for_date", "target_date", "on"]);
 
-    /// <summary>The forms a date comes in, day before month where it's dotted (10.04.2024).</summary>
-    static readonly string[] DateForms = ["yyyy-MM-dd", "yyyy-M-d", "yyyy/MM/dd", "yyyy/M/d", "yyyy.MM.dd", "dd.MM.yyyy", "d.M.yyyy", "yyyyMMdd"];
-
-    /// <summary>A date the model wrote: ISO, dotted day-first, or English words ("Apr 10, 2024", "10 April 2024"); null if it doesn't read.</summary>
+    /// <summary>
+    /// A date the model wrote, read only where it's certain: ISO (2024-04-10), dotted day first
+    /// (10.04.2024), slashed or dashed where only one order makes a date (13/04/2024), or English words
+    /// with day, month and year (Apr 10, 2024). A time after it is ignored. Null for anything else:
+    /// a two-digit year, no day or no year, or 10/04/2024 (April or October) -- the model is asked again.
+    /// </summary>
     public static DateOnly? ParseDate(string? raw)
     {
-        var text = raw?.Trim().TrimEnd('.') ?? "";
-        if (text.Length == 0) return null;
-        if (DateTime.TryParseExact(text, DateForms, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var exact)) return DateOnly.FromDateTime(exact);
-        // A time or offset after the date is fine; only the day is used.
-        if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var any))
+        var text = (raw ?? "").Trim().TrimEnd('.');
+        if (DateMatch(IsoDate(), text) is { } iso) return Make(iso[0], iso[1], iso[2]);
+        if (DateMatch(DottedDate(), text) is { } dotted) return Make(dotted[2], dotted[1], dotted[0]);
+        if (DateMatch(SlashedDate(), text) is { } slashed)
         {
-            return DateOnly.FromDateTime(any.DateTime);
+            var (first, second, year) = (slashed[0], slashed[1], slashed[2]);
+            if (first == second || second > 12) return Make(year, first, second);
+            if (first > 12) return Make(year, second, first);
+            return null;
+        }
+        if (WordDate().Match(text) is { Success: true } words)
+        {
+            // A month's name or its start ("Apr", "Sept"), nothing else.
+            var name = words.Groups["month"].Value;
+            var month = Array.FindIndex(CultureInfo.InvariantCulture.DateTimeFormat.MonthNames,
+                m => m.Length > 0 && m.StartsWith(name, StringComparison.OrdinalIgnoreCase)) + 1;
+            var day = words.Groups["day1"].Success ? words.Groups["day1"].Value : words.Groups["day2"].Value;
+            if (month > 0) return Make(int.Parse(words.Groups["year"].Value, CultureInfo.InvariantCulture), month, int.Parse(day, CultureInfo.InvariantCulture));
         }
         return null;
     }
+
+    static int[]? DateMatch(System.Text.RegularExpressions.Regex pattern, string text) =>
+        pattern.Match(text) is { Success: true } m ? [.. m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).Select(g => int.Parse(g.Value, CultureInfo.InvariantCulture))] : null;
+
+    static DateOnly? Make(int year, int month, int day) =>
+        year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
+
+    // A date, then nothing or a time ("T15:00", " 12:00", "15:00+03:00").
+    const string TimeAfter = @"(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2})?)?$";
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})" + TimeAfter)]
+    private static partial System.Text.RegularExpressions.Regex IsoDate();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{1,2})\.(\d{1,2})\.(\d{4})" + TimeAfter)]
+    private static partial System.Text.RegularExpressions.Regex DottedDate();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})" + TimeAfter)]
+    private static partial System.Text.RegularExpressions.Regex SlashedDate();
+
+    // "Apr 10, 2024", "April 10th 2024", "10 April 2024", "Wednesday, 10 April 2024".
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[A-Za-z]+,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?\s+(?<day1>\d{1,2})(?:st|nd|rd|th)?|(?<day2>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?),?\s+(?<year>\d{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex WordDate();
 
     /// <summary>A date's weekday, with today (in the user's zone) and the days between.</summary>
     public static JsonObject DescribeDate(DateOnly date, DateTimeOffset now, TimeZoneInfo zone)
@@ -81,7 +116,7 @@ public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [Loca
         {
             return ParseDate(asked) is { } date
                 ? Json(DescribeDate(date, context.Now, Zone(context.HomeZone) ?? TimeZoneInfo.Local))
-                : Error($"can't read the date \"{asked}\"; write it as YYYY-MM-DD");
+                : Error($"can't read the date \"{asked}\" for sure; write it as YYYY-MM-DD");
         }
         if (a.String("city") is not { Length: > 0 } city)
         {

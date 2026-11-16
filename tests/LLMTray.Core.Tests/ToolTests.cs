@@ -128,8 +128,34 @@ public sealed class ToolTests
     [InlineData("10.04.2024")]
     [InlineData("2024/4/10")]
     [InlineData("2024-04-10T15:00:00")]
+    [InlineData("2024-04-10T23:30:00-07:00")]
+    [InlineData("10.04.2024 12:00")]
+    [InlineData("Apr. 10th, 2024")]
+    [InlineData("Wednesday, 10 April 2024")]
+    [InlineData("10th of April 2024")]
     public void DatesReadInTheFormsModelsWrite(string raw) =>
         Assert.Equal(new DateOnly(2024, 4, 10), CurrentTimeTool.ParseDate(raw));
+
+    [Theory]
+    [InlineData("13/04/2024", 2024, 4, 13)]
+    [InlineData("04/13/2024", 2024, 4, 13)]
+    [InlineData("04-04-2024", 2024, 4, 4)]
+    [InlineData("Sept 1, 2024", 2024, 9, 1)]
+    public void UnambiguousSlashesAndWordsRead(string raw, int year, int month, int day) =>
+        Assert.Equal(new DateOnly(year, month, day), CurrentTimeTool.ParseDate(raw));
+
+    [Theory]
+    [InlineData("10/04/2024")]   // April or October
+    [InlineData("4/10/2024")]
+    [InlineData("10.04.24")]     // two-digit year
+    [InlineData("April 2024")]   // no day
+    [InlineData("April 10")]     // no year
+    [InlineData("12:00")]
+    [InlineData("2024-02-30")]
+    [InlineData("Junk 10, 2024")]
+    [InlineData("someday")]
+    [InlineData("")]
+    public void UncertainDatesAreRefused(string raw) => Assert.Null(CurrentTimeTool.ParseDate(raw));
 
     [Fact]
     public void WebSearchQueriesAreCleanedUp()

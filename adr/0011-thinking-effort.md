@@ -13,7 +13,8 @@ template in its GGUF header (`tokenizer.chat_template`, cached per file):
   `chat_template_kwargs.reasoning_effort`; Off is low.
 - `enable_thinking`, `<think>`, `<|channel>` or `<|think` (Qwen 3.5,
   Gemma 4, Nemotron, LFM2.5 Thinking): a budget. Off is
-  `enable_thinking: false` alone (see below); Low and Medium
+  `enable_thinking: false` alone (see below), or `thinking_budget_tokens: 0`
+  for a template with tags but no `enable_thinking` switch; Low and Medium
   are 512 and 2048 tokens; High sends nothing.
 
 The budget is llama-server's own per request (`thinking_budget_tokens`,

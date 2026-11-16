@@ -12,6 +12,8 @@ model needs to tell apart (one tool, several modes):
   a city (Open-Meteo geocoding). Given a `date`, it gives that date's weekday,
   today and the days between instead (2026-11-16, ahead of the Mac): small
   models pass a date on their own, and, answered with today, made a weekday up.
+  Only a date read for certain is used (no two-digit year, no 10/04 that could
+  be April or October); otherwise the model is asked for YYYY-MM-DD.
 - `calculate(expression)`: our recursive-descent calculator, no eval.
 - `web_search(query, source: web|news|wikipedia|hackernews|page, lang?, url?, page?)`:
   DuckDuckGo's HTML page, Google News RSS, Wikipedia's REST API, Hacker
