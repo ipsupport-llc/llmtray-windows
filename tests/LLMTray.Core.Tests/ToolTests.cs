@@ -164,6 +164,8 @@ public sealed class ToolTests
     [InlineData("Junk 10 April 2024")]
     [InlineData("before April 10, 2024")]
     [InlineData("March April 10, 2024")]
+    [InlineData("Monday, 10 April 2024")]  // it was a Wednesday
+    [InlineData("April 10, 2024 99:99")]
     [InlineData("someday")]
     [InlineData("")]
     public void UncertainDatesAreRefused(string raw) => Assert.Null(CurrentTimeTool.ParseDate(raw));

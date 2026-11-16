@@ -71,7 +71,12 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
             var name = words.Groups["month"].Value;
             var month = name.Length >= 3 ? Array.FindIndex(CultureInfo.InvariantCulture.DateTimeFormat.MonthNames, m => m.Length > 0 && m.StartsWith(name, StringComparison.OrdinalIgnoreCase)) + 1 : 0;
             var day = words.Groups["day1"].Success ? words.Groups["day1"].Value : words.Groups["day2"].Value;
-            if (month > 0) return Make(int.Parse(words.Groups["year"].Value, CultureInfo.InvariantCulture), month, int.Parse(day, CultureInfo.InvariantCulture));
+            // A weekday that isn't that date's makes the whole thing doubtful.
+            if (month > 0 && Make(int.Parse(words.Groups["year"].Value, CultureInfo.InvariantCulture), month, int.Parse(day, CultureInfo.InvariantCulture)) is { } date
+                && (!words.Groups["weekday"].Success || date.DayOfWeek.ToString().StartsWith(words.Groups["weekday"].Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                return date;
+            }
         }
         return null;
     }
@@ -87,7 +92,7 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
         year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
 
     // A date, then nothing or a time ("T15:00", " 12:00", "15:00+03:00").
-    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?$";
+    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?$";
 
     [System.Text.RegularExpressions.GeneratedRegex(@"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})" + TimeAfter)]
     private static partial System.Text.RegularExpressions.Regex IsoDate();
