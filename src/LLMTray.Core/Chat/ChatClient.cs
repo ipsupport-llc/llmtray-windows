@@ -654,7 +654,10 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 .Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)]) is not null
             || options.Tools?.Knows(called) == true
             || ProjectFiles.ProjectFilesTool.Is(called)
-            || Folders.FolderTools.IsFolderTool(called, out _);
+            || Folders.FolderTools.IsFolderTool(called, out _)
+            // A template's other namespaces (tools., tool.): ours only while that tool is declared this turn.
+            || (projectTurn is not null && ProjectFiles.ProjectFilesTool.Is(Tools.ToolNameResolver.Bare(called)))
+            || (folderTurn is not null && Folders.FolderTools.IsFolderTool(Tools.ToolNameResolver.Bare(called), out _));
         // Loads made by this response's calls: they take effect for the next request, once every call of it has run.
         // In the order asked: one that waits from the start (Pending) keeps its place among the others.
         var staged = new List<(Tools.ToolGroup Group, string CallId, string Key, bool Pending)>();
