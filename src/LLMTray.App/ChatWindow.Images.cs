@@ -85,10 +85,14 @@ sealed partial class ChatWindow
         {
             var picker = new Windows.Storage.Pickers.FileOpenPicker { ViewMode = Windows.Storage.Pickers.PickerViewMode.Thumbnail };
             foreach (var type in PictureTypes) picker.FileTypeFilter.Add(type);
+            // In a project, documents too: they go into its files.
+            if (ProjectForFiles() is not null)
+            {
+                foreach (var ext in LLMTray.Core.ProjectFiles.DocumentFormats.Offered) picker.FileTypeFilter.Add("." + ext);
+            }
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
             var files = await picker.PickMultipleFilesAsync();
-            var epoch = chat.Epoch;
-            foreach (var file in files) await AddFileAsync(file, epoch);
+            await AddFilesAsync(files, chat.Epoch);
         }
         catch (Exception)
         {
@@ -105,7 +109,7 @@ sealed partial class ChatWindow
             var files = data.Contains(StandardDataFormats.StorageItems)
                 ? (await data.GetStorageItemsAsync()).OfType<StorageFile>().ToList()
                 : [];
-            foreach (var file in files) await AddFileAsync(file, epoch);
+            await AddFilesAsync(files, epoch);
             if (files.Count > 0) return;
             if (data.Contains(StandardDataFormats.Bitmap))
             {
@@ -120,6 +124,17 @@ sealed partial class ChatWindow
         {
             ShowAttachNote(L.T("That picture couldn't be read."));
         }
+    }
+
+    /// <summary>
+    /// Pictures are attached to the message. Other files, as on the Mac, go
+    /// into the project's files when the chat is in a project.
+    /// </summary>
+    async Task AddFilesAsync(IReadOnlyList<StorageFile> files, int epoch)
+    {
+        var others = files.Where(f => !PictureTypes.Contains(Path.GetExtension(f.Name).ToLowerInvariant())).ToList();
+        foreach (var file in files.Except(others)) await AddFileAsync(file, epoch);
+        if (others.Count > 0) await AddToProjectAsync(others);
     }
 
     async Task AddFileAsync(StorageFile file, int epoch)

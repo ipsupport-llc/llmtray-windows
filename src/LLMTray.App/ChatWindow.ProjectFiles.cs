@@ -342,6 +342,51 @@ sealed partial class ChatWindow
         return button;
     }
 
+    /// <summary>The project this chat's dropped documents go to: a saved chat in a project.</summary>
+    LLMTray.Core.Chat.ChatProject? ProjectForFiles() =>
+        chat.Id is { } id && !chat.Temporary ? App.Current.ChatLibrary.ProjectOf(id) : null;
+
+    /// <summary>
+    /// Documents dropped, pasted or picked in the chat (Mac: the chat area's
+    /// drop). In a project they're added to its files; otherwise the note
+    /// says where they can go.
+    /// </summary>
+    async Task AddToProjectAsync(IReadOnlyList<StorageFile> files)
+    {
+        var app = App.Current;
+        var names = string.Join(", ", files.Select(f => f.Name).Take(3)) + (files.Count > 3 ? "…" : "");
+        if (ProjectForFiles() is not { } project)
+        {
+            ShowAttachNote(L.F("{0}: only pictures can be attached. Documents go into a project: move this chat to a project, then drop them here.", names));
+            return;
+        }
+        if (!app.Settings.ProjectFiles)
+        {
+            ShowAttachNote(L.F("{0}: turn on Files in projects in Settings › Tools to add documents to a project.", names));
+            return;
+        }
+        var paths = files.Select(f => f.Path).Where(p => p.Length > 0).ToList();
+        IReadOnlyList<AddResult> results;
+        try
+        {
+            results = await app.ProjectFiles.AddAsync(project.Id, paths, FreeSpace);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            results = [.. paths.Select(p => new AddResult(Path.GetFileName(p), null, "couldn't be added: " + e.Message))];
+        }
+        var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!))).ToList();
+        var added = results.Count(r => r.Refused is null);
+        if (refused.Count > 0 || paths.Count < files.Count)
+        {
+            ShowAttachNote(string.Join("\n", refused.Take(5).Prepend(added > 0 ? L.F("Added to {0}: {1}.", project.Name, added) : L.T("Not added:"))));
+            return;
+        }
+        attachNote.Text = L.F("Added to {0}: {1}.", project.Name, added);
+        attachNote.Foreground = Ui.Secondary;
+        attachNote.Visibility = Visibility.Visible;
+    }
+
     static long FreeSpace(string folder)
     {
         try
