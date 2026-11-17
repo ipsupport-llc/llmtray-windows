@@ -26,7 +26,8 @@ public static partial class DateQuery
     public static Day? Parse(string? text, Day today, bool monthFirst)
     {
         // A full stop ending the sentence isn't a dotted date's ("04/05/2024.").
-        var s = (text ?? "").Trim().ToLowerInvariant();
+        // Apostrophes as the Ukrainian names have them ("пʼятниця"), whichever one was typed.
+        var s = (text ?? "").Trim().ToLowerInvariant().Replace('\'', '\u02BC').Replace('\u2019', '\u02BC');
         if (s.EndsWith('.')) s = s[..^1].TrimEnd();
         if (s.Length == 0) return null;
         if (Relative.TryGetValue(s, out var offset)) return Shift(today, offset);
@@ -71,7 +72,8 @@ public static partial class DateQuery
         // A weekday's short form may also be a month's ("mar." is Tuesday in French):
         // with two months named, the weekday ones are dropped.
         var months = words.Select(MonthNamed).OfType<int>().ToHashSet();
-        if (months.Count > 1) months = words.Where(w => !IsWeekday(w)).Select(MonthNamed).OfType<int>().ToHashSet();
+        // So with a whole date in numbers ("mar. 10/04/2024"): the word is the weekday.
+        if (months.Count > 1 || numbers.Count == 3) months = words.Where(w => !IsWeekday(w)).Select(MonthNamed).OfType<int>().ToHashSet();
         var others = words.Where(w => MonthNamed(w) is null && !IsWeekday(w) && !Fillers.Contains(w));
         if (others.Any() || months.Count > 1) return null;
 
@@ -229,8 +231,10 @@ public static partial class DateQuery
             .SelectMany(list => list.Take(12).Select((name, i) => (Bare(name.ToLowerInvariant()), i + 1))))
         .Where(n => n.Item1.Length > 0).Distinct()];
 
+    /// <summary>Weekday names, full, short and shortest, and the parts of a hyphenated one ("quarta-feira" is read as two words).</summary>
     static readonly HashSet<string> WeekdayNames = [.. Cultures().SelectMany(c =>
-        c.DateTimeFormat.DayNames.Concat(c.DateTimeFormat.AbbreviatedDayNames)).Select(n => Bare(n.ToLowerInvariant())).Where(n => n.Length > 0)];
+        c.DateTimeFormat.DayNames.Concat(c.DateTimeFormat.AbbreviatedDayNames).Concat(c.DateTimeFormat.ShortestDayNames))
+        .SelectMany(n => n.ToLowerInvariant().Replace('\u2019', '\u02BC').Split('-')).Select(Bare).Where(n => n.Length > 0)];
 
     static int? MonthNamed(string word)
     {

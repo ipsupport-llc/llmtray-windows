@@ -38,6 +38,13 @@ public class DateQueryTests
     [InlineData("2024 Apr 10")]
     [InlineData("2024-04-10 12:30")]
     [InlineData("10.04.2024.")]
+    [InlineData("mar. 10/04/2024")]
+    [InlineData("quarta-feira, 10 de abril de 2024")]
+    [InlineData("qua., 10 de abril de 2024")]
+    [InlineData("śr., 10 kwietnia 2024")]
+    [InlineData("We, Apr 10, 2024")]
+    [InlineData("п'ятниця, 10 квітня 2024")]
+    [InlineData("п’ятниця, 10 квітня 2024")]
     public void Forms(string text) => Assert.Equal("2024-04-10", Iso(text));
 
     [Fact]
