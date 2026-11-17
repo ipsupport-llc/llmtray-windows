@@ -252,7 +252,10 @@ sealed partial class ChatWindow : Window
             action();
             e.Handled = true;
         };
-        (Content as UIElement)?.KeyboardAccelerators.Add(accelerator);
+        if (Content is not UIElement content) return;
+        // No shortcut tooltip following the pointer over the whole window.
+        content.KeyboardAcceleratorPlacementMode = Microsoft.UI.Xaml.Input.KeyboardAcceleratorPlacementMode.Hidden;
+        content.KeyboardAccelerators.Add(accelerator);
     }
 
     public void NewChat()
@@ -597,7 +600,8 @@ sealed partial class ChatWindow : Window
         notices.Margin = new Thickness(16, 0, 16, 4);
         header.Children.Add(notices);
 
-        scroller.Content = messages;
+        // In a Grid: the ScrollViewer by itself puts a column narrower than the window at its right edge.
+        scroller.Content = new Grid { Children = { messages } };
         // Scrolling up to read stops following the answer; back at the end follows again.
         scroller.ViewChanged += (_, e) =>
         {
