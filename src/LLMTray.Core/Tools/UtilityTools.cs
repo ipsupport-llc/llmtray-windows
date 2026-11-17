@@ -16,7 +16,7 @@ static class PlaceParams
 /// get_current_time: the date and time here (local, no network) or in a
 /// city (looked up: the "Time in a city" switch).
 /// </summary>
-public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time", [LocalEntry, CityEntry])
+public sealed class CurrentTimeTool() : SelectableTool("get_current_time", [LocalEntry, CityEntry])
 {
     public const string LocalEntry = "get_current_date";
     public const string CityEntry = "get_current_time_in_city";
@@ -43,91 +43,17 @@ public sealed partial class CurrentTimeTool() : SelectableTool("get_current_time
 
     /// <summary>A date to look up: its weekday and how far it is from today. Models pass one on their own.</summary>
     static readonly ToolParam DateParam = new("date", ParamKind.String, "A date to get the weekday of, e.g. 2024-04-10. Omit for now.",
-        Aliases: ["day", "for_date", "target_date", "on"]);
-
-    /// <summary>
-    /// A date the model wrote, read only where it's certain: ISO (2024-04-10), dotted day first
-    /// (10.04.2024), slashed or dashed where only one order makes a date (13/04/2024), or English words
-    /// with day, month and year (Apr 10, 2024). A time after it is ignored. Null for anything else:
-    /// a two-digit year, no day or no year, or 10/04/2024 (April or October) -- the model is asked again.
-    /// </summary>
-    public static DateOnly? ParseDate(string? raw)
-    {
-        var text = (raw ?? "").Trim().TrimEnd('.');
-        if (DateMatch(IsoDate(), text) is { } iso) return Make(iso[0], iso[1], iso[2]);
-        // Dotted is day first unless only month first makes a date (04.13.2024).
-        if (DateMatch(DottedDate(), text) is { } dotted) return dotted[1] <= 12 ? Make(dotted[2], dotted[1], dotted[0]) : Make(dotted[2], dotted[0], dotted[1]);
-        if (DateMatch(SlashedDate(), text) is { } slashed)
-        {
-            var (first, second, year) = (slashed[0], slashed[1], slashed[2]);
-            if (first == second || second > 12) return Make(year, first, second);
-            if (first > 12) return Make(year, second, first);
-            return null;
-        }
-        if (WordDate().Match(text) is { Success: true } words
-            && (!words.Groups["weekday"].Success || IsNamePrefix(CultureInfo.InvariantCulture.DateTimeFormat.DayNames, words.Groups["weekday"].Value)))
-        {
-            // A month's name or its start ("Apr", "Sept"), nothing else.
-            var name = words.Groups["month"].Value;
-            var month = name.Length >= 3 ? Array.FindIndex(CultureInfo.InvariantCulture.DateTimeFormat.MonthNames, m => m.Length > 0 && m.StartsWith(name, StringComparison.OrdinalIgnoreCase)) + 1 : 0;
-            var day = words.Groups["day1"].Success ? words.Groups["day1"].Value : words.Groups["day2"].Value;
-            // A weekday that isn't that date's makes the whole thing doubtful.
-            if (month > 0 && Make(int.Parse(words.Groups["year"].Value, CultureInfo.InvariantCulture), month, int.Parse(day, CultureInfo.InvariantCulture)) is { } date
-                && (!words.Groups["weekday"].Success || date.DayOfWeek.ToString().StartsWith(words.Groups["weekday"].Value, StringComparison.OrdinalIgnoreCase)))
-            {
-                return date;
-            }
-        }
-        return null;
-    }
-
-    static int[]? DateMatch(System.Text.RegularExpressions.Regex pattern, string text) =>
-        pattern.Match(text) is { Success: true } m ? [.. m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).Select(g => int.Parse(g.Value, CultureInfo.InvariantCulture))] : null;
-
-    /// <summary>A day's or month's name or its start ("Wed", "Sept"), at least three letters.</summary>
-    static bool IsNamePrefix(string[] names, string word) =>
-        word.Length >= 3 && names.Any(n => n.Length > 0 && n.StartsWith(word, StringComparison.OrdinalIgnoreCase));
-
-    static DateOnly? Make(int year, int month, int day) =>
-        year is >= 1 and <= 9999 && month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month) ? new DateOnly(year, month, day) : null;
-
-    // ASCII digits only: \d takes any script's digits, which int.Parse refuses.
-    // A date, then nothing or a time ("T15:00", " 12:00", "15:00+03:00").
-    const string TimeAfter = @"(?:(?:T|,?\s+(?:at\s+)?)(?:[01]?[0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]+)?)?\s*(?:[AaPp]\.?[Mm]\.?)?\s*(?:Z|UTC|[+-][0-9]{2}:?[0-9]{2})?)?$";
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{4})[-/.]([0-9]{1,2})[-/.]([0-9]{1,2})" + TimeAfter)]
-    private static partial System.Text.RegularExpressions.Regex IsoDate();
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})" + TimeAfter)]
-    private static partial System.Text.RegularExpressions.Regex DottedDate();
-
-    [System.Text.RegularExpressions.GeneratedRegex(@"^([0-9]{1,2})[-/]([0-9]{1,2})[-/]([0-9]{4})" + TimeAfter)]
-    private static partial System.Text.RegularExpressions.Regex SlashedDate();
-
-    // "Apr 10, 2024", "April 10th 2024", "10 April 2024", "10-Apr-2024", "Wednesday, 10 April 2024"; the weekday must be one.
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:(?<weekday>[A-Za-z]+)\.?,?\s+)??(?:(?<month>[A-Za-z]{3,})\.?[\s/-]+(?<day1>[0-9]{1,2})(?:st|nd|rd|th)?|(?<day2>[0-9]{1,2})(?:st|nd|rd|th)?[\s/-]+(?:of\s+)?(?<month>[A-Za-z]{3,})\.?)(?:,\s*|[\s/-]+)(?<year>[0-9]{4})" + TimeAfter, System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
-    private static partial System.Text.RegularExpressions.Regex WordDate();
-
-    /// <summary>A date's weekday, with today (in the user's zone) and the days between.</summary>
-    public static JsonObject DescribeDate(DateOnly date, DateTimeOffset now, TimeZoneInfo zone)
-    {
-        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, zone).DateTime);
-        return new JsonObject
-        {
-            ["date"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            ["weekday"] = date.DayOfWeek.ToString(),
-            ["today"] = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            ["days_from_today"] = date.DayNumber - today.DayNumber,
-        };
-    }
+        Aliases: ["day", "for_date", "target_date", "on", "when"]);
 
     public override async Task<string> RunAsync(ToolArguments a, ToolContext context, CancellationToken cancellationToken)
     {
         if (a.String("date") is { Length: > 0 } asked)
         {
-            return ParseDate(asked) is { } date
-                ? Json(DescribeDate(date, context.Now, Zone(context.HomeZone) ?? TimeZoneInfo.Local))
-                : Error($"can't read the date \"{asked}\" for sure; write it as YYYY-MM-DD");
+            // Today in the user's zone; a date that fits both orders in the region's order (Mac DateQuery).
+            var today = DateQuery.Today(context.Now, Zone(context.HomeZone) ?? TimeZoneInfo.Local);
+            return DateQuery.Parse(asked, today, DateQuery.IsMonthFirst(CultureInfo.CurrentCulture)) is { } date
+                ? Json(DateQuery.Describe(date, today))
+                : Error($"couldn't read the date \"{asked}\": send it as YYYY-MM-DD");
         }
         if (a.String("city") is not { Length: > 0 } city)
         {

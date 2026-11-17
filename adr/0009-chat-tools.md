@@ -10,10 +10,12 @@ model needs to tell apart (one tool, several modes):
 
 - `get_current_time(date?, city?, country_code?)`: here (local, no network) or in
   a city (Open-Meteo geocoding). Given a `date`, it gives that date's weekday,
-  today and the days between instead (2026-11-16, ahead of the Mac): small
-  models pass a date on their own, and, answered with today, made a weekday up.
-  Only a date read for certain is used (no two-digit year, no 10/04 that could
-  be April or October); otherwise the model is asked for YYYY-MM-DD.
+  today and the days between instead, read as the Mac's DateQuery reads it:
+  ISO, numbers, month names in the app's main languages, today/tomorrow/
+  yesterday. A slashed or dashed date that fits both orders (04/10/2024)
+  follows the region's short date format, and the answer says how it was
+  read; dots are day first. The order comes from the short date format, not
+  a skeleton (which gives month first for en-TR or zh-SG).
 - `calculate(expression)`: our recursive-descent calculator, no eval.
 - `web_search(query, source: web|news|wikipedia|hackernews|page, lang?, url?, page?)`:
   DuckDuckGo's HTML page, Google News RSS, Wikipedia's REST API, Hacker
