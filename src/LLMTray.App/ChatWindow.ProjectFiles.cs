@@ -2,6 +2,7 @@ using LLMTray.Core.Chat;
 using LLMTray.Core.ProjectFiles;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
@@ -357,12 +358,12 @@ sealed partial class ChatWindow
         var names = string.Join(", ", files.Select(f => f.Name).Take(3)) + (files.Count > 3 ? "…" : "");
         if (project is null)
         {
-            ShowAttachNote(L.F("{0}: only pictures can be attached. Documents go into a project: move this chat to a project, then drop them here.", names));
+            DocumentNote(true, L.F("{0}: only pictures can be attached. Documents go into a project: move this chat to a project, then drop them here.", names));
             return;
         }
         if (!app.Settings.ProjectFiles)
         {
-            ShowAttachNote(L.F("{0}: turn on Files in projects in Settings › Tools to add documents to a project.", names));
+            DocumentNote(true, L.F("{0}: turn on Files in projects in Settings › Tools to add documents to a project.", names));
             return;
         }
         var paths = files.Select(f => f.Path).Where(p => p.Length > 0).ToList();
@@ -384,11 +385,19 @@ sealed partial class ChatWindow
         var added = results.Count(r => r.Refused is null);
         if (refused.Count > 0)
         {
-            ShowAttachNote(string.Join("\n", refused.Take(5).Prepend(added > 0 ? L.F("Added to {0}: {1}.", project.Name, added) : L.T("Not added:"))));
+            DocumentNote(true, string.Join("\n", refused.Take(5).Prepend(added > 0 ? L.F("Added to {0}: {1}.", project.Name, added) : L.T("Not added:"))));
             return;
         }
-        attachNote.Text = L.F("Added to {0}: {1}.", project.Name, added);
-        attachNote.Foreground = Ui.Secondary;
+        DocumentNote(false, L.F("Added to {0}: {1}.", project.Name, added));
+    }
+
+    /// <summary>The documents' outcome, under a note the pictures left (theirs stays); red if either is a warning.</summary>
+    void DocumentNote(bool warning, string text)
+    {
+        var earlier = attachNote.Visibility == Visibility.Visible && attachNote.Text.Length > 0;
+        if (earlier) warning |= attachNote.Foreground is SolidColorBrush shown && Ui.Red is SolidColorBrush red && shown.Color == red.Color;
+        attachNote.Text = earlier ? attachNote.Text + "\n" + text : text;
+        attachNote.Foreground = warning ? Ui.Red : Ui.Secondary;
         attachNote.Visibility = Visibility.Visible;
     }
 
