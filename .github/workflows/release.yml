@@ -309,9 +309,9 @@ jobs:
 
           **Setup (`-setup.exe`).** Installs LLMTray for your user only, without administrator rights, with a Start menu shortcut and an uninstaller in **Settings › Apps**. If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
 
-          **Package (`.msix`).** Open the `.msix` for your PC and choose **Install**: no certificate to install and no administrator rights. Coming from an MSIX of 0.1.0-beta.11 or earlier (signed by "IPSupport LLC" with a self-signed certificate)? Windows sees this one as another app: quit the old LLMTray, install this one and start it (it copies your settings and chats over), then remove the old one in **Settings › Apps**.
+          **Package (`.msix`).** Open the `.msix` for your PC and choose **Install**: no certificate to install and no administrator rights. Since 0.1.2 the package is signed with the company's certificate, so Windows sees it as another app than an MSIX of 0.1.1 or earlier, and updating from inside 0.1.1 installs it beside the old one. Coming from such an MSIX: quit the old LLMTray (**Quit LLMTray** in its tray menu), start the new one from Start (it copies your settings and chats over), then remove the old one in **Settings › Apps**. Until then both are "LLMTray" in Start; the new one says in its chat when the old one can go.
 
-          The packages, the installers and LLMTray's own programs are signed with Azure Artifact Signing.
+          The packages, the installers and LLMTray's own programs are signed by IPSupport LLC with Azure Artifact Signing.
 
           **Portable (`-portable.zip`).** No installation and no administrator rights: unpack it anywhere you can write to and run `LLMTray\LLMTray.exe` (the `app` folder beside it holds the rest). If Windows SmartScreen stops it, choose **More info**, then **Run anyway**.
 
