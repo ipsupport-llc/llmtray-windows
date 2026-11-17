@@ -35,8 +35,27 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   repeated with each chunk), PowerPoint (.pptx: a page per slide, notes
   after), OpenDocument text, RTF, HTML, Markdown, plain text and code.
   Text files: BOM, then UTF-8, then the system's legacy code page. Not yet:
-  legacy .doc/.xls/.ppt (refused by name at add), linked folders. Pictures
-  are kept apart, for documents (adr/0024).
+  linked folders. Pictures are kept apart, for documents (adr/0024).
+- **Word, Excel and PowerPoint 97-2003** (.doc, .xls, .ppt) are read by our
+  own parsers (`CompoundFile`, `LegacyOffice`): the Mac reads .doc through
+  macOS and has its own .xls / .ppt parsers (Mac adr/0012); Windows has
+  nothing built in that a packaged app can rely on (the Office IFilters come
+  with Office). Like a zip, a compound file's kind comes from its name (.doc
+  .dot, .xls .xlt, .ppt .pps .pot; anything else, such as an Outlook message,
+  is refused at add) and the reader picks the real kind by its streams.
+  - .doc: the text through the piece table, page and section breaks as
+    pages, field codes dropped and their results kept, table cells as
+    `a | b`, then footnotes, comments, endnotes and text boxes. Word 95 and
+    older are refused.
+  - .xls: BIFF5 and BIFF8, a page per worksheet as for .xlsx (numbers as
+    stored, a formula as its saved result); text boxes and charts aren't
+    read. Excel 4 and older are refused.
+  - .ppt: the live slides through the last edit's persist directories (an
+    older edit's text isn't read), a page per slide, notes after; headers,
+    footers and comments aren't read.
+  - Password-protected files fail with that reason. Every chain, record and
+    count is bounded: a loop or a hostile length fails the file as damaged
+    (a mutation test runs each kind through flipped bytes).
 - **Scanned PDF pages are read from their picture** (Mac adr/0012 tier 2,
   ahead of the Mac). The test is a page with fewer than 100 characters of
   text (a scanner's footer, a page number) and a picture on it.
