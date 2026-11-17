@@ -44,8 +44,13 @@ public static partial class DateQuery
         var numbers = new List<(int Value, int Digits)>();
         var separators = new HashSet<char>();
         var afterNumber = false;
+        // Words before the first number (where a weekday stands), and a comma between numbers (a range or a list, not one date).
+        var leading = new List<string>();
+        var commaBetween = false;
         foreach (var token in Tokens(s))
         {
+            if (token == "," && afterNumber) commaBetween = true;
+            if (numbers.Count == 0 && !IsAsciiDigit(token[0]) && token.Length > 1) leading.Add(token);
             var isNumber = IsAsciiDigit(token[0]);
             if (token.All(IsAsciiDigit))
             {
@@ -72,8 +77,12 @@ public static partial class DateQuery
         // A weekday's short form may also be a month's ("mar." is Tuesday in French):
         // with two months named, the weekday ones are dropped.
         var months = words.Select(MonthNamed).OfType<int>().ToHashSet();
-        // So with a whole date in numbers ("mar. 10/04/2024"): the word is the weekday.
-        if (months.Count > 1 || numbers.Count == 3) months = words.Where(w => !IsWeekday(w)).Select(MonthNamed).OfType<int>().ToHashSet();
+        if (months.Count > 1) months = words.Where(w => !IsWeekday(w)).Select(MonthNamed).OfType<int>().ToHashSet();
+        // So before a whole date in numbers ("mar. 10/04/2024"): there the word is the weekday.
+        else if (numbers.Count == 3 && !commaBetween && words.All(w => leading.Contains(w) && (IsWeekday(w) || MonthNamed(w) is null)))
+        {
+            months = [];
+        }
         var others = words.Where(w => MonthNamed(w) is null && !IsWeekday(w) && !Fillers.Contains(w));
         if (others.Any() || months.Count > 1) return null;
 
@@ -96,7 +105,7 @@ public static partial class DateQuery
             }
         }
 
-        if (numbers.Count != 3 || separators.Count > 1) return null;
+        if (numbers.Count != 3 || separators.Count > 1 || commaBetween) return null;
         var (x, y, z) = (numbers[0], numbers[1], numbers[2]);
         // 2024/04/10, 2024.04.10.
         if (x.Digits == 4) return y.Digits <= 2 && z.Digits <= 2 ? Valid(x.Value, y.Value, z.Value) : null;
@@ -179,9 +188,10 @@ public static partial class DateQuery
     {
         var tokens = new List<string>();
         var current = new System.Text.StringBuilder();
-        foreach (var ch in s)
+        for (var i = 0; i < s.Length; i++)
         {
-            if (char.IsLetterOrDigit(ch))
+            var ch = s[i];
+            if (char.IsLetterOrDigit(ch) || ch == '-' && i > 0 && i + 1 < s.Length && char.IsLetter(s[i - 1]) && char.IsLetter(s[i + 1]))
             {
                 // Letters and digits together ("10th" is read as an ordinal; another script's digits as a word, refused).
                 current.Append(ch);
@@ -231,10 +241,10 @@ public static partial class DateQuery
             .SelectMany(list => list.Take(12).Select((name, i) => (Bare(name.ToLowerInvariant()), i + 1))))
         .Where(n => n.Item1.Length > 0).Distinct()];
 
-    /// <summary>Weekday names, full, short and shortest, and the parts of a hyphenated one ("quarta-feira" is read as two words).</summary>
+    /// <summary>Weekday names, full, short and shortest ("quarta-feira" stays one word: a hyphen between letters is kept).</summary>
     static readonly HashSet<string> WeekdayNames = [.. Cultures().SelectMany(c =>
         c.DateTimeFormat.DayNames.Concat(c.DateTimeFormat.AbbreviatedDayNames).Concat(c.DateTimeFormat.ShortestDayNames))
-        .SelectMany(n => n.ToLowerInvariant().Replace('\u2019', '\u02BC').Split('-')).Select(Bare).Where(n => n.Length > 0)];
+        .Select(n => Bare(n.ToLowerInvariant().Replace('\u2019', '\u02BC'))).Where(n => n.Length > 0)];
 
     static int? MonthNamed(string word)
     {
