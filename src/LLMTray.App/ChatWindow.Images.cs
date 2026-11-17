@@ -133,8 +133,9 @@ sealed partial class ChatWindow
     async Task AddFilesAsync(IReadOnlyList<StorageFile> files, int epoch)
     {
         var others = files.Where(f => !PictureTypes.Contains(Path.GetExtension(f.Name).ToLowerInvariant())).ToList();
+        // The documents first, into the project of the chat they were dropped on; a picture's warning then shows last.
+        if (others.Count > 0) await AddToProjectAsync(others, ProjectForFiles(), epoch);
         foreach (var file in files.Except(others)) await AddFileAsync(file, epoch);
-        if (others.Count > 0) await AddToProjectAsync(others);
     }
 
     async Task AddFileAsync(StorageFile file, int epoch)

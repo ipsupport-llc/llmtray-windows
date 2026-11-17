@@ -351,11 +351,11 @@ sealed partial class ChatWindow
     /// drop). In a project they're added to its files; otherwise the note
     /// says where they can go.
     /// </summary>
-    async Task AddToProjectAsync(IReadOnlyList<StorageFile> files)
+    async Task AddToProjectAsync(IReadOnlyList<StorageFile> files, ChatProject? project, int epoch)
     {
         var app = App.Current;
         var names = string.Join(", ", files.Select(f => f.Name).Take(3)) + (files.Count > 3 ? "…" : "");
-        if (ProjectForFiles() is not { } project)
+        if (project is null)
         {
             ShowAttachNote(L.F("{0}: only pictures can be attached. Documents go into a project: move this chat to a project, then drop them here.", names));
             return;
@@ -375,9 +375,14 @@ sealed partial class ChatWindow
         {
             results = [.. paths.Select(p => new AddResult(Path.GetFileName(p), null, "couldn't be added: " + e.Message))];
         }
-        var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!))).ToList();
+        // Another chat opened meanwhile: the files are in the project, the note isn't this chat's.
+        if (epoch != chat.Epoch) return;
+        var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!)))
+            // Not a file on this PC (a phone, a zip's inside): drop it from Explorer once it's saved.
+            .Concat(files.Where(f => f.Path.Length == 0).Select(f => L.F("{0}: {1}", f.Name, L.T("not a file on this PC: save it to a folder first"))))
+            .ToList();
         var added = results.Count(r => r.Refused is null);
-        if (refused.Count > 0 || paths.Count < files.Count)
+        if (refused.Count > 0)
         {
             ShowAttachNote(string.Join("\n", refused.Take(5).Prepend(added > 0 ? L.F("Added to {0}: {1}.", project.Name, added) : L.T("Not added:"))));
             return;
