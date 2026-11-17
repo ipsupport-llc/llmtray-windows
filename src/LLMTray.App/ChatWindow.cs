@@ -46,6 +46,7 @@ sealed partial class ChatWindow : Window
     readonly StackPanel messages = new() { Spacing = 14, Padding = new Thickness(24, 16, 24, 16) };
     readonly Button regenerate = new() { Visibility = Visibility.Collapsed };
     readonly Button compact = new() { Visibility = Visibility.Collapsed };
+    readonly TextBlock compactCaption = new() { Text = L.T("Compact"), FontSize = 12 };
     readonly TextBlock stats = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBox input = new()
     {
@@ -621,12 +622,11 @@ sealed partial class ChatWindow : Window
             action.Foreground = Ui.Secondary;
         }
         regenerate.Content = TurnAction("\uE72C", L.T("Regenerate"));
-        compact.Content = TurnAction("\uE73F", L.T("Compact"));
+        compact.Content = TurnAction("\uE73F", compactCaption);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(regenerate, L.T("Regenerate"));
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(compact, L.T("Compact"));
-        var actions = Ui.Horizontal(regenerate, compact);
-        actions.Spacing = 4;
-        bar.Children.Add(actions);
+        var turn = Ui.Horizontal(regenerate, compact);
+        turn.Spacing = 4;
+        bar.Children.Add(turn);
         stats.Foreground = Ui.Secondary;
         Grid.SetColumn(stats, 1);
         bar.Children.Add(stats);
@@ -708,9 +708,11 @@ sealed partial class ChatWindow : Window
     }
 
     /// <summary>Regenerate and Compact above the composer: an icon and a caption.</summary>
-    static StackPanel TurnAction(string glyph, string text)
+    static StackPanel TurnAction(string glyph, string text) => TurnAction(glyph, new TextBlock { Text = text, FontSize = 12 });
+
+    static StackPanel TurnAction(string glyph, TextBlock caption)
     {
-        var label = Ui.Horizontal(new FontIcon { Glyph = glyph, FontSize = 12 }, new TextBlock { Text = text, FontSize = 12 });
+        var label = Ui.Horizontal(new FontIcon { Glyph = glyph, FontSize = 12 }, caption);
         label.Spacing = 5;
         return label;
     }
@@ -794,7 +796,8 @@ sealed partial class ChatWindow : Window
         regenerate.Visibility = !chat.Busy && !chat.Compacting && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
         compact.Visibility = !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null ? Visibility.Visible : Visibility.Collapsed;
         compact.IsEnabled = !chat.Compacting;
-        compact.Content = TurnAction("\uE73F", chat.Compacting ? L.T("Compacting…") : L.T("Compact"));
+        // The caption names the button for screen readers too.
+        compactCaption.Text = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
         // The numbers are under the answer itself; the bar keeps only a compaction's problem.
         if (!chat.Compacting && last is { Role: "assistant" }) stats.Text = "";
         send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
