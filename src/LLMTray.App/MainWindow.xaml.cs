@@ -75,7 +75,12 @@ public sealed partial class MainWindow : Window
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.MemoryChanged += () => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
-        App.Current.DownloadsChanged += _ => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
+        // The embedder's row (Memory, and Files in projects on Tools) goes once it's downloaded.
+        App.Current.DownloadsChanged += _ =>
+        {
+            if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon();
+            if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon();
+        };
         App.Current.ProfilesChanged += () =>
         {
             if (page is "profiles" or "models") RenderPageSoon();

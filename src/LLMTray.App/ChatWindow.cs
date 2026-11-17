@@ -43,9 +43,10 @@ sealed partial class ChatWindow : Window
     DateTime deactivatedAt;
     bool foreground;
     readonly ScrollViewer scroller = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-    readonly StackPanel messages = new() { Spacing = 14, MaxWidth = 860, Padding = new Thickness(24, 16, 24, 16) };
-    readonly Button regenerate = new() { Content = L.T("Regenerate"), Visibility = Visibility.Collapsed };
-    readonly Button compact = new() { Content = L.T("Compact"), Visibility = Visibility.Collapsed };
+    readonly StackPanel messages = new() { Spacing = 14, Padding = new Thickness(24, 16, 24, 16) };
+    readonly Button regenerate = new() { Visibility = Visibility.Collapsed };
+    readonly Button compact = new() { Visibility = Visibility.Collapsed };
+    readonly TextBlock compactCaption = new() { Text = L.T("Compact"), FontSize = 12 };
     readonly TextBlock stats = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     readonly TextBox input = new()
     {
@@ -608,14 +609,24 @@ sealed partial class ChatWindow : Window
             if (!e.IsIntermediate) follow = scroller.VerticalOffset >= scroller.ScrollableHeight - 40;
         };
 
-        // Above the composer: Regenerate and the numbers.
         // Above the composer: Regenerate and Compact (the numbers are under each answer).
-        var bar = new Grid { Padding = new Thickness(24, 2, 24, 0), MaxWidth = 860 };
+        var bar = new Grid { Padding = new Thickness(30, 0, 24, 0) };
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        regenerate.Style = Ui.Resource<Style>("SubtleButtonStyle", regenerate.Style);
-        compact.Style = regenerate.Style;
-        bar.Children.Add(Ui.Horizontal(regenerate, compact));
+        // As on the Mac: small grey labels with an icon, no button frame.
+        foreach (var action in new[] { regenerate, compact })
+        {
+            action.Style = Ui.Resource<Style>("SubtleButtonStyle", action.Style);
+            action.Padding = new Thickness(6, 2, 6, 2);
+            action.MinHeight = 0;
+            action.Foreground = Ui.Secondary;
+        }
+        regenerate.Content = TurnAction("\uE72C", L.T("Regenerate"));
+        compact.Content = TurnAction("\uE73F", compactCaption);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(regenerate, L.T("Regenerate"));
+        var turn = Ui.Horizontal(regenerate, compact);
+        turn.Spacing = 4;
+        bar.Children.Add(turn);
         stats.Foreground = Ui.Secondary;
         Grid.SetColumn(stats, 1);
         bar.Children.Add(stats);
@@ -672,7 +683,7 @@ sealed partial class ChatWindow : Window
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(10, 6, 8, 6),
         };
-        var composer = new Border { Child = frame, Padding = new Thickness(24, 6, 24, 16), MaxWidth = 860 };
+        var composer = new Border { Child = frame, Padding = new Thickness(24, 4, 24, 16) };
 
         var main = new Grid();
         main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -694,6 +705,16 @@ sealed partial class ChatWindow : Window
         Grid.SetColumn(main, 1);
         root.Children.Add(main);
         return root;
+    }
+
+    /// <summary>Regenerate and Compact above the composer: an icon and a caption.</summary>
+    static StackPanel TurnAction(string glyph, string text) => TurnAction(glyph, new TextBlock { Text = text, FontSize = 12 });
+
+    static StackPanel TurnAction(string glyph, TextBlock caption)
+    {
+        var label = Ui.Horizontal(new FontIcon { Glyph = glyph, FontSize = 12 }, caption);
+        label.Spacing = 5;
+        return label;
     }
 
     // MARK: Rendering
@@ -775,7 +796,8 @@ sealed partial class ChatWindow : Window
         regenerate.Visibility = !chat.Busy && !chat.Compacting && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
         compact.Visibility = !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null ? Visibility.Visible : Visibility.Collapsed;
         compact.IsEnabled = !chat.Compacting;
-        compact.Content = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
+        // The caption names the button for screen readers too.
+        compactCaption.Text = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
         // The numbers are under the answer itself; the bar keeps only a compaction's problem.
         if (!chat.Compacting && last is { Role: "assistant" }) stats.Text = "";
         send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };

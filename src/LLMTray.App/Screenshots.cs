@@ -34,8 +34,8 @@ static class Screenshots
                 await chat.DocumentScreenshotsAsync(folder);
                 // The current browser tab (adr/0022): Edge on the runner, read through UI Automation.
                 await chat.TabScreenshotsAsync(folder, SaveElementAsync);
-                // The chat's column, centred however wide the window is.
-                await chat.ColumnScreenshotAsync(folder, SaveElementAsync);
+                // A short chat: the answers, Regenerate and the composer.
+                await chat.MessagesScreenshotAsync(folder, SaveElementAsync);
             }
             app.ShowSettings();
             foreach (var tab in new[] { "general", "models", "profiles", "memory", "tools", "server", "updates" })

@@ -2,6 +2,7 @@ using LLMTray.Core.Chat;
 using LLMTray.Core.ProjectFiles;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
@@ -340,6 +341,64 @@ sealed partial class ChatWindow
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, L.F("{0} {1}", action, file));
         button.Click += (_, _) => click();
         return button;
+    }
+
+    /// <summary>The project this chat's dropped documents go to: a saved chat in a project.</summary>
+    LLMTray.Core.Chat.ChatProject? ProjectForFiles() =>
+        chat.Id is { } id && !chat.Temporary ? App.Current.ChatLibrary.ProjectOf(id) : null;
+
+    /// <summary>
+    /// Documents dropped, pasted or picked in the chat (Mac: the chat area's
+    /// drop). In a project they're added to its files; otherwise the note
+    /// says where they can go.
+    /// </summary>
+    async Task AddToProjectAsync(IReadOnlyList<StorageFile> files, ChatProject? project, int epoch)
+    {
+        var app = App.Current;
+        var names = string.Join(", ", files.Select(f => f.Name).Take(3)) + (files.Count > 3 ? "…" : "");
+        if (project is null)
+        {
+            DocumentNote(true, L.F("{0}: only pictures can be attached. Documents go into a project: move this chat to a project, then drop them here.", names));
+            return;
+        }
+        if (!app.Settings.ProjectFiles)
+        {
+            DocumentNote(true, L.F("{0}: turn on Files in projects in Settings › Tools to add documents to a project.", names));
+            return;
+        }
+        var paths = files.Select(f => f.Path).Where(p => p.Length > 0).ToList();
+        IReadOnlyList<AddResult> results;
+        try
+        {
+            results = await app.ProjectFiles.AddAsync(project.Id, paths, FreeSpace);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            results = [.. paths.Select(p => new AddResult(Path.GetFileName(p), null, "couldn't be added: " + e.Message))];
+        }
+        // Another chat opened meanwhile: the files are in the project, the note isn't this chat's.
+        if (epoch != chat.Epoch) return;
+        var refused = results.Where(r => r.Refused is not null).Select(r => L.F("{0}: {1}", r.Name, L.T(r.Refused!)))
+            // Not a file on this PC (a phone, a zip's inside): drop it from Explorer once it's saved.
+            .Concat(files.Where(f => f.Path.Length == 0).Select(f => L.F("{0}: {1}", f.Name, L.T("not a file on this PC: save it to a folder first"))))
+            .ToList();
+        var added = results.Count(r => r.Refused is null);
+        if (refused.Count > 0)
+        {
+            DocumentNote(true, string.Join("\n", refused.Take(5).Prepend(added > 0 ? L.F("Added to {0}: {1}.", project.Name, added) : L.T("Not added:"))));
+            return;
+        }
+        DocumentNote(false, L.F("Added to {0}: {1}.", project.Name, added));
+    }
+
+    /// <summary>The documents' outcome, under a note the pictures left (theirs stays); red if either is a warning.</summary>
+    void DocumentNote(bool warning, string text)
+    {
+        var earlier = attachNote.Visibility == Visibility.Visible && attachNote.Text.Length > 0;
+        if (earlier) warning |= attachNote.Foreground is SolidColorBrush shown && Ui.Red is SolidColorBrush red && shown.Color == red.Color;
+        attachNote.Text = earlier ? attachNote.Text + "\n" + text : text;
+        attachNote.Foreground = warning ? Ui.Red : Ui.Secondary;
+        attachNote.Visibility = Visibility.Visible;
     }
 
     static long FreeSpace(string folder)
