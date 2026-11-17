@@ -25,10 +25,10 @@ public static partial class DateQuery
     /// </summary>
     public static Day? Parse(string? text, Day today, bool monthFirst)
     {
-        // A full stop ending the sentence isn't a dotted date's ("04/05/2024.").
+        // A full stop (or an ellipsis) ending the sentence isn't a dotted date's ("04/05/2024.").
         // Apostrophes as the Ukrainian names have them ("пʼятниця"), whichever one was typed.
         var s = (text ?? "").Trim().ToLowerInvariant().Replace('\'', '\u02BC').Replace('\u2019', '\u02BC');
-        if (s.EndsWith('.')) s = s[..^1].TrimEnd();
+        s = s.TrimEnd('.', ' ');
         if (s.Length == 0) return null;
         if (Relative.TryGetValue(s, out var offset)) return Shift(today, offset);
 
@@ -44,6 +44,7 @@ public static partial class DateQuery
         var numbers = new List<(int Value, int Digits)>();
         var separators = new HashSet<char>();
         var afterNumber = false;
+        var afterSeparator = false;
         // Words before the first number (where a weekday stands), and a comma between numbers (a range or a list, not one date).
         var leading = new List<string>();
         var commaBetween = false;
@@ -71,6 +72,8 @@ public static partial class DateQuery
             else if (token.Length == 1 && "./-".Contains(token[0]))
             {
                 // Between numbers only: "Wed." has a dot of its own.
+                // Doubled between numbers ("10..04.2024"): not a date.
+                if (afterSeparator) return null;
                 if (afterNumber)
                 {
                     separators.Add(token[0]);
@@ -78,6 +81,7 @@ public static partial class DateQuery
                 }
             }
             else if (token != ",") words.Add(token);
+            afterSeparator = token.Length == 1 && "./-".Contains(token[0]);
             afterNumber = isNumber;
         }
         // A weekday's short form may also be a month's ("mar." is Tuesday in French):
@@ -160,6 +164,9 @@ public static partial class DateQuery
     public static bool IsMonthFirst(CultureInfo culture)
     {
         var pattern = culture.DateTimeFormat.ShortDatePattern;
+        // A year-first short format (ISO y-MM-dd for ckb-IQ, ug, sg …) says nothing about day and month:
+        // the long format's order then, without its weekday (dddd).
+        if (pattern.TrimStart('\'', ' ').StartsWith('y')) pattern = culture.DateTimeFormat.LongDatePattern.Replace("dddd", "").Replace("ddd", "");
         var m = pattern.IndexOf('M');
         var d = pattern.IndexOf('d');
         return m >= 0 && d >= 0 && m < d;
@@ -207,7 +214,10 @@ public static partial class DateQuery
             if (!char.IsWhiteSpace(ch)) tokens.Add(ch.ToString());
         }
         if (current.Length > 0) tokens.Add(current.ToString());
-        return tokens;
+        // A hyphenated word stays whole only when it's a name ("quarta-feira"); "10th-apr" is split back.
+        return [.. tokens.SelectMany(t => t.Length > 1 && t.Contains('-') && !IsWeekday(t) && MonthNamed(t) is null
+            ? t.Split('-').SelectMany((part, i) => i == 0 ? new[] { part } : ["-", part]).Where(p => p.Length > 0)
+            : [t])];
     }
 
     static readonly Dictionary<string, int> Relative = new(StringComparer.Ordinal)
