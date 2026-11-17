@@ -7,7 +7,9 @@ sealed partial class ChatWindow
     /// <summary>
     /// The messages, Regenerate and the composer in one centred column. The
     /// runner's screen is too small for a window wider than the column, so
-    /// the column is narrowed for the picture instead.
+    /// the messages are narrowed for the picture instead: they should sit in
+    /// the middle, over the centre of the composer. CI only (it leaves a new
+    /// empty chat).
     /// </summary>
     internal async Task ColumnScreenshotAsync(string folder, Func<UIElement, string, Task> save)
     {
@@ -17,10 +19,16 @@ sealed partial class ChatWindow
         RenderSoon();
         var width = messages.MaxWidth;
         messages.MaxWidth = 420;
-        await Task.Delay(1200);
-        if (Content is UIElement content) await save(content, Path.Combine(folder, "chat-column.png"));
-        messages.MaxWidth = width;
-        chat.New();
+        try
+        {
+            await Task.Delay(1200);
+            if (Content is UIElement content) await save(content, Path.Combine(folder, "chat-column.png"));
+        }
+        finally
+        {
+            messages.MaxWidth = width;
+            chat.New();
+        }
         await Task.Delay(500);
     }
 }
