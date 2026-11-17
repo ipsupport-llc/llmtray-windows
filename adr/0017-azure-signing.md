@@ -60,16 +60,25 @@ publisher is another app to Windows: it doesn't update the old one in
 place, and it has its own data folder. So the first MSIX signed this way
 (0.1.0-beta.12) doesn't replace a 0.1.0-beta.11-or-earlier MSIX.
 
-- **Carrying over.** On its first start (no settings yet), the new
-  package looks for the LLMTray package of another publisher used most
-  recently (by the newest file in its data) in `%LOCALAPPDATA%\Packages`.
-  It copies that package's data (settings, chats, MCP servers, folder
-  grants and the journal) into a staging folder, and moves it into place
-  only once all of it has copied. The marker is written before those
-  moves, so an interrupted start finishes them next time. Nothing of the
-  old one is changed. If
-  the copy fails, the app starts fresh, and while the old package is
-  installed the chat says to keep it, with why.
+- **Carrying over** (`DataCarryOver` in Core). On its first start (no
+  settings yet), the new package looks in `%LOCALAPPDATA%\Packages` for the
+  LLMTray package of another publisher used most recently. It ranks them by
+  the newest file it would copy, so logs don't count. It copies that
+  package's data (settings, chats, MCP servers, folder grants and the
+  journal) into a staging folder, then moves it into place. Logs, the
+  downloaded update, the WebView cache and the old package's own
+  bookkeeping are left out. The marker is written before those moves, so
+  an interrupted start finishes them next time. Nothing of the old one is
+  changed.
+- **The old app may still be running**, because its updater restarts it.
+  Its files are read even while it holds them open for writing. A file it
+  holds locked outright is tried a few times. If it still can't be read,
+  it's listed in the marker and copied on a later start, unless a file of
+  that name exists here by then: what the user did in the new app is never
+  overwritten. Until then the chat says to keep the old package, with why.
+  0.1.0-beta.12 to 0.1.1 gave up on the whole copy instead (a marker with
+  no list). The next start copies all of it the same way: whatever is
+  already here, such as the fresh settings, stays as it is.
 - **Removing the old one.** While the old package is still installed, the
   chat says so, with a button to Settings › Apps. Removing it there deletes
   its data, which was copied first.
@@ -79,8 +88,8 @@ place, and it has its own data folder. So the first MSIX signed this way
   old one. Both are "LLMTray" in Start until then.
 - The same happens once more with the company's certificate: the first
   release after 0.1.1 is a new family again. The carry-over above takes
-  the other publisher's package used most recently, which is the 0.1.x
-  one unless a pre-beta.12 package was started after it. The ZIP and the installer don't care: their signature isn't part of
+  the other publisher's package used most recently: the 0.1.x one, unless
+  a pre-beta.12 package was used after it. The ZIP and the installer don't care: their signature isn't part of
   any identity, and they update in place as before.
 
 ## Not yet
