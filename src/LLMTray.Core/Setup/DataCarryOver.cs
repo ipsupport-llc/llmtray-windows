@@ -74,13 +74,13 @@ public static class DataCarryOver
                 {
                     from = head[1..];
                     var old = LocalState(packages, from);
+                    // A first copy that failed before moving anything in: what it did copy goes in now.
+                    Commit(staging, folder);
                     if (from.Length == 0 || !Directory.Exists(old))
                     {
                         // The old package is gone, and with it what wasn't copied.
                         return Finish(folder, packages, from, []);
                     }
-                    // A first copy that failed before anything was moved in: started again, file by file.
-                    if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
                     // No list: all of it (that, or an earlier version giving up on the whole copy).
                     var wanted = left.Count > 0 ? left : Files(old).ToList();
                     var still = new List<string>();
@@ -142,8 +142,9 @@ public static class DataCarryOver
 
     static Result Finish(string folder, string packages, string from, List<string> missed)
     {
-        WriteMarker(folder, missed.Count == 0 ? from : "!" + from, missed);
+        // Cleared before "done" is noted: once it is, nothing here looks again.
         if (missed.Count == 0) RemoveParts(folder);
+        WriteMarker(folder, missed.Count == 0 ? from : "!" + from, missed);
         var installed = Installed(packages, from);
         if (missed.Count == 0) return new Result(installed ? from : null, null);
         return new Result(installed ? from : null, $"{missed.Count} file(s) were in use, such as {missed[0]}; they're copied on a later start");
@@ -152,7 +153,7 @@ public static class DataCarryOver
     /// <summary>Half-copied files an interrupted start left behind.</summary>
     static void RemoveParts(string folder)
     {
-        foreach (var part in Files(folder, includeParts: true).Where(f => f.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase)))
+        foreach (var part in Files(folder, f => f.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase)))
         {
             try
             {
@@ -169,7 +170,9 @@ public static class DataCarryOver
     static bool Installed(string packages, string package) => package.Length > 0 && Directory.Exists(Path.Combine(packages, package));
 
     /// <summary>The files to copy, relative to the data folder; what's skipped isn't even looked into.</summary>
-    static IEnumerable<string> Files(string root, bool includeParts = false)
+    static IEnumerable<string> Files(string root) => Files(root, Copies);
+
+    static IEnumerable<string> Files(string root, Func<string, bool> wanted)
     {
         var folders = new Stack<string>([root]);
         while (folders.Count > 0)
@@ -183,18 +186,21 @@ public static class DataCarryOver
             foreach (var file in Directory.EnumerateFiles(dir))
             {
                 var relative = Path.GetRelativePath(root, file);
-                if (Copies(relative) || includeParts && relative.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase) && !Skipped.Contains(relative.Split('\\', '/')[0]))
-                    yield return relative;
+                if (wanted(relative)) yield return relative;
             }
         }
     }
 
-    /// <summary>Ranked by the newest of the files it would copy: its logs and bookkeeping don't count.</summary>
+    /// <summary>
+    /// Ranked by the newest of the files it would copy, a database's
+    /// write-ahead log included (its latest changes may be only there): its
+    /// logs and bookkeeping don't count.
+    /// </summary>
     static DateTime Newest(string dir)
     {
         try
         {
-            return Files(dir).Take(20_000).Select(f => File.GetLastWriteTimeUtc(Path.Combine(dir, f))).DefaultIfEmpty().Max();
+            return Files(dir, f => Copies(f) || f.EndsWith(".sqlite-wal", StringComparison.OrdinalIgnoreCase)).Take(20_000).Select(f => File.GetLastWriteTimeUtc(Path.Combine(dir, f))).DefaultIfEmpty().Max();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -266,7 +272,7 @@ public static class DataCarryOver
     static void Commit(string staging, string folder)
     {
         if (!Directory.Exists(staging)) return;
-        foreach (var relative in Files(staging, includeParts: false))
+        foreach (var relative in Files(staging))
         {
             var target = Path.Combine(folder, relative);
             if (File.Exists(target) || Directory.Exists(target)) continue;

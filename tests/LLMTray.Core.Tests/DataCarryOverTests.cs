@@ -277,4 +277,23 @@ public sealed class DataCarryOverTests : IDisposable
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
+    [Fact]
+    public void WhatAFailedFirstCopyStagedGoesInEvenIfTheOldPackageIsGone()
+    {
+        Write(Path.Combine(Folder, ".carrying-over"), Path.Combine("sessions", "c.json"), "c");
+        Write(Folder, DataCarryOver.MarkerName, "!" + Name + "_gone");
+        Assert.Equal(new DataCarryOver.Result(null, null), Run());
+        Assert.Equal("c", File.ReadAllText(Path.Combine(Folder, "sessions", "c.json")));
+        Assert.False(Directory.Exists(Path.Combine(Folder, ".carrying-over")));
+    }
+
+    [Fact]
+    public void ADatabaseLogCountsTowardsTheNewest()
+    {
+        var early = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        Write(Old(Name + "_a"), "settings.json", "a", early);
+        Write(Old(Name + "_a"), Path.Combine("projects", "p", "index.sqlite-wal"), "w", early.AddDays(60));
+        Write(Old(Name + "_b"), "settings.json", "b", early.AddDays(30));
+        Assert.Equal(Name + "_a", Run().OldPackage);
+    }
 }
