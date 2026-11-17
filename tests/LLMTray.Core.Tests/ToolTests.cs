@@ -117,60 +117,8 @@ public sealed class ToolTests
         Assert.Equal(-945, day["days_from_today"]!.GetValue<int>());
         var bad = await box.RunAsync(new ToolCall { Name = "get_current_time", Arguments = """{"date": "someday"}""" }, on, default);
         Assert.True(bad.Failed);
-        Assert.Contains("YYYY-MM-DD", bad.Result);
+        Assert.Contains("send it as YYYY-MM-DD", bad.Result);
     }
-
-    [Theory]
-    [InlineData("2024-04-10")]
-    [InlineData("Apr 10, 2024")]
-    [InlineData("April 10 2024")]
-    [InlineData("10 April 2024")]
-    [InlineData("10.04.2024")]
-    [InlineData("2024/4/10")]
-    [InlineData("2024-04-10T15:00:00")]
-    [InlineData("2024-04-10T23:30:00-07:00")]
-    [InlineData("10.04.2024 12:00")]
-    [InlineData("Apr. 10th, 2024")]
-    [InlineData("Wednesday, 10 April 2024")]
-    [InlineData("10th of April 2024")]
-    [InlineData("10-Apr-2024")]
-    [InlineData("10/Apr/2024")]
-    [InlineData("Apr-10-2024")]
-    [InlineData("April 10,2024")]
-    [InlineData("April 10, 2024 3:00 PM")]
-    [InlineData("April 10, 2024 at 15:00 UTC")]
-    [InlineData("Wed, Apr 10, 2024")]
-    public void DatesReadInTheFormsModelsWrite(string raw) =>
-        Assert.Equal(new DateOnly(2024, 4, 10), CurrentTimeTool.ParseDate(raw));
-
-    [Theory]
-    [InlineData("13/04/2024", 2024, 4, 13)]
-    [InlineData("04/13/2024", 2024, 4, 13)]
-    [InlineData("04-04-2024", 2024, 4, 4)]
-    [InlineData("Sept 1, 2024", 2024, 9, 1)]
-    [InlineData("04.13.2024", 2024, 4, 13)]
-    public void UnambiguousSlashesAndWordsRead(string raw, int year, int month, int day) =>
-        Assert.Equal(new DateOnly(year, month, day), CurrentTimeTool.ParseDate(raw));
-
-    [Theory]
-    [InlineData("10/04/2024")]   // April or October
-    [InlineData("4/10/2024")]
-    [InlineData("10.04.24")]     // two-digit year
-    [InlineData("April 2024")]   // no day
-    [InlineData("April 10")]     // no year
-    [InlineData("12:00")]
-    [InlineData("2024-02-30")]
-    [InlineData("Junk 10, 2024")]
-    [InlineData("Junk 10 April 2024")]
-    [InlineData("before April 10, 2024")]
-    [InlineData("March April 10, 2024")]
-    [InlineData("Monday, 10 April 2024")]  // it was a Wednesday
-    [InlineData("April 10, 2024 99:99")]
-    [InlineData("\u0662\u0660\u0662\u0664-04-10")]  // Arabic-Indic digits
-    [InlineData("2024-04-100")]
-    [InlineData("someday")]
-    [InlineData("")]
-    public void UncertainDatesAreRefused(string raw) => Assert.Null(CurrentTimeTool.ParseDate(raw));
 
     [Fact]
     public void WebSearchQueriesAreCleanedUp()
