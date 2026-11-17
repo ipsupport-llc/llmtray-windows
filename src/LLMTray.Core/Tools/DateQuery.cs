@@ -47,6 +47,8 @@ public static partial class DateQuery
         // Words before the first number (where a weekday stands), and a comma between numbers (a range or a list, not one date).
         var leading = new List<string>();
         var commaBetween = false;
+        // A whole numeric date has a separator after each of its first two numbers ("10-20 2024" is a range).
+        var separatorCount = 0;
         foreach (var token in Tokens(s))
         {
             if (token == "," && afterNumber) commaBetween = true;
@@ -69,7 +71,11 @@ public static partial class DateQuery
             else if (token.Length == 1 && "./-".Contains(token[0]))
             {
                 // Between numbers only: "Wed." has a dot of its own.
-                if (afterNumber) separators.Add(token[0]);
+                if (afterNumber)
+                {
+                    separators.Add(token[0]);
+                    separatorCount++;
+                }
             }
             else if (token != ",") words.Add(token);
             afterNumber = isNumber;
@@ -79,7 +85,7 @@ public static partial class DateQuery
         var months = words.Select(MonthNamed).OfType<int>().ToHashSet();
         if (months.Count > 1) months = words.Where(w => !IsWeekday(w)).Select(MonthNamed).OfType<int>().ToHashSet();
         // So before a whole date in numbers ("mar. 10/04/2024"): there the word is the weekday.
-        else if (numbers.Count == 3 && !commaBetween && words.All(w => leading.Contains(w) && (IsWeekday(w) || MonthNamed(w) is null)))
+        else if (numbers.Count == 3 && !commaBetween && separatorCount == 2 && words.All(w => leading.Contains(w) && (IsWeekday(w) || MonthNamed(w) is null)))
         {
             months = [];
         }
@@ -105,7 +111,7 @@ public static partial class DateQuery
             }
         }
 
-        if (numbers.Count != 3 || separators.Count > 1 || commaBetween) return null;
+        if (numbers.Count != 3 || separators.Count > 1 || separatorCount != 2 || commaBetween) return null;
         var (x, y, z) = (numbers[0], numbers[1], numbers[2]);
         // 2024/04/10, 2024.04.10.
         if (x.Digits == 4) return y.Digits <= 2 && z.Digits <= 2 ? Valid(x.Value, y.Value, z.Value) : null;

@@ -95,6 +95,8 @@ public class DateQueryTests
     [InlineData("April 2024")]
     [InlineData("10-11 Mar 2024")]
     [InlineData("Mar 10-20, 2024")]
+    [InlineData("Mar 10-20 2024")]
+    [InlineData("Mar 10-Mar 20 2024")]
     [InlineData("feira 13/05/2024")]
     public void Rejects(string text) => Assert.Null(Iso(text));
 
