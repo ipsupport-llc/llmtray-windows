@@ -50,6 +50,9 @@ hold unless written otherwise here.
 - **The embedder** is a second llama-server, the CPU build with
   `--embedding --pooling cls`, for `ggml-org/bge-m3-Q8_0-GGUF`. That is
   llama.cpp's own conversion, MIT, 605 MB, pinned by commit and SHA-256.
+  It comes from the source chosen for models: Hugging Face, or the same
+  file on the Kaggle components mirror (`romanromenskyi/llmtray-components`,
+  `gguf/bge-m3-q8-0-gguf`, version 1), checked by the same hash.
   It runs on the CPU so it never takes GPU memory from the chat model.
   It's started when memory needs vectors and stopped after 5 idle
   minutes. The model is kept in the app's data, not the models folder,
