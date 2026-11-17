@@ -294,3 +294,18 @@ public sealed class DownloadTests : IAsyncDisposable
         Assert.Contains(FeaturedModels.All, m => m.IsOn(DownloadSource.Kaggle));
     }
 }
+
+public sealed class EmbedModelSourceTests
+{
+    [Fact]
+    public void TheEmbedderComesFromTheChosenSource()
+    {
+        var hf = LLMTray.Core.Runtime.EmbedModel.UrlFrom(LLMTray.Core.Downloads.DownloadSource.HuggingFace);
+        var kaggle = LLMTray.Core.Runtime.EmbedModel.UrlFrom(LLMTray.Core.Downloads.DownloadSource.Kaggle);
+        Assert.Equal("huggingface.co", hf.Host);
+        Assert.Equal("www.kaggle.com", kaggle.Host);
+        // The same file under the same name, pinned to a version on both.
+        Assert.EndsWith("/" + LLMTray.Core.Runtime.EmbedModel.FileName, hf.AbsolutePath);
+        Assert.EndsWith("/1/download/" + LLMTray.Core.Runtime.EmbedModel.FileName, kaggle.AbsolutePath);
+    }
+}

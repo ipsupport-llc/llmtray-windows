@@ -66,9 +66,17 @@ public partial class App : Application
     /// <summary>Where the embedding model is kept: the app's data, not the models folder (it isn't a chat model).</summary>
     public string EmbedderFile => Path.Combine(DataFolder, "embedder", LLMTray.Core.Runtime.EmbedModel.FileName);
 
-    /// <summary>Downloads the embedding model memory needs (about 600 MB), with the other downloads.</summary>
-    public void DownloadEmbedder() => Downloads.Enqueue(new DownloadJob(L.T("Embedding model for memory (bge-m3)"),
-        [new DownloadItem(LLMTray.Core.Runtime.EmbedModel.Url, EmbedderFile, LLMTray.Core.Runtime.EmbedModel.Size, LLMTray.Core.Runtime.EmbedModel.Sha256)]));
+    /// <summary>
+    /// Downloads the embedding model memory needs (about 600 MB), with the
+    /// other downloads, from the source chosen for models (Hugging Face or
+    /// Kaggle). The same file either way, checked by its hash.
+    /// </summary>
+    public void DownloadEmbedder()
+    {
+        var url = LLMTray.Core.Runtime.EmbedModel.UrlFrom(Settings.DownloadSource);
+        Downloads.Enqueue(new DownloadJob(L.T("Embedding model for memory (bge-m3)"),
+            [new DownloadItem(url, EmbedderFile, LLMTray.Core.Runtime.EmbedModel.Size, LLMTray.Core.Runtime.EmbedModel.Sha256, Identity: url.ToString())]));
+    }
 
     /// <summary>The chat's folder tools (adr/0016).</summary>
     public LLMTray.Core.Folders.FolderTools Folders { get; private set; } = null!;
