@@ -26,6 +26,13 @@ public static class EmbedModel
     public const int Dimensions = 1024;
     public const string Sha256 = "aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173";
     public static readonly Uri Url = new("https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/9eba04c5d75ba5a1595e45de734d36bef4e5cb98/bge-m3-q8_0.gguf");
+
+    /// <summary>The same file, unchanged, on the Kaggle mirror of LLMTray's components (Mac adr/0032), at its version.</summary>
+    public static readonly Uri KaggleUrl = new("https://www.kaggle.com/api/v1/models/romanromenskyi/llmtray-components/gguf/bge-m3-q8-0-gguf/1/download/bge-m3-q8_0.gguf");
+
+    /// <summary>Where it's downloaded from: the source chosen for models (some networks reach only one).</summary>
+    public static Uri UrlFrom(LLMTray.Core.Downloads.DownloadSource source) =>
+        source == LLMTray.Core.Downloads.DownloadSource.Kaggle ? KaggleUrl : Url;
 }
 
 /// <summary>
