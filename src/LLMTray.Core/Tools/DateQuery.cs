@@ -250,7 +250,9 @@ public static partial class DateQuery
     /// <summary>Weekday names, full, short and shortest ("quarta-feira" stays one word: a hyphen between letters is kept).</summary>
     static readonly HashSet<string> WeekdayNames = [.. Cultures().SelectMany(c =>
         c.DateTimeFormat.DayNames.Concat(c.DateTimeFormat.AbbreviatedDayNames).Concat(c.DateTimeFormat.ShortestDayNames))
-        .Select(n => Bare(n.ToLowerInvariant().Replace('\u2019', '\u02BC'))).Where(n => n.Length > 0)];
+        .Select(n => Bare(n.ToLowerInvariant().Replace('\u2019', '\u02BC'))).Where(n => n.Length > 0)
+        // The first three letters of each full name too: short forms differ between the OS's locale data ("qua." isn't in every pt-PT).
+        .Concat(Cultures().SelectMany(c => c.DateTimeFormat.DayNames).Select(n => n.ToLowerInvariant()).Where(n => n.Length > 3).Select(n => n[..3]))];
 
     static int? MonthNamed(string word)
     {
