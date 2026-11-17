@@ -11,11 +11,15 @@ self-signed certificate of adr/0002 (point 4) for every release.
   `-setup.exe` installers. Microsoft's public trust chain backs the
   signature, so the MSIX installs without administrator rights or a
   certificate to trust first, and no `.cer` ships any more.
-- **The certificate is the maintainer's own** (an individual identity). The
-  company's identity validation is still in progress. When it completes,
-  the profile switches to it, and that's another publisher change (below).
+- **The certificate is the company's** (IPSupport LLC, an organization
+  identity, profile `ipsupport-public`) since 2026-11-17. Releases up to
+  0.1.1 were signed with the maintainer's own (an individual identity);
+  the first release after it is another publisher change (below). The
+  account stays on the Basic tier, which holds one Public Trust profile,
+  so the individual profile was deleted first.
 - **What's public and what isn't.** The subject (`CN=…, O=…, L=…, S=…,
-  C=…`) names a person and a town. Every signed file shows it to whoever
+  C=…`) named a person and a town while the certificate was the
+  maintainer's; the company's names the company. Either way, every signed file shows it to whoever
   looks: that's what a signature is (and the signing tool's own log may
   show it too). It still stays out of the repository, and the workflow
   prints nothing about it: the
@@ -73,8 +77,10 @@ place, and it has its own data folder. So the first MSIX signed this way
   and restarts itself, since it can't know the new family. The release
   notes therefore say: quit the old LLMTray, start the new one, remove the
   old one. Both are "LLMTray" in Start until then.
-- The same happens once more when the company's certificate replaces this
-  one. The ZIP and the installer don't care: their signature isn't part of
+- The same happens once more with the company's certificate: the first
+  release after 0.1.1 is a new family again. The carry-over above takes
+  the other publisher's package used most recently, which is the 0.1.x
+  one unless a pre-beta.12 package was started after it. The ZIP and the installer don't care: their signature isn't part of
   any identity, and they update in place as before.
 
 ## Not yet

@@ -260,7 +260,7 @@ jobs:
           FILES: ${{ steps.files.outputs.msix }},${{ steps.files.outputs.programs }},${{ steps.setups.outputs.files }}
           PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
         run: |
-          # Nothing about the signer is printed: its subject names a person.
+          # Nothing about the signer is printed (adr/0017): the subject stays out of the logs.
           foreach ($f in $env:FILES.Split(',')) {
             $sig = Get-AuthenticodeSignature $f
             if ($sig.Status -ne 'Valid') { throw "$(Split-Path $f -Leaf) is not validly signed ($($sig.Status))" }
