@@ -25,10 +25,10 @@ public static partial class DateQuery
     /// </summary>
     public static Day? Parse(string? text, Day today, bool monthFirst)
     {
-        // A full stop ending the sentence isn't a dotted date's ("04/05/2024.").
+        // A full stop (or an ellipsis) ending the sentence isn't a dotted date's ("04/05/2024.").
         // Apostrophes as the Ukrainian names have them ("пʼятниця"), whichever one was typed.
         var s = (text ?? "").Trim().ToLowerInvariant().Replace('\'', '\u02BC').Replace('\u2019', '\u02BC');
-        if (s.EndsWith('.')) s = s[..^1].TrimEnd();
+        s = s.TrimEnd('.', ' ');
         if (s.Length == 0) return null;
         if (Relative.TryGetValue(s, out var offset)) return Shift(today, offset);
 
@@ -44,6 +44,9 @@ public static partial class DateQuery
         var numbers = new List<(int Value, int Digits)>();
         var separators = new HashSet<char>();
         var afterNumber = false;
+        var afterNumberSeparator = false;
+        // Which numbers were ordinals ("10th"): a day, never a year.
+        var ordinals = new HashSet<int>();
         // Words before the first number (where a weekday stands), and a comma between numbers (a range or a list, not one date).
         var leading = new List<string>();
         var commaBetween = false;
@@ -65,12 +68,15 @@ public static partial class DateQuery
                 if (digits.Length <= 2 && token[digits.Length..] is "st" or "nd" or "rd" or "th")
                 {
                     numbers.Add((int.Parse(digits, CultureInfo.InvariantCulture), digits.Length));
+                    ordinals.Add(numbers.Count - 1);
                 }
                 else return null;
             }
             else if (token.Length == 1 && "./-".Contains(token[0]))
             {
                 // Between numbers only: "Wed." has a dot of its own.
+                // Doubled after a number ("10..04.2024"): not a date ("Wed..." is fine).
+                if (afterNumberSeparator) return null;
                 if (afterNumber)
                 {
                     separators.Add(token[0]);
@@ -78,6 +84,7 @@ public static partial class DateQuery
                 }
             }
             else if (token != ",") words.Add(token);
+            afterNumberSeparator = token.Length == 1 && "./-".Contains(token[0]) && afterNumber;
             afterNumber = isNumber;
         }
         // A weekday's short form may also be a month's ("mar." is Tuesday in French):
@@ -103,8 +110,8 @@ public static partial class DateQuery
                 case 2:
                     // The year last ("Apr 10, 2024", "10-Apr-24") or first with four digits ("2024 Apr 10").
                     var (a, b) = (numbers[0], numbers[1]);
-                    if (a.Digits <= 2 && b.Digits is 4 or 2) return Valid(Year(b, today), month, a.Value);
-                    if (a.Digits == 4 && b.Digits <= 2) return Valid(a.Value, month, b.Value);
+                    if (a.Digits <= 2 && b.Digits is 4 or 2 && !ordinals.Contains(1)) return Valid(Year(b, today), month, a.Value);
+                    if (a.Digits == 4 && b.Digits <= 2 && !ordinals.Contains(0)) return Valid(a.Value, month, b.Value);
                     return null;
                 default:
                     return null;
@@ -160,6 +167,9 @@ public static partial class DateQuery
     public static bool IsMonthFirst(CultureInfo culture)
     {
         var pattern = culture.DateTimeFormat.ShortDatePattern;
+        // A year-first short format (ISO y-MM-dd for ckb-IQ, ug, sg …) says nothing about day and month:
+        // the long format's order then, without its weekday (dddd).
+        if (pattern.TrimStart('\'', ' ').StartsWith('y')) pattern = culture.DateTimeFormat.LongDatePattern.Replace("dddd", "").Replace("ddd", "");
         var m = pattern.IndexOf('M');
         var d = pattern.IndexOf('d');
         return m >= 0 && d >= 0 && m < d;
@@ -207,7 +217,10 @@ public static partial class DateQuery
             if (!char.IsWhiteSpace(ch)) tokens.Add(ch.ToString());
         }
         if (current.Length > 0) tokens.Add(current.ToString());
-        return tokens;
+        // A hyphenated word stays whole only when it's a name ("quarta-feira"); "10th-apr" is split back.
+        return [.. tokens.SelectMany(t => t.Length > 1 && t.Contains('-') && !IsWeekday(t) && MonthNamed(t) is null
+            ? t.Split('-').SelectMany((part, i) => i == 0 ? new[] { part } : ["-", part]).Where(p => p.Length > 0)
+            : [t])];
     }
 
     static readonly Dictionary<string, int> Relative = new(StringComparer.Ordinal)

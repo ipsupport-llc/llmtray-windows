@@ -39,6 +39,12 @@ public class DateQueryTests
     [InlineData("2024-04-10 12:30")]
     [InlineData("10.04.2024.")]
     [InlineData("mar. 10/04/2024")]
+    [InlineData("10th-Apr-2024")]
+    [InlineData("Wednesday-April 10 2024")]
+    [InlineData("April 10, 2024...")]
+    [InlineData("10.04.2024..")]
+    [InlineData("Wed... April 10, 2024")]
+    [InlineData("...April 10, 2024")]
     [InlineData("quarta-feira, 10 de abril de 2024")]
     [InlineData("qua., 10 de abril de 2024")]
     [InlineData("śr., 10 kwietnia 2024")]
@@ -92,6 +98,8 @@ public class DateQueryTests
     [InlineData("٢٠٢٤-٠٤-١٠")]
     [InlineData("2024-٠٤-10")]
     [InlineData("Apr 10, 999")]
+    [InlineData("10..04.2024")]
+    [InlineData("10th-12th-May")]
     [InlineData("April 2024")]
     [InlineData("10-11 Mar 2024")]
     [InlineData("Mar 10-20, 2024")]
@@ -127,5 +135,9 @@ public class DateQueryTests
         Assert.True(DateQuery.IsMonthFirst(CultureInfo.GetCultureInfo("en-US")));
         Assert.False(DateQuery.IsMonthFirst(CultureInfo.GetCultureInfo("ru-RU")));
         Assert.False(DateQuery.IsMonthFirst(CultureInfo.GetCultureInfo("en-GB")));
+        // A year-first short format: the long one's order.
+        var isoShort = (CultureInfo)CultureInfo.GetCultureInfo("ru-RU").Clone();
+        isoShort.DateTimeFormat.ShortDatePattern = "yyyy-MM-dd";
+        Assert.False(DateQuery.IsMonthFirst(isoShort));
     }
 }
