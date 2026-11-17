@@ -78,8 +78,9 @@ place, and it has its own data folder. So the first MSIX signed this way
   notes therefore say: quit the old LLMTray, start the new one, remove the
   old one. Both are "LLMTray" in Start until then.
 - The same happens once more with the company's certificate: the first
-  release after 0.1.1 is a new family again, and the carry-over above
-  finds the 0.1.x package as the other publisher's. The ZIP and the installer don't care: their signature isn't part of
+  release after 0.1.1 is a new family again. The carry-over above takes
+  the other publisher's package used most recently, which is the 0.1.x
+  one unless a pre-beta.12 package was started after it. The ZIP and the installer don't care: their signature isn't part of
   any identity, and they update in place as before.
 
 ## Not yet
