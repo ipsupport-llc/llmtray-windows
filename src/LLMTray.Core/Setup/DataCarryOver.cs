@@ -21,6 +21,7 @@ public static class DataCarryOver
 
     public const string MarkerName = "carried-over.txt";
     const string StagingName = ".carrying-over";
+    const string PartSuffix = ".carrying";
 
     /// <summary>
     /// Not copied: its own bookkeeping (what it carried over once, its restart
@@ -32,8 +33,17 @@ public static class DataCarryOver
         MarkerName, "restart.cmd", StagingName, "logs", "updates", "webview",
     };
 
-    /// <summary>Whether a path relative to the data folder is copied.</summary>
-    public static bool Copies(string relative) => !Skipped.Contains(relative.Split('\\', '/')[0]);
+    /// <summary>
+    /// Whether a path relative to the data folder is copied. A SQLite
+    /// database is copied whole through SQLite (a consistent snapshot),
+    /// so its write-ahead log and shared memory aren't copied beside it.
+    /// </summary>
+    public static bool Copies(string relative) =>
+        !Skipped.Contains(relative.Split('\\', '/')[0])
+        && !relative.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase)
+        && !relative.EndsWith(".sqlite-wal", StringComparison.OrdinalIgnoreCase)
+        && !relative.EndsWith(".sqlite-shm", StringComparison.OrdinalIgnoreCase)
+        && !relative.EndsWith(".sqlite-journal", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// <paramref name="folder"/>: this package's data folder.
@@ -43,11 +53,11 @@ public static class DataCarryOver
     /// </summary>
     public static Result Run(string folder, string packages, string name, string family, int attempts = 5, int pauseMs = 200)
     {
-        var marker = Path.Combine(folder, MarkerName);
-        var staging = Path.Combine(folder, StagingName);
         string? from = null;
         try
         {
+            var marker = Path.Combine(folder, MarkerName);
+            var staging = Path.Combine(folder, StagingName);
             if (File.Exists(marker))
             {
                 var lines = File.ReadAllLines(marker).Where(l => l.Length > 0).ToList();
@@ -58,7 +68,7 @@ public static class DataCarryOver
                     // Interrupted while moving into place: all that could be was copied, the rest is moved now.
                     from = head[1..];
                     Commit(staging, folder);
-                    return Finish(marker, packages, from, left);
+                    return Finish(folder, packages, from, left);
                 }
                 if (head.StartsWith('!'))
                 {
@@ -67,21 +77,19 @@ public static class DataCarryOver
                     if (from.Length == 0 || !Directory.Exists(old))
                     {
                         // The old package is gone, and with it what wasn't copied.
-                        File.WriteAllText(marker, from);
-                        return new Result(null, null);
+                        return Finish(folder, packages, from, []);
                     }
-                    // No list: an earlier version gave up on all of it (nothing was moved in).
+                    // A first copy that failed before anything was moved in: started again, file by file.
+                    if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+                    // No list: all of it (that, or an earlier version giving up on the whole copy).
                     var wanted = left.Count > 0 ? left : Files(old).ToList();
                     var still = new List<string>();
                     foreach (var relative in wanted)
                     {
-                        if (!Copies(relative)) continue;
-                        var source = Path.Combine(old, relative);
-                        var target = Path.Combine(folder, relative);
-                        if (File.Exists(target) || !File.Exists(source)) continue;
-                        if (!TryCopy(source, target, attempts: 1, pauseMs, keepExisting: true)) still.Add(relative);
+                        if (!Copies(relative) || File.Exists(Path.Combine(folder, relative))) continue;
+                        if (!TryCopy(Path.Combine(old, relative), Path.Combine(folder, relative), attempts: 1, pauseMs, keepExisting: true)) still.Add(relative);
                     }
-                    return Finish(marker, packages, from, still);
+                    return Finish(folder, packages, from, still);
                 }
                 return new Result(Installed(packages, head) ? head : null, null);
             }
@@ -102,42 +110,84 @@ public static class DataCarryOver
                 if (!TryCopy(Path.Combine(newest, relative), Path.Combine(staging, relative), attempts, pauseMs, keepExisting: false)) missed.Add(relative);
             }
             // Copied: noted first (">name" and what's missing: a restart finishes the moves), then into place, then done.
-            File.WriteAllLines(marker, missed.Prepend(">" + from));
+            WriteMarker(folder, ">" + from, missed);
             Commit(staging, folder);
-            return Finish(marker, packages, from, missed);
+            return Finish(folder, packages, from, missed);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // Not carried over: the app starts fresh, and while the old package is there the chat says to keep it.
+            // Not carried over yet: while the old package is there the chat says to keep it.
             if (from is null) return new Result(null, null);
             try
             {
-                if (!File.Exists(marker) || !File.ReadAllText(marker).StartsWith('>')) File.WriteAllText(marker, "!" + from);
+                // A marker already there ("!" with what's left, or ">" with moves to finish) stays as it is:
+                // the next start goes on from it. Without one nothing was moved in, so all of it is tried again.
+                if (!File.Exists(Path.Combine(folder, MarkerName))) WriteMarker(folder, "!" + from, []);
             }
             catch (Exception again) when (again is IOException or UnauthorizedAccessException)
             {
             }
-            return new Result(from, e.Message);
+            return new Result(Installed(packages, from) ? from : null, e.Message);
         }
     }
 
-    static Result Finish(string marker, string packages, string from, List<string> missed)
+    /// <summary>Written whole or not at all: a half-written marker would lose what's left to copy.</summary>
+    static void WriteMarker(string folder, string head, IEnumerable<string> left)
     {
-        File.WriteAllLines(marker, missed.Count == 0 ? [from] : missed.Prepend("!" + from));
+        var marker = Path.Combine(folder, MarkerName);
+        var part = marker + PartSuffix;
+        File.WriteAllLines(part, left.Prepend(head));
+        File.Move(part, marker, overwrite: true);
+    }
+
+    static Result Finish(string folder, string packages, string from, List<string> missed)
+    {
+        WriteMarker(folder, missed.Count == 0 ? from : "!" + from, missed);
+        if (missed.Count == 0) RemoveParts(folder);
         var installed = Installed(packages, from);
         if (missed.Count == 0) return new Result(installed ? from : null, null);
         return new Result(installed ? from : null, $"{missed.Count} file(s) were in use, such as {missed[0]}; they're copied on a later start");
+    }
+
+    /// <summary>Half-copied files an interrupted start left behind.</summary>
+    static void RemoveParts(string folder)
+    {
+        foreach (var part in Files(folder, includeParts: true).Where(f => f.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                File.Delete(Path.Combine(folder, part));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     static string LocalState(string packages, string package) => Path.Combine(packages, package, "LocalState");
 
     static bool Installed(string packages, string package) => package.Length > 0 && Directory.Exists(Path.Combine(packages, package));
 
-    /// <summary>The files to copy, relative to the data folder.</summary>
-    static IEnumerable<string> Files(string old) =>
-        Directory.EnumerateFiles(old, "*", SearchOption.AllDirectories)
-            .Select(f => Path.GetRelativePath(old, f))
-            .Where(Copies);
+    /// <summary>The files to copy, relative to the data folder; what's skipped isn't even looked into.</summary>
+    static IEnumerable<string> Files(string root, bool includeParts = false)
+    {
+        var folders = new Stack<string>([root]);
+        while (folders.Count > 0)
+        {
+            var dir = folders.Pop();
+            foreach (var sub in Directory.EnumerateDirectories(dir))
+            {
+                if (dir == root && Skipped.Contains(Path.GetFileName(sub))) continue;
+                folders.Push(sub);
+            }
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                var relative = Path.GetRelativePath(root, file);
+                if (Copies(relative) || includeParts && relative.EndsWith(PartSuffix, StringComparison.OrdinalIgnoreCase) && !Skipped.Contains(relative.Split('\\', '/')[0]))
+                    yield return relative;
+            }
+        }
+    }
 
     /// <summary>Ranked by the newest of the files it would copy: its logs and bookkeeping don't count.</summary>
     static DateTime Newest(string dir)
@@ -155,20 +205,24 @@ public static class DataCarryOver
 
     /// <summary>
     /// Copies one file even while the old app has it open for writing, a few
-    /// times if it's locked outright. With <paramref name="keepExisting"/>,
-    /// a file that appeared at the target meanwhile is kept.
+    /// times if it's locked outright; a SQLite database through SQLite. A
+    /// file gone from the source counts as done. With
+    /// <paramref name="keepExisting"/>, a file that appeared at the target
+    /// meanwhile is kept.
     /// </summary>
     static bool TryCopy(string source, string target, int attempts, int pauseMs, bool keepExisting)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        var part = target + ".carrying";
+        var part = target + PartSuffix;
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var output = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (source.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase)) CopyDatabase(source, part);
+                else
                 {
+                    using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var output = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None);
                     input.CopyTo(output);
                 }
                 File.SetLastWriteTimeUtc(part, File.GetLastWriteTimeUtc(source));
@@ -176,7 +230,7 @@ public static class DataCarryOver
                 else File.Move(part, target, overwrite: !keepExisting);
                 return true;
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
             {
                 try
                 {
@@ -192,19 +246,32 @@ public static class DataCarryOver
         }
     }
 
+    /// <summary>A consistent copy of a database the old app may be writing: SQLite's own backup.</summary>
+    static void CopyDatabase(string source, string target)
+    {
+        if (!File.Exists(source)) throw new FileNotFoundException(null, source);
+        if (File.Exists(target)) File.Delete(target);
+        using var from = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = source, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        using var to = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = target, Pooling = false }.ToString());
+        from.Open();
+        to.Open();
+        from.BackupDatabase(to);
+    }
+
     /// <summary>
-    /// Moves what was copied into place. This folder is new, so a name already
-    /// there is one an interrupted run moved before: the copy left in staging goes.
+    /// Moves what was copied into place, file by file: a name already there
+    /// (moved by an interrupted run, or made here since) is kept, and the copy
+    /// left in staging goes.
     /// </summary>
     static void Commit(string staging, string folder)
     {
         if (!Directory.Exists(staging)) return;
-        foreach (var entry in Directory.EnumerateFileSystemEntries(staging))
+        foreach (var relative in Files(staging, includeParts: false))
         {
-            var target = Path.Combine(folder, Path.GetFileName(entry));
+            var target = Path.Combine(folder, relative);
             if (File.Exists(target) || Directory.Exists(target)) continue;
-            if (Directory.Exists(entry)) Directory.Move(entry, target);
-            else File.Move(entry, target);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Move(Path.Combine(staging, relative), target);
         }
         Directory.Delete(staging, recursive: true);
     }

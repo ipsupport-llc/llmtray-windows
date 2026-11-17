@@ -1,4 +1,5 @@
 using LLMTray.Core.Setup;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace LLMTray.Core.Tests;
@@ -187,5 +188,93 @@ public sealed class DataCarryOverTests : IDisposable
         Assert.False(File.Exists(Path.Combine(Folder, "settings.json")));
         Directory.Delete(Path.Combine(Packages, Name + "_a"), recursive: true);
         Assert.Equal(new DataCarryOver.Result(null, null), Run());
+    }
+    [Fact]
+    public void ADatabaseInUseIsCopiedWholeThroughSqlite()
+    {
+        var old = Old(Name + "_a");
+        Write(old, "settings.json", "s");
+        var db = Path.Combine(old, "projects", "p", "index.sqlite");
+        Directory.CreateDirectory(Path.GetDirectoryName(db)!);
+        using (var open = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = db, Pooling = false }.ToString()))
+        {
+            open.Open();
+            using (var cmd = open.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE t(x); INSERT INTO t VALUES (42);";
+                cmd.ExecuteNonQuery();
+            }
+            // Still open, the row only in its write-ahead log.
+            Assert.True(new FileInfo(db + "-wal").Length > 0);
+            Assert.Null(Run().Failed);
+        }
+        var copy = Path.Combine(Folder, "projects", "p", "index.sqlite");
+        Assert.False(File.Exists(copy + "-wal"));
+        using var read = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = copy, Pooling = false }.ToString());
+        read.Open();
+        using var query = read.CreateCommand();
+        query.CommandText = "SELECT x FROM t";
+        Assert.Equal(42L, query.ExecuteScalar());
+    }
+
+    [Fact]
+    public void AnInterruptedMoveMergesIntoFoldersAlreadyThere()
+    {
+        Write(Old(Name + "_a"), "settings.json", "s");
+        Write(Path.Combine(Folder, ".carrying-over"), Path.Combine("sessions", "old.json"), "old");
+        Write(Path.Combine(Folder, ".carrying-over"), Path.Combine("sessions", "both.json"), "theirs");
+        Write(Folder, Path.Combine("sessions", "both.json"), "mine");
+        Write(Folder, DataCarryOver.MarkerName, ">" + Name + "_a");
+
+        Assert.Null(Run().Failed);
+        Assert.Equal("old", File.ReadAllText(Path.Combine(Folder, "sessions", "old.json")));
+        Assert.Equal("mine", File.ReadAllText(Path.Combine(Folder, "sessions", "both.json")));
+    }
+
+    [Fact]
+    public void HalfCopiedFilesAndStagingAreClearedOnceDone()
+    {
+        var old = Old(Name + "_a");
+        Write(old, "settings.json", "s");
+        Write(old, Path.Combine("sessions", "a.json"), "a");
+        Write(Folder, "settings.json", "fresh");
+        Write(Folder, Path.Combine("sessions", "a.json.carrying"), "half");
+        Write(Folder, Path.Combine(".carrying-over", "settings.json"), "staged");
+        Write(Folder, DataCarryOver.MarkerName, "!" + Name + "_a");
+
+        Assert.Null(Run().Failed);
+        Assert.Equal("a", File.ReadAllText(Path.Combine(Folder, "sessions", "a.json")));
+        Assert.Empty(Directory.EnumerateFiles(Folder, "*.carrying", SearchOption.AllDirectories));
+        Assert.False(Directory.Exists(Path.Combine(Folder, ".carrying-over")));
+    }
+
+    [Fact]
+    public void ASourceGoneSinceCountsAsDone()
+    {
+        Write(Old(Name + "_a"), "settings.json", "s");
+        Write(Folder, DataCarryOver.MarkerName, "!" + Name + "_a\nsessions/gone/x.json\nnot-there.json");
+        Assert.Null(Run().Failed);
+        Assert.Equal(Name + "_a", Marker);
+    }
+
+    [Fact]
+    public void SkippedFoldersArentLookedInto()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var old = Old(Name + "_a");
+        Write(old, "settings.json", "s");
+        var locked = Path.Combine(old, "webview", "EBWebView");
+        Directory.CreateDirectory(locked);
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            var result = Run();
+            Assert.Null(result.Failed);
+            Assert.Equal("s", File.ReadAllText(Path.Combine(Folder, "settings.json")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 }
