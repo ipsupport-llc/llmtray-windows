@@ -44,6 +44,23 @@ static class Screenshots
                 await Task.Delay(1200);
                 if (app.SettingsWindow is { } settings) await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
             }
+            // Memory's settings as they are once it's on (CI's app has it off): turned on for the shot, then back.
+            if (app.SettingsWindow is { } withMemory && !app.Memory.Settings.Enabled)
+            {
+                var was = app.Memory.Settings;
+                try
+                {
+                    app.Memory.SetSettings(was with { Enabled = true });
+                    withMemory.ShowPage("memory");
+                    await Task.Delay(1200);
+                    await SaveAsync(withMemory, Path.Combine(folder, "settings-memory-on.png"));
+                }
+                finally
+                {
+                    app.Memory.SetSettings(was);
+                    withMemory.ShowPage("memory");
+                }
+            }
             // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
             await StoreAsync(app, Path.Combine(folder, "store"));
             app.ShowAbout();
