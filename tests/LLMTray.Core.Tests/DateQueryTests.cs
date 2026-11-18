@@ -112,6 +112,8 @@ public class DateQueryTests
     [InlineData("2024th Apr 10")]
     [InlineData("10/04/2024th")]
     [InlineData("2024th/04/10")]
+    [InlineData("10/04/24th")]
+    [InlineData("10.04.24th")]
     [InlineData("10 04 2024")]
     [InlineData("10, 04, 2024")]
     [InlineData("10/04-2024")]
