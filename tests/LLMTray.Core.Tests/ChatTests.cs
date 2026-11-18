@@ -886,6 +886,11 @@ public sealed class ChatClientTests : IAsyncDisposable
         other.LoadToolGroup("fake");
         await other.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (_, _) => throw new InvalidOperationException("asked")));
         Assert.Equal("done", Assert.Single(other.Messages[^1].McpCalls).Outcome);
+
+        // Turned off in Settings: asked again, in this chat too.
+        store.Update(server.Key, c => c with { RunWithoutAsking = [] });
+        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (r, _) => { asked.Add(r); return Task.FromResult(McpApproval.Allow); }));
+        Assert.Equal(2, asked.Count);
     }
 
     [Fact]
@@ -898,6 +903,11 @@ public sealed class ChatClientTests : IAsyncDisposable
             Name = "S", Command = "s",
             Reviewed = new() { ["read"] = reviewed.DefinitionHash, ["write"] = "an older definition" },
         };
+        // Another command, environment or address under the same key isn't the same server.
+        Assert.True(config.SameServer(config with { Name = "Renamed" }));
+        Assert.False(config.SameServer(config with { Command = "other" }));
+        Assert.False(config.SameServer(config with { Environment = new() { ["TOKEN"] = "x" } }));
+        Assert.False(config.SameServer(config with { Arguments = ["--root", "/"] }));
         var on = config.WithRunWithoutAsking([reviewed, changed], true);
         Assert.Equal([reviewed.DefinitionHash], on.RunWithoutAsking);
         Assert.Empty(on.WithRunWithoutAsking([reviewed], false).RunWithoutAsking);

@@ -38,6 +38,14 @@ public sealed record McpServerConfig
     [JsonIgnore]
     public string Summary => IsCommand ? Runtime.CommandLine.Join(Command!, Arguments) : Url ?? "";
 
+    /// <summary>The same server: its command, arguments, address, environment and headers (an allowance given to one isn't another's).</summary>
+    public bool SameServer(McpServerConfig other) =>
+        Key == other.Key && Command == other.Command && Url == other.Url && Arguments.SequenceEqual(other.Arguments)
+        && Same(Environment, other.Environment) && Same(Headers, other.Headers);
+
+    static bool Same(Dictionary<string, string> a, Dictionary<string, string> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var v) && v == p.Value);
+
     /// <summary>
     /// Several tools at once (Mac MCPHub.setRunWithoutAsking): each one as
     /// reviewed to run without asking, or to be asked again. A tool not

@@ -85,7 +85,8 @@ public sealed partial class MainWindow
                 var visible = tools.Where(t => server.Reviewed.TryGetValue(t.Name, out var h) && h == t.DefinitionHash).ToList();
                 if (server.Enabled && visible.Count > 0)
                 {
-                    void SetAll(IEnumerable<McpTool> on) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(visible, false).WithRunWithoutAsking(on, true));
+                    // Whatever was allowed before goes, also for tools not listed now: then the ones chosen, as reviewed.
+                    void SetAll(IEnumerable<McpTool> on) => app.Mcp.Store.Update(key, c => (c with { RunWithoutAsking = [] }).WithRunWithoutAsking(on, true));
                     var all = new List<UIElement> { Ui.Button(L.T("Everything"), () => SetAll(visible)) };
                     if (visible.Any(t => t.ReadOnlyHint == true)) all.Add(Ui.Button(L.T("Reads Only"), () => SetAll(visible.Where(t => t.ReadOnlyHint == true))));
                     all.Add(Ui.Button(L.T("Nothing"), () => SetAll([])));

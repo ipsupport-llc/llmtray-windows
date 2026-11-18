@@ -40,7 +40,10 @@ their tools, called the way the built-in ones are (adr/0009).
   MCP text in it, a call is asked even with an allowance, except a tool
   its command server marks read-only (what it reads comes back, its
   arguments go nowhere); the allowances are offered then only for such a
-  tool, and a call asked although it was allowed says why. **MCP
+  tool, never Everything from the server, and a call asked although it
+  was allowed says why. Always Allow is the Settings switch alone (turned
+  off there, the chat asks again), given only to the server the question
+  was about (same command, arguments, address, environment and headers). **MCP
   results are outside text**: after one, the built-in tools that reach the
   internet are refused for the rest of the turn.
 - **A record in the chat**: each call leaves a line under the answer,

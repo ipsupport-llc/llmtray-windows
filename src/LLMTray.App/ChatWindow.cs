@@ -476,19 +476,25 @@ sealed partial class ChatWindow : Window
                     void Pick(string text, McpApproval answer)
                     {
                         var item = new MenuFlyoutItem { Text = text };
-                        item.Click += (_, _) =>
-                        {
-                            picked = answer;
-                            dialog.Hide();
-                        };
+                        item.Click += (_, _) => picked = answer;
                         more.Items.Add(item);
                     }
                     Pick(L.T("Allow for This Chat"), McpApproval.AllowForThisChat);
-                    Pick(L.F("Always Allow Everything from {0}", request.Server), McpApproval.AllowServerAlways);
+                    if (request.EverythingOffered) Pick(L.F("Always Allow Everything from {0}", request.Server), McpApproval.AllowServerAlways);
+                    // The question closes once the menu has: not inside the item's own click, while the menu still closes.
+                    more.Closed += (_, _) =>
+                    {
+                        if (picked is not null) dialog.Hide();
+                    };
                     body.Children.Add(new DropDownButton { Content = L.T("More"), Flyout = more, HorizontalAlignment = HorizontalAlignment.Right });
                 }
                 // Stop closes the question with the turn: no dialog is left behind to block the next one.
-                using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(dialog.Hide));
+                using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(() =>
+                {
+                    // Nothing picked from a menu left open: Stop answers Deny.
+                    picked = null;
+                    dialog.Hide();
+                }));
                 var result = await dialog.ShowAsync();
                 done.TrySetResult(stopped.IsCancellationRequested ? McpApproval.Deny : picked ?? result switch
                 {
