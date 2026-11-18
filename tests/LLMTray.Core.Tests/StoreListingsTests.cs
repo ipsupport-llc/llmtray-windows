@@ -31,6 +31,10 @@ public sealed class StoreListingsTests
     }
 
     [Fact]
+    public void AtMostTenScreenshots() =>
+        Assert.Throws<InvalidDataException>(() => StoreListings.Order(Enumerable.Range(0, 11).Select(i => $"x/{i}.png")));
+
+    [Fact]
     public void ScreenshotsKeepTheirOrder()
     {
         Assert.Equal(
@@ -85,7 +89,10 @@ public sealed class StoreListingsTests
     public void WithoutScreenshotsThePublishedOnesStay()
     {
         var submission = JsonNode.Parse("""{ "listings": { "en-us": { "baseListing": { "images": [ { "fileName": "a.png", "fileStatus": "Uploaded", "imageType": "Screenshot" } ] } } } }""")!.AsObject();
-        StoreListings.Apply(submission, "p.msixupload", new Dictionary<string, StoreText> { ["en-us"] = Text() }, []);
+        // A new language would have no screenshots: it waits for a release that has some.
+        var skipped = StoreListings.Apply(submission, "p.msixupload", new Dictionary<string, StoreText> { ["en-us"] = Text(), ["de-de"] = Text() }, []);
+        Assert.Equal(["de-de"], skipped);
+        Assert.Null(submission["listings"]!["de-de"]);
         var images = submission["listings"]!["en-us"]!["baseListing"]!["images"]!.AsArray();
         Assert.Single(images);
         Assert.Equal("Uploaded", (string?)images[0]!["fileStatus"]);

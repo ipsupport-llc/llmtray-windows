@@ -22,7 +22,7 @@ public sealed record StoreText(
 public static class StoreListings
 {
     /// <summary>The Store's limits on a listing's fields.</summary>
-    public const int MaxTitle = 256, MaxShortDescription = 1000, MaxDescription = 10_000, MaxFeatures = 20, MaxFeature = 200, MaxSearchTerms = 7, MaxSearchTerm = 30;
+    public const int MaxScreenshots = 10, MaxTitle = 256, MaxShortDescription = 1000, MaxDescription = 10_000, MaxFeatures = 20, MaxFeature = 200, MaxSearchTerms = 7, MaxSearchTerm = 30;
 
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
@@ -61,7 +61,8 @@ public static class StoreListings
     {
         string[] first = ["chat.png", "settings-models.png", "settings-server.png", "settings-tools.png", "settings-memory.png"];
         var list = names.Select(Path.GetFileName).OfType<string>().Where(n => n.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToList();
-        return [.. first.Where(list.Contains), .. list.Where(n => !first.Contains(n)).Order(StringComparer.Ordinal)];
+        List<string> ordered = [.. first.Where(list.Contains), .. list.Where(n => !first.Contains(n)).Order(StringComparer.Ordinal)];
+        return ordered.Count <= MaxScreenshots ? ordered : throw new InvalidDataException($"{ordered.Count} screenshots: the Store takes at most {MaxScreenshots}");
     }
 
     /// <summary>
@@ -69,10 +70,13 @@ public static class StoreListings
     /// place: <paramref name="package"/> (a file name in the upload) replaces
     /// the packages, each language in <paramref name="texts"/> gets its text,
     /// and, when <paramref name="screenshots"/> (file names in the upload) has
-    /// any, they replace every language's screenshots.
+    /// any, they replace every language's screenshots. A language the
+    /// submission doesn't have yet is added only with screenshots (a listing
+    /// without any isn't complete); returns the languages left out.
     /// </summary>
-    public static void Apply(JsonObject submission, string package, IReadOnlyDictionary<string, StoreText> texts, IReadOnlyList<string> screenshots)
+    public static IReadOnlyList<string> Apply(JsonObject submission, string package, IReadOnlyDictionary<string, StoreText> texts, IReadOnlyList<string> screenshots)
     {
+        var skipped = new List<string>();
         var packages = submission["applicationPackages"] as JsonArray ?? [];
         foreach (var old in packages.OfType<JsonObject>()) old["fileStatus"] = "PendingDelete";
         packages.Add(new JsonObject
@@ -90,6 +94,11 @@ public static class StoreListings
         {
             if (listings[language] is not JsonObject listing)
             {
+                if (screenshots.Count == 0)
+                {
+                    skipped.Add(language);
+                    continue;
+                }
                 listing = new JsonObject { ["platformOverrides"] = new JsonObject() };
                 listings[language] = listing;
             }
@@ -105,7 +114,7 @@ public static class StoreListings
             base_["keywords"] = new JsonArray([.. text.SearchTerms.Select(t => (JsonNode?)t)]);
             base_["copyrightAndTrademarkInfo"] = text.Copyright;
         }
-        if (screenshots.Count == 0) return;
+        if (screenshots.Count == 0) return skipped;
         foreach (var listing in listings.Select(l => l.Value).OfType<JsonObject>())
         {
             if (listing["baseListing"] is not JsonObject base_) continue;
@@ -126,5 +135,6 @@ public static class StoreListings
             }
             base_["images"] = images;
         }
+        return skipped;
     }
 }
