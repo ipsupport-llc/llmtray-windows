@@ -286,14 +286,14 @@ public static class LegacyOffice
                     // A damaged Data stream costs the table layout, not the text.
                 }
             }
-            row = Mark.None;
-            if (data is not null && at + 2L <= data.Length)
-            {
-                var length = CompoundFile.U16(data, (int)at);
-                // A list holds no further pointer of this kind ([MS-DOC] PrcData), so one step is all.
-                if (at + 2L + length <= data.Length && (read += length) <= data.Length) row = LegacyOffice.Paragraph(data, (int)at + 2, (int)at + 2 + length);
-            }
-            known[at] = row;
+            // No stream, or no list there: nothing to remember.
+            if (data is null || at + 2L > data.Length) return Mark.None;
+            var length = CompoundFile.U16(data, (int)at);
+            // A list holds no further pointer of this kind ([MS-DOC] PrcData), so one step is all; past the stream's size in all, no more are read.
+            if (at + 2L + length > data.Length || (read += length + 2) > data.Length) return Mark.None;
+            row = LegacyOffice.Paragraph(data, (int)at + 2, (int)at + 2 + length);
+            // Remembered up to a point; past it, still read, within the byte budget above.
+            if (known.Count < 100_000) known[at] = row;
             return row;
         }
     }
