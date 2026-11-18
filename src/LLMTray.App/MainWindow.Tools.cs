@@ -46,6 +46,7 @@ public sealed partial class MainWindow
             var signingIn = app.McpSignIn.IsSigningIn(key);
             var status = signingIn ? L.T("Finish signing in in your browser…")
                 : mcpBusy.Contains(key) ? L.T("Starting…")
+                : server.PendingOwnApp && server.OAuthClientId is null ? L.T("Needs your own app")
                 : state.NeedsSignIn ? L.T("Needs sign-in")
                 : McpStatus(state);
             var rows = new List<UIElement?>
@@ -77,6 +78,20 @@ public sealed partial class MainWindow
                     }
                     buttons.Add(Ui.Button(L.T("Sign Out"), () => _ = SignOutMcpAsync(server)));
                     rows.Add(Ui.Row(L.T("Signed in"), where, Ui.Horizontal(buttons.ToArray())));
+                }
+                // The user's own app (Mac adr/0028): only for servers that register none, like Slack.
+                if (server.PendingOwnApp || server.OAuthClientId is not null || state.NeedsSignIn)
+                {
+                    var ownHelp = server.OAuthClientId is { } ownId ? L.F("Client ID {0}", ownId)
+                        : server.PendingOwnApp ? L.T("This server registers no apps. Make your own in its developer settings, then enter its Client ID here.")
+                        : L.T("Only for servers that need one, like Slack.");
+                    rows.Add(Ui.Row(L.T("Your own app"), ownHelp,
+                        Ui.Button(L.T("Your Own App…"), () => _ = OwnAppAsync(server), accent: server.PendingOwnApp && server.OAuthClientId is null)));
+                    if (server.PendingOwnApp && server.OAuthClientId is not null && !signingIn && !state.NeedsSignIn && server.OAuth is null)
+                    {
+                        rows.Add(Ui.Row(L.T("Sign-in"), L.T("Sign in with your own app to finish adding this server."),
+                            Ui.Button(L.T("Sign In"), () => _ = SignInMcpAsync(server, justAdded: false), accent: true)));
+                    }
                 }
             }
             if (state.Tools is { } tools)
@@ -182,6 +197,13 @@ public sealed partial class MainWindow
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             if (app.Mcp.Current(key) is { } now) await app.Mcp.EnableAsync(now, timeout.Token);
         }
+        catch (McpOAuthException e) when (e.Kind == McpOAuthFailure.NeedsOwnApp)
+        {
+            // It registers no apps: it stays, off, waiting for the user's own (its row says how).
+            app.Mcp.Store.Update(key, c => c with { Enabled = false });
+            await app.Mcp.StopAsync(key);
+            mcpError = L.F("{0} needs your own app: open Your Own App… under it.", server.Name);
+        }
         catch (Exception e)
         {
             var why = e is OperationCanceledException ? L.T("the sign-in was cancelled") : e.Message;
@@ -201,6 +223,84 @@ public sealed partial class MainWindow
         {
             mcpSignIns.Remove(key);
             mcpBusy.Remove(key);
+        }
+        RenderPage();
+    }
+
+    /// <summary>
+    /// The user's own app for a server that registers none (Mac adr/0028):
+    /// the redirect URL to register (asked of its sign-in server), its client
+    /// id and, if it has one, its secret (kept protected, sent only to the
+    /// token endpoint).
+    /// </summary>
+    async Task OwnAppAsync(McpServerConfig server)
+    {
+        var app = App.Current;
+        var key = server.Key;
+        if (Content?.XamlRoot is null) return;
+        var redirect = new TextBox { IsReadOnly = true, FontFamily = Ui.Mono, Text = L.T("Asking the server…"), MinWidth = 300 };
+        var copy = Ui.Button(L.T("Copy"), () => Copy(redirect.Text));
+        copy.IsEnabled = false;
+        var id = new TextBox { Text = server.OAuthClientId ?? "", PlaceholderText = L.T("Client ID"), MinWidth = 360 };
+        var hasSecret = app.McpSignIn.HasOwnAppSecret(key);
+        var secret = new PasswordBox { PlaceholderText = hasSecret ? L.T("Client secret (saved)") : L.T("Client secret"), MinWidth = 360 };
+        var dropSecret = new CheckBox { Content = L.T("Remove the saved secret"), Visibility = hasSecret ? Visibility.Visible : Visibility.Collapsed };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(id, L.T("Client ID"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(secret, L.T("Client secret"));
+        var panel = new StackPanel { Spacing = 8, MaxWidth = 520 };
+        panel.Children.Add(Ui.Caption(L.T("Make an app in the server's developer settings, register this redirect URL there, then enter the app's Client ID and, if it has one, its secret. The secret stays protected on this PC and goes only to the server's sign-in.")));
+        panel.Children.Add(Ui.Caption(L.T("Redirect URL")));
+        panel.Children.Add(Ui.Horizontal(redirect, copy));
+        panel.Children.Add(id);
+        panel.Children.Add(secret);
+        panel.Children.Add(dropSecret);
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Content.XamlRoot,
+            Title = L.T("Your Own App"),
+            Content = new ScrollViewer { Content = panel },
+            PrimaryButtonText = L.T("Save"),
+            SecondaryButtonText = server.OAuthClientId is not null ? L.T("Remove App") : "",
+            CloseButtonText = L.T("Cancel"),
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        // The sign-in server, asked while the dialog is open: the app is held to it.
+        string? issuer = null;
+        var open = true;
+        using var asking = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var token = asking.Token;
+        _ = Task.Run(async () =>
+        {
+            string text;
+            string? found = null;
+            try
+            {
+                (text, found) = await app.McpSignIn.OwnAppRedirectAsync(key, token);
+            }
+            catch (Exception e)
+            {
+                text = L.F("The server didn't say ({0}).", e.Message);
+            }
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!open) return;
+                issuer = found;
+                redirect.Text = text;
+                copy.IsEnabled = found is not null;
+            });
+        });
+        var result = await ShowMcpDialogAsync(dialog);
+        open = false;
+        asking.Cancel();
+        if (result == ContentDialogResult.Primary)
+        {
+            // An empty box keeps the saved secret (for the same Client ID only); the box below removes it.
+            var typed = secret.Password.Length > 0 ? secret.Password : dropSecret.IsChecked == true ? "" : null;
+            app.McpSignIn.SetOwnApp(key, id.Text, typed, issuer);
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            app.McpSignIn.SetOwnApp(key, null, null);
         }
         RenderPage();
     }
