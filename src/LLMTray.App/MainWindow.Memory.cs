@@ -67,25 +67,26 @@ public sealed partial class MainWindow
                 var rightAway = when.SelectedIndex == 0;
                 if (rightAway == memory.Settings.ReadRightAway) return;
                 memory.SetSettings(memory.Settings with { ReadRightAway = rightAway });
-                RenderPage();
+                // Not inside the box's own event: the page is drawn anew (the minutes row comes or goes).
+                DispatcherQueue.TryEnqueue(RenderPage);
             };
             rows.Add(Ui.Row(L.T("Read chats"),
                 L.T("When what you wrote is read for notes: a few seconds after each answer, or once the chat has been quiet for a while -- and always when you leave it or quit. Either way it runs in the background only while the model has nothing else to do, and any chat, app or coding agent stops it at once. It never pushes your chat out of the model's prompt cache. Only your own words count, never the answers, files or web pages. Temporary chats and chats with Remember This Chat turned off are never read."),
                 when));
             if (!settings.ReadRightAway)
             {
-                var minutes = new NumberBox { Value = settings.QuietMinutes, Minimum = 1, Maximum = 240, SmallChange = 1, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 120 };
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(minutes, L.T("How long a chat stays quiet before it's read."));
-                var row = Ui.Row(L.F("Quiet for {0} minutes", settings.QuietMinutes), L.T("How long a chat stays quiet before it's read."), minutes);
-                // The title follows the number without drawing the page again (which would take the focus away).
-                var title = (TextBlock)((StackPanel)row.Children[0]).Children[0];
-                minutes.ValueChanged += (_, e) =>
+                var shown = Math.Clamp(settings.QuietMinutes, 1, 240);
+                TextBlock? title = null;
+                var minutes = Number(shown, 1, 240, 1, "0", v =>
                 {
-                    if (double.IsNaN(e.NewValue)) return;
-                    var value = (int)Math.Clamp(e.NewValue, 1, 240);
+                    var value = (int)Math.Clamp(v, 1, 240);
                     memory.SetSettings(memory.Settings with { QuietMinutes = value });
-                    title.Text = L.F("Quiet for {0} minutes", value);
-                };
+                    // The title follows the number without drawing the page again (which would take the focus away).
+                    if (title is not null) title.Text = L.F("Quiet for {0} minutes", value);
+                });
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(minutes, L.T("How long a chat stays quiet before it's read."));
+                var row = Ui.Row(L.F("Quiet for {0} minutes", shown), L.T("How long a chat stays quiet before it's read."), minutes);
+                title = (TextBlock)((StackPanel)row.Children[0]).Children[0];
                 rows.Add(row);
             }
         }

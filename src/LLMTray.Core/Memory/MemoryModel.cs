@@ -119,14 +119,14 @@ public sealed record MemorySettings
     public int FactChats { get; init; } = 2;
     /// <summary>Hours a mood read from the user's last messages reaches new chats; 0: moods aren't read.</summary>
     public int MoodHours { get; init; } = 3;
-    /// <summary>A chat is read once it has been quiet this many minutes.</summary>
+    /// <summary>A chat is read once it has been quiet this many minutes (1 to 240, as Settings offers).</summary>
     public int QuietMinutes { get; init; } = 10;
     /// <summary>A chat is read a few seconds after each answer, not once quiet (Mac "Read chats: Right after each answer").</summary>
     public bool ReadRightAway { get; init; }
 
     /// <summary>How long a chat stays quiet before it's read: a few seconds right after each answer, so a quick follow-up comes first.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public TimeSpan Quiet => ReadRightAway ? TimeSpan.FromSeconds(8) : TimeSpan.FromMinutes(Math.Max(0, QuietMinutes));
+    public TimeSpan Quiet => ReadRightAway ? TimeSpan.FromSeconds(8) : TimeSpan.FromMinutes(Math.Clamp(QuietMinutes, 1, 240));
     /// <summary>The notes' language (a code: "en", "ru"); null: the app's.</summary>
     public string? Language { get; init; }
 
