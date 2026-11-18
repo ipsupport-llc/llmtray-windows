@@ -145,7 +145,7 @@ public sealed class MemoryTests : IDisposable
     [Fact]
     public async Task NothingSaidWhileAChatWasOutIsRead()
     {
-        var model = new FakeModel(_ => "NONE");
+        var model = new FakeModel(system => system.StartsWith("You sort", StringComparison.Ordinal) ? "1: none" : "NONE");
         var now = T0;
         await using var memory = new MemoryService(root, model, () => null, () => "English", () => "gemma", () => now);
         memory.SetSettings(new MemorySettings { Enabled = true });
@@ -193,6 +193,29 @@ public sealed class MemoryTests : IDisposable
             lock (Asked) Asked.Add(system);
             return Task.FromResult(new BackgroundWork.Result(BackgroundWork.Outcome.Done, answer(system)));
         }
+    }
+
+    [Fact]
+    public async Task RightAfterEachAnswerAChatIsReadSecondsLater()
+    {
+        var model = new FakeModel(system => system.StartsWith("You sort", StringComparison.Ordinal) ? "1: none" : "NONE");
+        var now = T0;
+        await using var memory = new MemoryService(root, model, () => new FakeEmbedder(), () => "English", () => "gemma", () => now);
+        memory.SetSettings(new MemorySettings { Enabled = true, QuietMinutes = 10, ReadRightAway = true });
+        Assert.Equal(TimeSpan.FromSeconds(8), memory.Settings.Quiet);
+        memory.Queue(Guid.NewGuid(), [new MemoryBatchMessage { Seq = 1, Date = T0, Text = "I work on compilers", Model = "gemma" }], DateTimeOffset.MinValue);
+        await Task.Delay(300);
+        // Just answered: not yet.
+        Assert.Empty(model.Asked);
+        Assert.Equal(1, memory.Read(f => f.Queue.Count));
+        // Seconds later, not ten minutes.
+        now = T0.AddSeconds(9);
+        memory.Poke();
+        for (var i = 0; i < 100 && memory.Read(f => f.Queue.Count) > 0; i++) await Task.Delay(50);
+        Assert.Equal(0, memory.Read(f => f.Queue.Count));
+        Assert.NotEmpty(model.Asked);
+        // Off: the quiet minutes again.
+        Assert.Equal(TimeSpan.FromMinutes(10), (memory.Settings with { ReadRightAway = false }).Quiet);
     }
 
     [Fact]

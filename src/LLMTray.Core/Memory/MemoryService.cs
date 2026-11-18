@@ -203,6 +203,12 @@ public sealed class MemoryService : IAsyncDisposable
             queued = f.Enqueue(chat, after, Now);
         });
         if (queued || leaving) Poke();
+        // Right after each answer: looked at again once the chat has been quiet that long (the timer's round is minutes).
+        if (queued && !leaving && Settings is { ReadRightAway: true } now)
+        {
+            _ = Task.Delay(now.Quiet + TimeSpan.FromSeconds(1), stopping.Token).ContinueWith(_ => Poke(), CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+        }
     }
 
     /// <summary>"Learn from Past Chats Now": every saved chat's earlier messages queued.</summary>
@@ -297,7 +303,7 @@ public sealed class MemoryService : IAsyncDisposable
                 {
                     now = settings;
                     var t = Now;
-                    var quiet = TimeSpan.FromMinutes(Math.Max(0, settings.QuietMinutes));
+                    var quiet = settings.Quiet;
                     batch = file.Queue.FirstOrDefault(b => notBefore.GetValueOrDefault(b.Id, DateTimeOffset.MinValue) <= t
                         && t - activity.GetValueOrDefault(b.Chat, DateTimeOffset.MinValue) >= quiet
                         && (b.Model is null || string.Equals(b.Model, loadedModel(), StringComparison.OrdinalIgnoreCase)));
@@ -325,7 +331,7 @@ public sealed class MemoryService : IAsyncDisposable
                 if (batch is null)
                 {
                     SetStatus(Read(f => f.Queue.Any(b => b.Model is null || string.Equals(b.Model, model, StringComparison.OrdinalIgnoreCase)))
-                        ? "Reads a chat once it has been quiet a while."
+                        ? now.ReadRightAway ? "Reads a chat a few seconds after each answer." : "Reads a chat once it has been quiet a while."
                         : "Waits for the model the chats were written with to be loaded.");
                     return;
                 }
