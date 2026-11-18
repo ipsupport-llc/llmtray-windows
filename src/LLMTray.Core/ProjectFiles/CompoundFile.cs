@@ -100,9 +100,11 @@ public sealed class CompoundFile
         miniFat ??= Chain(miniFatStart, long.MaxValue, data.Length);
         var output = new byte[entry.Size];
         var s = entry.Start;
-        for (long done = 0, steps = 0; done < entry.Size; steps++)
+        var seen = new HashSet<uint>();
+        for (long done = 0; done < entry.Size; )
         {
-            if (s >= MaxRegular || steps > miniStream.Length / 64) throw Damaged();
+            // A chain that comes back to a sector is damage, not more data.
+            if (s >= MaxRegular || !seen.Add(s)) throw Damaged();
             var at = (long)s * 64;
             if (at + 64 > miniStream.Length) throw Damaged();
             var n = (int)Math.Min(64, entry.Size - done);
@@ -119,12 +121,16 @@ public sealed class CompoundFile
     {
         using var output = new MemoryStream();
         var s = start;
-        for (var steps = 0; s < MaxRegular && output.Length < length; steps++)
+        var seen = new HashSet<uint>();
+        while (s < MaxRegular && output.Length < length)
         {
-            if (steps > sectorCount || output.Length + size > cap + size) throw Damaged();
+            // A chain that comes back to a sector is damage, not more data.
+            if (!seen.Add(s) || output.Length + size > cap + size) throw Damaged();
             var at = Offset(s);
-            output.Write(data, at, (int)Math.Min(size, data.Length - at));
-            if (data.Length - at < size) output.Write(new byte[size - (data.Length - at)]);
+            // A last sector cut short is fine only as far as nothing past the file's end is needed from it.
+            var needed = (int)Math.Min(size, length - output.Length);
+            if (at + (long)needed > data.Length) throw Damaged();
+            output.Write(data, at, needed);
             s = Fat(s);
         }
         if (length != long.MaxValue)

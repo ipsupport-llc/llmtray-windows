@@ -64,10 +64,18 @@ public sealed class LegacyOfficeTests : IDisposable
     {
         var pages = Read(Save("w.doc", Word()));
         Assert.Equal(2, pages.Count);
-        Assert.Equal("Title\nlink end\nПривет a | b", pages[0].Text);
+        Assert.Equal("Title \u201Cq\u201D\nlink end\nПривет a | b", pages[0].Text);
         Assert.StartsWith("next page", pages[1].Text);
         Assert.EndsWith("Footnotes:\nnote one", pages[1].Text);
         Assert.DoesNotContain("HYPERLINK", pages[0].Text);
+    }
+
+    [Fact]
+    public void WordRowEndsComeFromParagraphProperties()
+    {
+        // Cells "A", empty, "B", then the row's own mark (index 5), which the paragraph properties name.
+        var page = Assert.Single(Read(Save("t.doc", Word(main: "A\u0007\u0007B\u0007\u0007next\r", rowMarks: [5]))));
+        Assert.Equal("Title \u201Cq\u201D\nlink end\nA | | B\nnext\n\nFootnotes:\nnote one", page.Text);
     }
 
     [Fact]
@@ -86,7 +94,7 @@ public sealed class LegacyOfficeTests : IDisposable
         Assert.Equal("Quarterly plan\nRevenue grows 12%\nDrawn caption\n\nNotes:\nSpeaker note\nExtra note", pages[0].Text);
         Assert.Equal("Quarterly plan", pages[0].Label);
         // Slide 2 was edited: the older version's text is gone.
-        Assert.Equal("Второй слайд\nplain box", pages[1].Text);
+        Assert.Equal("Второй слайд\nTotal\nTotal\n*", pages[1].Text);
     }
 
     [Fact]
@@ -144,6 +152,21 @@ public sealed class LegacyOfficeTests : IDisposable
                 }
             }
         }
+    }
+
+    [Fact]
+    public void CompoundChainsMustNotLoopOrRunPastTheFile()
+    {
+        var bytes = new byte[8192];
+        Array.Fill(bytes, (byte)'x');
+        var file = Compound(("Data", bytes));
+        Assert.Equal(bytes, CompoundFile.Open(file).Stream("data"));
+        // One FAT sector (0), one directory sector (1): the stream starts at sector 2. Pointed at itself it loops.
+        var looped = (byte[])file.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(looped.AsSpan(512 + 2 * 4), 2);
+        Assert.Throws<ExtractException>(() => CompoundFile.Open(looped).Stream("Data"));
+        // The last sector cut short, with bytes of the stream in the cut part.
+        Assert.Throws<ExtractException>(() => CompoundFile.Open(file[..^100]).Stream("Data"));
     }
 
     // ---- builders: just enough of each format, per its spec ----
@@ -223,10 +246,11 @@ public sealed class LegacyOfficeTests : IDisposable
     }
 
     /// <summary>Word 97: a compressed piece and a Unicode one, a field, a table row, a page break, a footnote.</summary>
-    static byte[] Word(bool encrypted = false)
+    static byte[] Word(bool encrypted = false, string? main = null, int[]? rowMarks = null)
     {
-        var compressed = "Title\r\u0013 HYPERLINK \"x\" \u0014link\u0015 end\r";
-        var main = "Привет a\u0007b\u0007\u0007\u000Cnext page\r";
+        // Curly quotes are 0x93 and 0x94 there; 0x80 is no character.
+        var compressed = "Title \u0093q\u0094\u0080\r\u0013 HYPERLINK \"x\" \u0014link\u0015 end\r";
+        main ??= "Привет a\u0007b\u0007\u0007\u000Cnext page\r";
         var footnote = "note one\r";
         var unicode = main + footnote;
         var word = new byte[4096];
@@ -251,7 +275,20 @@ public sealed class LegacyOfficeTests : IDisposable
         byte[] clx = [2, .. Le32((uint)plc.Count), .. plc];
         Le32(0).CopyTo(word, pairs + 2 + 33 * 8);
         Le32((uint)clx.Length).CopyTo(word, pairs + 2 + 33 * 8 + 4);
-        return Compound(("WordDocument", word), ("1Table", clx));
+        if (rowMarks is null) return Compound(("WordDocument", word), ("1Table", clx));
+        // One page of paragraph properties (at 3072, page 6) with one run, the row mark's paragraph: sprmPFTtp = 1.
+        const int fkp = 3072;
+        var mark = (uint)(2048 + rowMarks.Single() * 2);
+        Le32(mark).CopyTo(word, fkp);
+        Le32(mark + 2).CopyTo(word, fkp + 4);
+        word[fkp + 8] = 200;
+        word[fkp + 511] = 1;
+        byte[] papx = [3, 0, 0, .. Le16(0x2417), 1];
+        papx.CopyTo(word, fkp + 400);
+        byte[] bte = [.. Le32(mark), .. Le32(mark + 2), .. Le32(fkp / 512)];
+        Le32((uint)clx.Length).CopyTo(word, pairs + 2 + 13 * 8);
+        Le32((uint)bte.Length).CopyTo(word, pairs + 2 + 13 * 8 + 4);
+        return Compound(("WordDocument", word), ("1Table", [.. clx, .. bte]));
     }
 
     static byte[] Biff(int type, params byte[][] parts)
@@ -281,7 +318,12 @@ public sealed class LegacyOfficeTests : IDisposable
         sheet.AddRange(Biff(0x027E, Cell(1, 0), Le32(3 << 2 | 2)));
         sheet.AddRange(Biff(0x0203, Cell(1, 1), BitConverter.GetBytes(1.5)));
         sheet.AddRange(Biff(0x0006, Cell(1, 2), [0, 0, 0, 0, 0, 0, 0xFF, 0xFF], new byte[6]));
-        sheet.AddRange(Biff(0x0207, Le16(6), [0], Encoding.Latin1.GetBytes("joined")));
+        // The formula's text goes on in a CONTINUE record, which starts with its own flags byte.
+        sheet.AddRange(Biff(0x0207, Le16(6), [0], Encoding.Latin1.GetBytes("joi")));
+        sheet.AddRange(Biff(0x003C, [0], Encoding.Latin1.GetBytes("ned")));
+        // Too short to hold a string, and a cell past the sheet's 256 columns: both left out.
+        sheet.AddRange(Biff(0x0204));
+        sheet.AddRange(Biff(0x0205, Cell(5, 65535), [1, 0]));
         sheet.AddRange(Biff(0x0205, Cell(2, 0), [1, 0]));
         sheet.AddRange(Biff(0x0205, Cell(2, 1), [0x07, 1]));
         // 100 / 100 and -2 as integers.
@@ -325,13 +367,15 @@ public sealed class LegacyOfficeTests : IDisposable
                 SlidePersist(2, 256), Rec(0x0F9F, Le32(0)), Chars("Quarterly plan"), Bytes("Revenue grows 12%"),
                 SlidePersist(3, 257), Chars("Второй слайд")),
             Box(0x0FF0, 2, SlidePersist(4, 300), Chars("Speaker note"))));
-        var slide1 = Put(Box(0x03EE, 0, SlideAtom(300), Box(0xF002, 0, Box(0xF004, 0, Chars("Quarterly plan"), Chars("Drawn caption"), Chars("*")))));
+        // The title drawn again (said once), a caption, a slide number ("*" beside its field).
+        var slide1 = Put(Box(0x03EE, 0, SlideAtom(300), Box(0xF002, 0, Box(0xF004, 0, Chars("Quarterly plan"), Chars("Drawn caption")), Box(0xF00D, 0, Chars("*"), Rec(0x0FD8, new byte[4])))));
         var oldSlide2 = Put(Box(0x03EE, 0, SlideAtom(0), Box(0xF002, 0, Bytes("OLD TEXT"))));
         var notes = Put(Box(0x03F0, 0, Box(0xF002, 0, Chars("Speaker note"), Chars("Extra note"))));
         var oldDir = Put(Rec(0x1772, [.. Le32(1 | 4u << 20), .. Le32(document), .. Le32(slide1), .. Le32(oldSlide2), .. Le32(notes)]));
         byte[] Edit(uint last, uint dir) => Rec(0x0FF5, [.. Le32(256), .. Le16(0), 0, 3, .. Le32(last), .. Le32(dir), .. Le32(1), .. Le32(5), .. Le16(1), .. Le16(0)]);
         var oldEdit = Put(Edit(0, oldDir));
-        var newSlide2 = Put(Box(0x03EE, 0, SlideAtom(0), Box(0xF002, 0, Box(0xF004, 0, Bytes("plain box")))));
+        // Two shapes with the same words: both read.
+        var newSlide2 = Put(Box(0x03EE, 0, SlideAtom(0), Box(0xF002, 0, Box(0xF004, 0, Bytes("Total")), Box(0xF004, 0, Bytes("Total")), Chars("*"))));
         var newDir = Put(Rec(0x1772, [.. Le32(3 | 1u << 20), .. Le32(newSlide2)]));
         var edit = Put(Edit(oldEdit, newDir));
         var user = Rec(0x0FF6, [.. Le32(0x14), .. Le32(encrypted ? 0xF3D1C4DF : 0xE391C05F), .. Le32(edit), .. new byte[8]]);
