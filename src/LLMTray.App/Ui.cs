@@ -205,6 +205,13 @@ static class Ui
         _ => string.Format(CultureInfo.CurrentCulture, "{0} KB", bytes / 1024),
     };
 
+    /// <summary>The window's scale: physical pixels per DIP.</summary>
+    public static double Scale(Window window)
+    {
+        var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(window)) / 96.0;
+        return scale > 0 ? scale : 1;
+    }
+
     /// <summary>A window of <paramref name="width"/> × <paramref name="height"/> DIPs in the middle of its screen, never bigger than it.</summary>
     public static void Center(Window window, int width, int height, int minWidth = 0, int minHeight = 0)
     {

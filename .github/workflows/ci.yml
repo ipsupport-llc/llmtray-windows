@@ -273,11 +273,59 @@ jobs:
         run: |
           scripts/build-portable.ps1 -Step build -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray
           scripts/build-portable.ps1 -Step pack -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip -Setup out
+      # A model in the library, so the Store screenshots show the app with one (x64's are the Store's).
+      - name: Cache the smoke-test model
+        if: matrix.platform == 'x64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.llmtray/models
+          key: smoke-model-${{ env.SMOKE_SHA256 }}
+      - name: Fetch the smoke-test model
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: |
+          $file = Join-Path $HOME ".llmtray/models/$env:SMOKE_REPO/$env:SMOKE_FILE"
+          if (-not (Test-Path $file)) {
+            dotnet run --project tools/LLMTray.Fetch -- hf "$env:SMOKE_REPO@$env:SMOKE_REVISION" $env:SMOKE_FILE $file $env:SMOKE_SHA256
+            # Only the screenshots want it: without it they show an empty library, which the check below doesn't mind.
+            if ($LASTEXITCODE -ne 0) { Write-Host "::warning::the smoke-test model couldn't be fetched" }
+          }
+          exit 0
       - name: Unpack and start it
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
+          # A 1920 x 1080 screen (the runner's is 1024 x 768): the Store's screenshots need at least 1366 x 768.
+          Add-Type -TypeDefinition @'
+          using System.Runtime.InteropServices;
+          public static class Display {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct DEVMODE {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+              public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+              public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+            }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string name, int mode, ref DEVMODE dm);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+            public static int Set(int w, int h) {
+              var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+              if (!EnumDisplaySettings(null, -1, ref dm)) return -100;
+              dm.dmPelsWidth = w; dm.dmPelsHeight = h; dm.dmFields = 0x80000 | 0x100000;
+              return ChangeDisplaySettings(ref dm, 0);
+            }
+          }
+          '@
+          $display = [Display]::Set(1920, 1080)
+          Add-Type -AssemblyName System.Windows.Forms
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "display: $display (0 is changed), now $($bounds.Width) x $($bounds.Height)"
+          # x64's screenshots are the Store's: there the screen must be large enough.
+          if ('${{ matrix.platform }}' -eq 'x64' -and ($bounds.Width -lt 1920 -or $bounds.Height -lt 1080)) { throw "the display stayed $($bounds.Width) x $($bounds.Height)" }
           # Each window photographs itself into smoke/ui (adr/0014): the chat, Settings' tabs, About.
           $shots = Join-Path (Get-Location) 'smoke/ui'
           Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--screenshots', "`"$shots`""
@@ -308,7 +356,7 @@ jobs:
           if ($LASTEXITCODE -ne 2) { throw "a bad command exited $LASTEXITCODE, not 2" }
           Write-Host "llmtray: $($status.text); $($listed.models.Count) models"
           # The windows' own photographs (the last is About).
-          $until = (Get-Date).AddSeconds(60)
+          $until = (Get-Date).AddSeconds(150)
           while (-not (Test-Path (Join-Path $shots 'about.png')) -and -not (Test-Path (Join-Path $shots 'screenshots-failed.txt')) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
           Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
           if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }
@@ -317,6 +365,20 @@ jobs:
           if (Test-Path (Join-Path $shots 'voice.txt')) { Get-Content (Join-Path $shots 'voice.txt') }
           if (Test-Path (Join-Path $shots 'documents.txt')) { Get-Content (Join-Path $shots 'documents.txt') }
           if (Test-Path (Join-Path $shots 'tab.txt')) { Get-Content (Join-Path $shots 'tab.txt') }
+          if (Test-Path (Join-Path $shots 'store.txt')) { Get-Content (Join-Path $shots 'store.txt') }
+          # The Store's screenshots (adr/0025) come from x64's: they must be there and large enough.
+          if ('${{ matrix.platform }}' -eq 'x64') {
+            Add-Type -AssemblyName System.Drawing
+            $store = @(Get-ChildItem (Join-Path $shots 'store') -Filter *.png -ErrorAction SilentlyContinue)
+            if ($store.Count -lt 5) { throw "expected 5 Store screenshots, found $($store.Count)" }
+            foreach ($png in $store) {
+              $image = [System.Drawing.Image]::FromFile($png.FullName)
+              try {
+                Write-Host "store: $($png.Name) $($image.Width) x $($image.Height)"
+                if ($image.Width -lt 1366 -or $image.Height -lt 768) { throw "$($png.Name) is $($image.Width) x $($image.Height), under the Store's 1366 x 768" }
+              } finally { $image.Dispose() }
+            }
+          }
           # Attach Current Tab (adr/0022) must read the demo page's text where a browser can be in front (x64;
           # the ARM64 runner's screen is covered by Windows' first-run setup).
           $tabFile = Join-Path $shots 'tab.txt'
