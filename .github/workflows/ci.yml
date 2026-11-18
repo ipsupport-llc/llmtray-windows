@@ -272,6 +272,31 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
           Expand-Archive out/LLMTray-ci-${{ matrix.platform }}-portable.zip -DestinationPath $env:RUNNER_TEMP/portable
+          # A 1920 x 1080 screen (the runner's is 1024 x 768): the Store's screenshots need at least 1366 x 768.
+          Add-Type -TypeDefinition @'
+          using System.Runtime.InteropServices;
+          public static class Display {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct DEVMODE {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+              public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+              public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+            }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string name, int mode, ref DEVMODE dm);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+            public static int Set(int w, int h) {
+              var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+              if (!EnumDisplaySettings(null, -1, ref dm)) return -100;
+              dm.dmPelsWidth = w; dm.dmPelsHeight = h; dm.dmFields = 0x80000 | 0x100000;
+              return ChangeDisplaySettings(ref dm, 0);
+            }
+          }
+          '@
+          Write-Host "display: $([Display]::Set(1920, 1080)) (0 is changed)"
           # Each window photographs itself into smoke/ui (adr/0014): the chat, Settings' tabs, About.
           $shots = Join-Path (Get-Location) 'smoke/ui'
           Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--screenshots', "`"$shots`""
@@ -311,6 +336,7 @@ jobs:
           if (Test-Path (Join-Path $shots 'voice.txt')) { Get-Content (Join-Path $shots 'voice.txt') }
           if (Test-Path (Join-Path $shots 'documents.txt')) { Get-Content (Join-Path $shots 'documents.txt') }
           if (Test-Path (Join-Path $shots 'tab.txt')) { Get-Content (Join-Path $shots 'tab.txt') }
+          if (Test-Path (Join-Path $shots 'store.txt')) { Get-Content (Join-Path $shots 'store.txt') }
           # Attach Current Tab (adr/0022) must read the demo page's text where a browser can be in front (x64;
           # the ARM64 runner's screen is covered by Windows' first-run setup).
           $tabFile = Join-Path $shots 'tab.txt'

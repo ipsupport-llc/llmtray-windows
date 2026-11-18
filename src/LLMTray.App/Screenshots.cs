@@ -44,6 +44,8 @@ static class Screenshots
                 await Task.Delay(1200);
                 if (app.SettingsWindow is { } settings) await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
             }
+            // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
+            await StoreAsync(app, Path.Combine(folder, "store"));
             app.ShowAbout();
             await Task.Delay(2000);
             if (app.About is { } about) await SaveAsync(about, Path.Combine(folder, "about.png"));
@@ -53,6 +55,50 @@ static class Screenshots
         {
             File.WriteAllText(Path.Combine(folder, "screenshots-failed.txt"), e.ToString());
         }
+    }
+
+    /// <summary>
+    /// The chat with a short exchange and Settings' main tabs, each window
+    /// maximized, when the screen is at least the Store's 1366 × 768.
+    /// </summary>
+    static async Task StoreAsync(App app, string folder)
+    {
+        var area = Microsoft.UI.Windowing.DisplayArea.Primary.WorkArea;
+        File.AppendAllText(Path.Combine(Path.GetDirectoryName(folder)!, "store.txt"), $"work area {area.Width}x{area.Height}\n");
+        if (area.Width < 1366 || area.Height < 768) return;
+        Directory.CreateDirectory(folder);
+        app.ShowChat();
+        await Task.Delay(800);
+        if (app.Chat is { } chat)
+        {
+            Maximize(chat);
+            await Task.Delay(1500);
+            await chat.StoreScreenshotAsync(folder, SaveElementAsync);
+            Restore(chat);
+        }
+        app.ShowSettings();
+        await Task.Delay(800);
+        if (app.SettingsWindow is { } settings)
+        {
+            Maximize(settings);
+            foreach (var tab in new[] { "models", "server", "tools", "memory" })
+            {
+                settings.ShowPage(tab);
+                await Task.Delay(1500);
+                await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
+            }
+            Restore(settings);
+        }
+    }
+
+    static void Maximize(Window window)
+    {
+        if (window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Maximize();
+    }
+
+    static void Restore(Window window)
+    {
+        if (window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Restore();
     }
 
     static async Task SaveAsync(Window window, string path)
