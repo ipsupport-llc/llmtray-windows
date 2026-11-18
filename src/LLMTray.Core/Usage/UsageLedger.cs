@@ -9,15 +9,16 @@ namespace LLMTray.Core.Usage;
 /// </summary>
 /// <param name="FirstTokenSeconds">Prefill: the server's own prompt time, else the wait for the first byte of a stream.</param>
 /// <param name="DecodeSeconds">First generated token to the last.</param>
-public sealed record RequestStats(string Client, int Prompt, int Cached, double FirstTokenSeconds, int Tokens, double DecodeSeconds)
+/// <param name="Timed">The server timed it (llama-server's timings): only then are its speeds counted.</param>
+public sealed record RequestStats(string Client, int Prompt, int Cached, double FirstTokenSeconds, int Tokens, double DecodeSeconds, bool Timed = true)
 {
     public int Uncached => Math.Max(0, Prompt - Cached);
 
     /// <summary>Prompt tokens a second over the uncached part; null for a short one, whose wait is mostly not prefill.</summary>
-    public double? PrefillTokensPerSecond => Uncached >= 256 && FirstTokenSeconds > 0 ? Uncached / FirstTokenSeconds : null;
+    public double? PrefillTokensPerSecond => Timed && Uncached >= 256 && FirstTokenSeconds > 0 ? Uncached / FirstTokenSeconds : null;
 
     /// <summary>Generated tokens a second after the first; null for a short answer.</summary>
-    public double? DecodeTokensPerSecond => Tokens >= 16 && DecodeSeconds > 0 ? (Tokens - 1) / DecodeSeconds : null;
+    public double? DecodeTokensPerSecond => Timed && Tokens >= 16 && DecodeSeconds > 0 ? (Tokens - 1) / DecodeSeconds : null;
 }
 
 /// <summary>Sums of requests: counts, tokens and the time behind the speeds.</summary>

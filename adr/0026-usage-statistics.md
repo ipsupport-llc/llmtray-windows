@@ -45,15 +45,18 @@ the client unchanged, and the request isn't changed either (no
   answer's `usage` gives the tokens: OpenAI's `prompt_tokens` /
   `completion_tokens` / `cached_tokens`, Responses' `input_tokens` /
   `output_tokens`, Anthropic's `input_tokens` (the uncached part) plus
-  `cache_read_input_tokens`. No speeds then, except the wait for a
-  stream's first byte.
+  `cache_read_input_tokens`. No speeds then (the proxy's own clock
+  includes the network and the client); a stream's wait for its first
+  byte is its first-token wait.
 - An answer with none of them counts as a request with no tokens. A
   whole answer over 8 MB isn't read; an event line over 1 MB is skipped.
 - Counted routes: chat and text completions, Responses, Messages and
   embeddings; not tokenizing or token counting. A refused request (not
   2xx) isn't counted; one the client left midway is, with what the
   server said by then.
-- A fault in the statistics never breaks an answer: it's dropped.
+- A fault in the statistics never breaks an answer: it's dropped. An
+  unreadable `usage.json` that can't be set aside is never written over;
+  that run counts in memory only.
 - **Memory's background readings aren't counted**: they go to
   llama-server directly, not through the proxy, and they're the app's
   own housekeeping.

@@ -108,6 +108,14 @@ public sealed class UsageTests
             "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":30,\"cache_read_input_tokens\":70,\"output_tokens\":0}}}\n\n",
             "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":12}}\n\n");
         Assert.Equal((100, 70, 12), (anthropic.Prompt, anthropic.Cached, anthropic.Tokens));
+        // Counts only: no speeds from the proxy's own clock.
+        Assert.False(anthropic.Timed);
+        Assert.Null(anthropic.DecodeTokensPerSecond);
+
+        // The last line without its newline; timings without the prompt's time: tokens, no speeds.
+        var unended = Meter(true, "data: {\"timings\":{\"cache_n\":5,\"prompt_n\":10,\"predicted_n\":30,\"predicted_ms\":300}}");
+        Assert.Equal((15, 5, 30), (unended.Prompt, unended.Cached, unended.Tokens));
+        Assert.False(unended.Timed);
 
         // A whole Responses answer.
         var responses = Meter(false, "{\"object\":\"response\",\"usage\":{\"input_tokens\":50,\"output_tokens\":5,\"input_tokens_details\":{\"cached_tokens\":10}}}");

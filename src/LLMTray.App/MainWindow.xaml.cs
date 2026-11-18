@@ -308,7 +308,7 @@ public sealed partial class MainWindow : Window
             Ui.Row(L.T("Runs on"), L.T("Vulkan when this PC has a GPU it can use, otherwise the CPU."),
                 Ui.Value(Status.Device(state) ?? "—")));
 
-        foreach (var part in UsagePart()) yield return part;
+        foreach (var part in StatisticsPart()) yield return part;
 
         yield return Ui.Section(L.T("Diagnostics"));
         yield return Ui.Card(

@@ -148,19 +148,24 @@ public sealed class UsageMeter
     /// <summary>The request's numbers once the answer has ended: what it said, else zeros.</summary>
     public RequestStats Finish()
     {
-        if (!stream && !overflow && held.Length > 0) Read(held.GetBuffer().AsSpan(0, (int)held.Length));
+        // A whole answer, or a last event line the server didn't end with a newline.
+        if (!overflow && held.Length > 0)
+        {
+            if (stream) Line(held.GetBuffer().AsSpan(0, (int)held.Length));
+            else Read(held.GetBuffer().AsSpan(0, (int)held.Length));
+        }
         held.SetLength(0);
-        if (promptN is int processed && promptMs is double pms)
+        if (promptN is not null || predictedN is not null)
         {
             var cached = cacheN ?? 0;
+            var prompt = promptN is int processed ? cached + processed : promptTokens ?? cached;
             var tokens = predictedN ?? generatedTokens ?? 0;
             // predicted_ms covers every generated token; the decode speed counts from the first.
             var decode = tokens > 0 && predictedMs is double gms ? gms / 1000 * (tokens - 1) / tokens : 0;
-            return new RequestStats(client, cached + processed, cached, pms / 1000, tokens, decode);
+            var timed = promptMs is not null && predictedMs is not null;
+            return new RequestStats(client, prompt, cached, (promptMs ?? 0) / 1000, tokens, decode, timed);
         }
-        var generated = generatedTokens ?? 0;
-        var first = stream ? firstByte ?? 0 : 0;
-        var total = clock.Elapsed.TotalSeconds;
-        return new RequestStats(client, promptTokens ?? 0, cachedTokens ?? 0, first, generated, stream && generated > 0 ? Math.Max(0, total - first) : 0);
+        // Counts only (Anthropic, a whole Responses answer): no speeds; a stream's first byte is its first-token wait.
+        return new RequestStats(client, promptTokens ?? 0, cachedTokens ?? 0, stream ? firstByte ?? 0 : 0, generatedTokens ?? 0, 0, Timed: false);
     }
 }

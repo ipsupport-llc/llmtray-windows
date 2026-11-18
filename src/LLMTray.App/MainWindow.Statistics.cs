@@ -17,7 +17,7 @@ public sealed partial class MainWindow
     UsagePeriod usagePeriod = UsagePeriod.Today;
     UsageGrouping usageGrouping = UsageGrouping.Client;
 
-    IEnumerable<UIElement> UsagePart()
+    IEnumerable<UIElement> StatisticsPart()
     {
         var app = App.Current;
         yield return Ui.Section(L.T("Usage"));

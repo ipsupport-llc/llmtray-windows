@@ -22,34 +22,38 @@ public sealed class UsageStore : IDisposable
     UsageLedger ledger;
     bool dirty;
     bool scheduled;
+    bool disposed;
+    // An unreadable file that couldn't be set aside: never written over.
+    readonly bool readOnly;
 
     public UsageStore(string file)
     {
         this.file = file;
         timer = new Timer(_ => Flush());
-        ledger = Load(file);
+        (ledger, readOnly) = Load(file);
     }
 
     public event Action? Changed;
 
-    static UsageLedger Load(string file)
+    static (UsageLedger Ledger, bool ReadOnly) Load(string file)
     {
         try
         {
-            if (!File.Exists(file)) return new UsageLedger();
-            return JsonSerializer.Deserialize(File.ReadAllText(file), UsageJson.Default.UsageLedger) ?? new UsageLedger();
+            if (!File.Exists(file)) return (new UsageLedger(), false);
+            return (JsonSerializer.Deserialize(File.ReadAllText(file), UsageJson.Default.UsageLedger) ?? new UsageLedger(), false);
         }
         catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             try
             {
                 File.Move(file, file + ".unreadable", overwrite: true);
+                return (new UsageLedger(), false);
             }
             catch (Exception m) when (m is IOException or UnauthorizedAccessException)
             {
-                // Left where it is: still not written over before it moves.
+                // Left where it is, and not written over: this run counts in memory only.
+                return (new UsageLedger(), true);
             }
-            return new UsageLedger();
         }
     }
 
@@ -65,13 +69,17 @@ public sealed class UsageStore : IDisposable
         {
             ledger.Record(stats, model, local);
             dirty = true;
-            if (!scheduled)
-            {
-                scheduled = true;
-                timer.Change(TimeSpan.FromSeconds(3), Timeout.InfiniteTimeSpan);
-            }
+            Schedule(TimeSpan.FromSeconds(3));
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>A write later, unless one is due or the store is closed (under the lock).</summary>
+    void Schedule(TimeSpan after)
+    {
+        if (scheduled || disposed || readOnly) return;
+        scheduled = true;
+        timer.Change(after, Timeout.InfiniteTimeSpan);
     }
 
     public void Clear()
@@ -88,34 +96,31 @@ public sealed class UsageStore : IDisposable
     /// <summary>Written now, if anything changed (at quit, or when the timer fires).</summary>
     public void Flush()
     {
-        string text;
-        lock (sync)
+        // The snapshot and its write in one order: an older one never lands after a newer one.
+        lock (writing)
         {
-            scheduled = false;
-            if (!dirty) return;
-            text = JsonSerializer.Serialize(ledger, UsageJson.Default.UsageLedger);
-            dirty = false;
-        }
-        try
-        {
-            lock (writing)
+            string text;
+            lock (sync)
+            {
+                scheduled = false;
+                if (!dirty || readOnly) return;
+                text = JsonSerializer.Serialize(ledger, UsageJson.Default.UsageLedger);
+                dirty = false;
+            }
+            try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
                 var temp = file + ".tmp";
                 File.WriteAllText(temp, text);
                 File.Move(temp, file, overwrite: true);
             }
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            // Tried again in a while.
-            lock (sync)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                dirty = true;
-                if (!scheduled)
+                // Tried again in a while (not once closed).
+                lock (sync)
                 {
-                    scheduled = true;
-                    timer.Change(TimeSpan.FromSeconds(30), Timeout.InfiniteTimeSpan);
+                    dirty = true;
+                    Schedule(TimeSpan.FromSeconds(30));
                 }
             }
         }
@@ -123,6 +128,11 @@ public sealed class UsageStore : IDisposable
 
     public void Dispose()
     {
+        lock (sync)
+        {
+            if (disposed) return;
+            disposed = true;
+        }
         timer.Dispose();
         Flush();
     }
