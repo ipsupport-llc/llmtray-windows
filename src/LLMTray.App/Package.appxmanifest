@@ -28,9 +28,15 @@
   </Resources>
 
   <Applications>
+    <!--
+      SupportsMultipleInstances: required by the console alias below. A
+      desktop app runs as many instances as it's started anyway; LLMTray
+      keeps to one with its own mutex (Program.cs).
+    -->
     <Application Id="App"
       Executable="$targetnametoken$.exe"
-      EntryPoint="$targetentrypoint$">
+      EntryPoint="$targetentrypoint$"
+      desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="LLMTray"
         Description="Local AI runtime: run local models and serve an OpenAI-compatible API."
