@@ -438,7 +438,7 @@ sealed partial class ChatWindow : Window
                 }
                 Activate();
                 var body = new StackPanel { Spacing = 8, MaxWidth = 520 };
-                var what = request.Action is { } act ? $"{request.Tool} · {act.Replace('_', ' ')}" : request.Tool;
+                var what = request.Action is { } act ? $"{request.Tool} · {act}" : request.Tool;
                 body.Children.Add(new TextBlock { Text = L.F("{0} wants to use {1}.", request.Server, what), TextWrapping = TextWrapping.Wrap });
                 body.Children.Add(new TextBox
                 {
@@ -466,7 +466,7 @@ sealed partial class ChatWindow : Window
                     Content = new ScrollViewer { Content = body },
                     PrimaryButtonText = L.T("Allow"),
                     // Per action where the tool has them (Mac adr/0027): "Always Allow send".
-                    SecondaryButtonText = !request.AllowancesHold ? "" : request.Action is { } a ? L.F("Always Allow {0}", a.Replace('_', ' ')) : L.T("Always Allow"),
+                    SecondaryButtonText = !request.AllowancesHold ? "" : request.Action is { } a ? L.F("Always Allow {0}", a) : L.T("Always Allow"),
                     CloseButtonText = L.T("Deny"),
                     DefaultButton = ContentDialogButton.None,
                 };
@@ -481,7 +481,7 @@ sealed partial class ChatWindow : Window
                         item.Click += (_, _) => picked = answer;
                         more.Items.Add(item);
                     }
-                    Pick(L.T("Allow for This Chat"), McpApproval.AllowForThisChat);
+                    Pick(request.Action is { } forChat ? L.F("Allow {0} for This Chat", forChat) : L.T("Allow for This Chat"), McpApproval.AllowForThisChat);
                     if (request.EverythingOffered) Pick(L.F("Always Allow Everything from {0}", request.Server), McpApproval.AllowServerAlways);
                     // The question closes once the menu has: not inside the item's own click, while the menu still closes.
                     more.Closed += (_, _) =>

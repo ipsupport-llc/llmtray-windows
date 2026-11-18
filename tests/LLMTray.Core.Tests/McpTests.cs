@@ -317,11 +317,15 @@ public sealed class McpPerActionTests
         Assert.Equal("action", Mail.ActionField!.Value.Name);
         Assert.Equal(["read", "send", "delete"], Mail.ActionField.Value.Values);
         // None required: the first by name.
-        Assert.Equal("folder", Tool("""{"type":"object","properties":{"mode":{"enum":["a"]},"folder":{"type":"string","enum":["x"]}}}""").ActionField!.Value.Name);
+        Assert.Equal("folder", Tool("""{"type":"object","properties":{"zone":{"enum":["a"]},"folder":{"type":"string","enum":["x"]}}}""").ActionField!.Value.Name);
         // Not strings, or no values: no action field.
         Assert.Null(Tool("""{"type":"object","properties":{"n":{"type":"integer","enum":[1,2]},"t":{"type":"string"}}}""").ActionField);
         Assert.Equal("send", Mail.ActionOf(new() { ["action"] = "send" }));
         Assert.Null(Mail.ActionOf(new() { ["text"] = "hi" }));
+        // The field named twice in two cases: a server might read either, so it's no action.
+        Assert.Null(Mail.ActionOf(new() { ["action"] = "read", ["Action"] = "delete" }));
+        // A field named like an action wins over a required one.
+        Assert.Equal("action", Tool("""{"type":"object","properties":{"account":{"type":"string","enum":["work","home"]},"action":{"type":"string","enum":["read","delete"]}},"required":["account"]}""").ActionField!.Value.Name);
     }
 
     [Fact]

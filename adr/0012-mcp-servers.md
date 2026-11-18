@@ -28,10 +28,14 @@ their tools, called the way the built-in ones are (adr/0009).
   on, and the server's row sets it for everything, the tools that only
   read, or nothing at once (Mac #354). **Per action** (Mac adr/0027): a
   tool whose schema has a string field with fixed values (`action`:
-  read, send, delete; the required one first, else the first by name) is
+  read, send, delete; of several, one named like an action — action,
+  operation, op, method, command, mode, verb — then a required one, then
+  the first by name) is
   allowed per value, never whole: Settings shows a box per action and
   All, Always Allow names the action, and a call with no action or one the
-  tool doesn't list can be allowed only once. A tool allowed whole before
+  tool doesn't list (or that names the field twice in two cases) can be
+  allowed only once. Only that field is told apart: a server that acts on
+  another argument the same way is still asked per that field's value. A tool allowed whole before
   this counts for each of its listed actions until one is changed. Approval is bound to
   the server and the tool's definition (a hash of its name, title,
   description, schema and read-only/destructive hints): a tool changed or

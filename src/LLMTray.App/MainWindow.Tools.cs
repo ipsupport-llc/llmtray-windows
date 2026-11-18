@@ -111,13 +111,17 @@ public sealed partial class MainWindow
                         var actions = new VariableSizedWrapGrid { Orientation = Orientation.Horizontal, ItemWidth = 150 };
                         var allOn = field.Values.All(a => server.RunsWithoutAsking(tool, a));
                         var all = new CheckBox { Content = L.T("All"), IsChecked = allOn, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
-                        all.Click += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking([tool], all.IsChecked == true));
+                        // Checked/Unchecked, not Click: a toggle by keyboard or assistive tools counts too.
+                        all.Checked += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking([tool], true));
+                        all.Unchecked += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking([tool], false));
                         actions.Children.Add(all);
                         foreach (var action in field.Values)
                         {
-                            var box = new CheckBox { Content = action.Replace('_', ' '), IsChecked = server.RunsWithoutAsking(tool, action) };
+                            // The value as the server names it: two that differ only by "_" mustn't look the same.
+                            var box = new CheckBox { Content = action, IsChecked = server.RunsWithoutAsking(tool, action) };
                             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, L.F("Run {0} without asking", $"{tool.Name} {action}"));
-                            box.Click += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(tool, action, box.IsChecked == true));
+                            box.Checked += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(tool, action, true));
+                            box.Unchecked += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(tool, action, false));
                             actions.Children.Add(box);
                         }
                         rows.Add(Ui.StackedRow(tool.Title ?? tool.Name, help + " " + L.T("Run without asking:"), actions));

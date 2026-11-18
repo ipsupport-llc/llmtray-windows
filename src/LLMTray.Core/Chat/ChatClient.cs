@@ -1054,7 +1054,9 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         }
         // A tool with actions is allowed per action (Mac adr/0027): this call's, as it gives it.
         var action = mcp.Tool.ActionOf(arguments);
-        var allowance = mcp.Tool.ActionField is null ? hash : hash + "#" + action;
+        // No lasting allowance for a call without a listed action: it's asked every time.
+        var listedAction = mcp.Tool.ActionField is not { } field || (action is not null && field.Values.Contains(action));
+        string? allowance = mcp.Tool.ActionField is null ? hash : listedAction ? hash + "#" + action : null;
         var shown = arguments.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         void Record(string outcome)
         {
@@ -1068,7 +1070,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // The permission as it is now: switched off in Settings mid-turn counts at once.
         var server = options.Mcp!.Current(mcp.Server.Key) ?? mcp.Server;
         bool standing;
-        lock (sync) standing = server.RunsWithoutAsking(mcp.Tool, action) || chatAllowed.Contains(allowance);
+        lock (sync) standing = server.RunsWithoutAsking(mcp.Tool, action) || (allowance is not null && chatAllowed.Contains(allowance));
         // After outside text, a standing allowance holds only for a read-only tool of a command server: what it
         // reads comes back into the chat, its arguments go nowhere. A change, or any call to a server on the web, is asked.
         var allowancesHold = !outsideText || (server.IsCommand && mcp.Tool.ReadOnlyHint == true);
@@ -1077,7 +1079,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             answer.Activity = "approval";
             Changed?.Invoke();
             // A call with no action (or one the tool doesn't list) can be allowed once, not from now on.
-            allowancesHold &= mcp.Tool.ActionField is null || (action is not null && mcp.Tool.ActionField.Value.Values.Contains(action));
+            allowancesHold &= listedAction;
             // Everything from the server: the tools listed when asked, not whatever is listed by the time it's answered.
             // Not after outside text: a read-only tool may be allowed then, never the server's other tools.
             var listedWhenAsked = allowancesHold && !outsideText ? options.Mcp.State(server).Tools ?? [mcp.Tool] : null;
@@ -1097,7 +1099,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // An allowance only where it would hold: after outside text, anything else is asked again next time anyway.
             // Allowed always: the Settings switch alone, so turning it off there asks again in this chat too.
             // Only for the server the question was about: one replaced under its key meanwhile gets nothing.
-            if (decision == McpApproval.AllowForThisChat && allowancesHold)
+            if (decision == McpApproval.AllowForThisChat && allowancesHold && allowance is not null)
             {
                 lock (sync) chatAllowed.Add(allowance);
             }
