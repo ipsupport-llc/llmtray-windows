@@ -638,7 +638,7 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
                     }
                     if (status == 401) throw new McpAuthException("the server needs you to sign in", 401, challenge);
                     if (McpOAuth.ParseChallenge(challenge) is { Error: "insufficient_scope" }) throw new McpAuthException("the server needs more access than was granted", 403, challenge);
-                    throw new McpException("the server answered HTTP 403", notSent: true);
+                    throw new McpException(Refusal(403), notSent: true);
                 }
                 break;
             }
@@ -653,7 +653,7 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
             // Refused (4xx) is surely not done, except a timeout or a limit a proxy may say after passing it on;
             // a server error (5xx) may have been half way.
             var code = (int)response.StatusCode;
-            if (!response.IsSuccessStatusCode) throw new McpException($"the server answered HTTP {code}", notSent: code is >= 400 and < 500 and not (408 or 425 or 429));
+            if (!response.IsSuccessStatusCode) throw new McpException(Refusal(code), notSent: code is >= 400 and < 500 and not (408 or 425 or 429));
             if (response.StatusCode == System.Net.HttpStatusCode.Accepted || response.Content.Headers.ContentLength == 0) return;
             if (response.Content.Headers.ContentLength > MaxMessage) throw new McpException("the server's answer is over 8 MB");
             var type = response.Content.Headers.ContentType?.MediaType ?? "";
@@ -770,4 +770,13 @@ public sealed class McpHttpTransport(HttpClient http, Uri url, IReadOnlyDictiona
             }
         }
     }
+
+    /// <summary>What a refusal means, said for the user (Mac MCPClient): the common codes in words, the code kept.</summary>
+    internal static string Refusal(int code) => code switch
+    {
+        401 or 403 => $"it needs a sign-in or an API key (HTTP {code})",
+        402 => "it needs a paid account (HTTP 402)",
+        404 => "nothing answers at its address (HTTP 404)",
+        _ => $"the server answered HTTP {code}",
+    };
 }

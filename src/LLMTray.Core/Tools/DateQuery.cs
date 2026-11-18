@@ -121,7 +121,9 @@ public static partial class DateQuery
         if (numbers.Count != 3 || separators.Count > 1 || separatorCount != 2 || commaBetween) return null;
         var (x, y, z) = (numbers[0], numbers[1], numbers[2]);
         // 2024/04/10, 2024.04.10.
-        if (x.Digits == 4) return y.Digits <= 2 && z.Digits <= 2 ? Valid(x.Value, y.Value, z.Value) : null;
+        // An ordinal is a day, never a year ("2024th/04/10", "10/04/2024th").
+        if (x.Digits == 4) return y.Digits <= 2 && z.Digits <= 2 && !ordinals.Contains(0) ? Valid(x.Value, y.Value, z.Value) : null;
+        if (ordinals.Contains(2)) return null;
         if (x.Digits > 2 || y.Digits > 2 || z.Digits is not (4 or 2)) return null;
         var year = Year(z, today);
         // Dots are day first (10.04.2024); a slash or a dash fits both orders:
