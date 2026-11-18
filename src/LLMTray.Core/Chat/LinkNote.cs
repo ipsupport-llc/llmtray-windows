@@ -19,8 +19,9 @@ public static partial class LinkNote
     /// <summary>
     /// The web links in <paramref name="text"/> written with their scheme
     /// (http://, https://), in order, each once. A bare name isn't one
-    /// ("src/main.rs", "user.id"); local addresses (localhost, 127.x, ::1)
-    /// aren't read anyway.
+    /// ("src/main.rs", "user.id"), and neither is an address the page reader
+    /// refuses: this PC, the local network, a user and password in it
+    /// (WebPageText.Address, without looking names up).
     /// </summary>
     public static IReadOnlyList<string> Links(string text)
     {
@@ -28,34 +29,58 @@ public static partial class LinkNote
         var links = new List<string>();
         foreach (Match match in Link().Matches(text))
         {
-            var link = match.Value.TrimEnd(Trailing);
+            var link = Trimmed(match.Value);
             if (!Uri.TryCreate(link, UriKind.Absolute, out var uri)) continue;
-            var host = uri.Host.ToLowerInvariant();
-            if (host.Length == 0 || host == "localhost" || host.StartsWith("127.", StringComparison.Ordinal) || host is "[::1]" or "::1") continue;
-            if (seen.Add(link)) links.Add(link);
+            if (Tools.WebPageText.Address(link, _ => []).Problem is not null) continue;
+            // The same address in another case of scheme or host is the same link.
+            if (seen.Add(uri.AbsoluteUri)) links.Add(link);
         }
         return links;
+    }
+
+    /// <summary>
+    /// The sentence's punctuation after a link, taken off; a closing bracket
+    /// that one in the link opened stays ("…/Foo_(bar)", "https://[::2]").
+    /// </summary>
+    static string Trimmed(string link)
+    {
+        while (link.Length > 0 && Array.IndexOf(Trailing, link[^1]) >= 0)
+        {
+            var last = link[^1];
+            var opener = last switch { ')' => '(', ']' => '[', '}' => '{', _ => '\0' };
+            if (opener != '\0' && link.Count(c => c == opener) >= link.Count(c => c == last)) break;
+            link = link[..^1];
+        }
+        return link;
     }
 
     /// <summary>
     /// The note for a user message: null without a link, or when the page
     /// tool isn't declared in this request (a chat without it gets nothing).
     /// </summary>
-    public static string? Text(string message, bool canReadPages)
+    public static string? Text(string message, PageReading reading)
     {
-        var count = canReadPages ? Links(message).Count : 0;
+        var count = reading == PageReading.None ? 0 : Links(message).Count;
+        // web_search declares source only when it offers more than one: the note names what's declared.
+        var call = reading == PageReading.SourceAndUrl ? "web_search with source=page and url set to" : "web_search with url set to";
         return count switch
         {
             0 => null,
-            1 => "[App note, not the user's words: the message has a link. To read it, call web_search with source=page and url set to the link.]",
-            _ => $"[App note, not the user's words: the message has {count} links. To read one, call web_search with source=page and url set to that link.]",
+            1 => $"[App note, not the user's words: the message has a link. To read it, call {call} the link.]",
+            _ => $"[App note, not the user's words: the message has {count} links. To read one, call {call} that link.]",
         };
     }
 
-    /// <summary>Whether <paramref name="tools"/> (the request's declarations) include the page tool: web_search with a url.</summary>
-    public static bool DeclaresPageReading(JsonArray? tools) =>
-        tools?.Any(t => t?["function"] is JsonObject f
-            && (string?)f["name"] == "web_search"
-            && f["parameters"]?["properties"] is JsonObject properties
-            && properties.ContainsKey("url")) == true;
+    /// <summary>How <paramref name="tools"/> (the request's declarations) read a page: web_search with a url, and a source or not.</summary>
+    public static PageReading Declared(JsonArray? tools)
+    {
+        var properties = tools?.Select(t => t?["function"]).OfType<JsonObject>()
+            .Where(f => (string?)f["name"] == "web_search")
+            .Select(f => f["parameters"]?["properties"]).OfType<JsonObject>()
+            .FirstOrDefault(p => p.ContainsKey("url"));
+        return properties is null ? PageReading.None : properties.ContainsKey("source") ? PageReading.SourceAndUrl : PageReading.Url;
+    }
 }
+
+/// <summary>Whether a request declares reading a page, and how.</summary>
+public enum PageReading { None, Url, SourceAndUrl }

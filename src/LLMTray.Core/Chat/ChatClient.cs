@@ -482,7 +482,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var pinnedActive = false;
         // A chat that showed a window or the screen (Mac adr/0030): what it showed stays in the conversation.
         var sharedActive = false;
-        var readsPages = false;
+        var readsPages = PageReading.None;
         lock (sync)
         {
             memory = options.Memory;
@@ -493,9 +493,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // A message with a link is told which tool reads it (LinkNote): with every such message, not only
             // the latest, so the same text goes in every request and the server's prompt cache holds. Only while
             // the page mode is declared: not after something was shown (the internet tools are off then).
-            readsPages = !sharedActive && LinkNote.DeclaresPageReading(options.Tools?.Definitions((options.Profile?.EnabledTools ?? []).ToHashSet()));
-            history = History(Messages, options, block?.Text, readsPages: readsPages);
-            if (!temporaryTurn && (pinnedAll.Files.Count > 0 || pinnedAll.Notes.Count > 0))
+            readsPages = sharedActive ? PageReading.None : LinkNote.Declared(options.Tools?.Definitions((options.Profile?.EnabledTools ?? []).ToHashSet()));
+            var pinning = !temporaryTurn && (pinnedAll.Files.Count > 0 || pinnedAll.Notes.Count > 0);
+            // Pinned files are measured against this history: without notes the final one may drop.
+            history = History(Messages, options, block?.Text, readsPages: pinning ? PageReading.None : readsPages);
+            if (pinning)
             {
                 // Pinned files (Mac adr/0012): each while it fits the limit and the request's room, the rest a line each.
                 var context = options.ContextTokens > 0 ? options.ContextTokens : 8_192;
@@ -510,7 +512,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 pinnedSent = carried;
                 pinnedActive = pinnedBlock.Length > 0;
                 // Pinned text in the request: the page mode isn't declared this turn, so no link notes.
-                history = History(Messages, options, block?.Text, pinnedBlock, readsPages: readsPages && !pinnedActive);
+                history = History(Messages, options, block?.Text, pinnedBlock, readsPages: pinnedActive ? PageReading.None : readsPages);
             }
             // Low and Medium: the model is told its budget with this message only (never saved).
             if (options.Thinking && Chat.Thinking.BudgetToTell(options.Style, options.Effort) is int budget) AddNote(history, Chat.Thinking.Note(budget));
@@ -1706,7 +1708,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
     /// A user message as the model reads it: the new-files note first, when files came before it.
     /// A message whose recordings it doesn't get reads "(audio)" when it has no text (Mac).
     /// </summary>
-    static string WithNote(ChatMessage m, ChatOptions options, bool heard, bool readsPages)
+    static string WithNote(ChatMessage m, ChatOptions options, bool heard, PageReading readsPages)
     {
         if (m.Role != "user") return m.Content;
         if (!heard && m.Content.Length == 0 && m.Spoken) m = new ChatMessage
@@ -1725,7 +1727,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         return notes.Count == 0 ? m.Content : string.Join("\n", notes) + (m.Content.Length > 0 ? "\n\n" + m.Content : "");
     }
 
-    static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options, string? memoryBlock = null, string? pinnedBlock = null, bool readsPages = false)
+    static JsonArray History(IEnumerable<ChatMessage> messages, ChatOptions options, string? memoryBlock = null, string? pinnedBlock = null, PageReading readsPages = PageReading.None)
     {
         var history = new JsonArray();
         var system = options.Profile?.SystemPrompt?.Trim() ?? "";
