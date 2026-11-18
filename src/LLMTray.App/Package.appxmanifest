@@ -28,9 +28,15 @@
   </Resources>
 
   <Applications>
+    <!--
+      SupportsMultipleInstances: required by the console alias below. A
+      desktop app runs as many instances as it's started anyway; LLMTray
+      keeps to one with its own mutex (Program.cs).
+    -->
     <Application Id="App"
       Executable="$targetnametoken$.exe"
-      EntryPoint="$targetentrypoint$">
+      EntryPoint="$targetentrypoint$"
+      desktop4:SupportsMultipleInstances="true">
       <uap:VisualElements
         DisplayName="LLMTray"
         Description="Local AI runtime: run local models and serve an OpenAI-compatible API."
@@ -45,22 +51,12 @@
         <uap5:Extension Category="windows.startupTask">
           <uap5:StartupTask TaskId="LLMTrayStartup" Enabled="false" DisplayName="LLMTray" />
         </uap5:Extension>
-      </Extensions>
-    </Application>
-    <!-- llmtray, the command line (adr/0013): a console app reached by its alias, not in Start. -->
-    <Application Id="Cli"
-      Executable="cli\llmtray.exe"
-      EntryPoint="Windows.FullTrustApplication"
-      desktop4:Subsystem="console"
-      desktop4:SupportsMultipleInstances="true">
-      <uap:VisualElements
-        DisplayName="llmtray"
-        Description="LLMTray's command line."
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
-        AppListEntry="none" />
-      <Extensions>
+        <!--
+          llmtray, the command line (adr/0013): its own console executable,
+          reached by its alias. An alias of this application, not an
+          application of its own: the Store refuses an application with no
+          Start entry (AppListEntry="none") without a waiver.
+        -->
         <uap5:Extension Category="windows.appExecutionAlias" Executable="cli\llmtray.exe" EntryPoint="Windows.FullTrustApplication">
           <uap5:AppExecutionAlias desktop4:Subsystem="console">
             <uap5:ExecutionAlias Alias="llmtray.exe" />

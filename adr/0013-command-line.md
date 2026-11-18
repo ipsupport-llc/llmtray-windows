@@ -43,7 +43,9 @@ for Windows (a named pipe, a separate small executable, an alias).
 - **Where it is**: `app\cli\llmtray.exe` (a folder of its own: on Windows
   `llmtray.exe` and `LLMTray.exe` are the same name). The package declares
   an app execution alias, so `llmtray` works in any terminal after
-  installing the MSIX. The portable copy and the installer get **Add to
+  installing the MSIX. The alias belongs to the app's own application
+  entry, with its own executable: a second application with no Start entry
+  (`AppListEntry="none"`) is refused by the Store without a waiver. The portable copy and the installer get **Add to
   PATH** in General, which adds that folder to this user's PATH (no
   administrator rights) and takes it out again, editing the value as
   stored (other entries keep their `%VAR%` references); uninstalling
