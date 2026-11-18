@@ -314,7 +314,12 @@ jobs:
             }
           }
           '@
-          Write-Host "display: $([Display]::Set(1920, 1080)) (0 is changed)"
+          $display = [Display]::Set(1920, 1080)
+          Add-Type -AssemblyName System.Windows.Forms
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "display: $display (0 is changed), now $($bounds.Width) x $($bounds.Height)"
+          # x64's screenshots are the Store's: there the screen must be large enough.
+          if ('${{ matrix.platform }}' -eq 'x64' -and ($bounds.Width -lt 1920 -or $bounds.Height -lt 1080)) { throw "the display stayed $($bounds.Width) x $($bounds.Height)" }
           # Each window photographs itself into smoke/ui (adr/0014): the chat, Settings' tabs, About.
           $shots = Join-Path (Get-Location) 'smoke/ui'
           Start-Process (Join-Path $env:RUNNER_TEMP 'portable/LLMTray/LLMTray.exe') -ArgumentList '--screenshots', "`"$shots`""
