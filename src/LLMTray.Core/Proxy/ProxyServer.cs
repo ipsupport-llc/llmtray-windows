@@ -78,6 +78,13 @@ public sealed class ProxyServer : IAsyncDisposable
 
     /// <summary>A request from an outside client (an app using the API), for usage statistics: counted, never looked into.</summary>
     public Action<ModelEntry>? OutsideRequest { get; set; }
+    /// <summary>
+    /// Usage statistics (adr/0026): each answered request's numbers and its client, while
+    /// <see cref="CountsUsage"/> says they're on. Kept on this PC only.
+    /// </summary>
+    public Action<ModelEntry, Usage.RequestStats>? UsageRecorded { get; set; }
+    public Func<bool>? CountsUsage { get; set; }
+
     /// <summary>Background work (memory's reading) that every request here preempts.</summary>
     public Runtime.BackgroundWork? Background { get; set; }
 
@@ -188,12 +195,17 @@ public sealed class ProxyServer : IAsyncDisposable
         using (lease)
         {
             // An outside client's request that reached a model: counted (its family only), never looked into.
-            if (AppToken is null || request.Headers[AppHeader].ToString() != AppToken) OutsideRequest?.Invoke(lease.Model);
-            await ForwardAsync(context, lease, body).ConfigureAwait(false);
+            var fromApp = AppToken is not null && request.Headers[AppHeader].ToString() == AppToken;
+            if (!fromApp) OutsideRequest?.Invoke(lease.Model);
+            // The usage statistics: who asked, named from the User-Agent (adr/0026).
+            var client = UsageRecorded is not null && CountsUsage?.Invoke() == true && Usage.UsageMeter.Counts(path)
+                ? Usage.UsageClient.Name(request.Headers.UserAgent.ToString(), fromApp, route: path)
+                : null;
+            await ForwardAsync(context, lease, body, client).ConfigureAwait(false);
         }
     }
 
-    async Task ForwardAsync(HttpContext context, ModelHost.Lease lease, ArraySegment<byte> body)
+    async Task ForwardAsync(HttpContext context, ModelHost.Lease lease, ArraySegment<byte> body, string? client)
     {
         var request = context.Request;
         // Scheme, host and port are llama-server's, whatever the path says
@@ -261,6 +273,10 @@ public sealed class ProxyServer : IAsyncDisposable
             }
             // Server-sent events go out as they come.
             context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+            // An answer that went through: its numbers are read on the way (only looked at, never changed).
+            var meter = client is not null && response.IsSuccessStatusCode
+                ? new Usage.UsageMeter(client, response.Content.Headers.ContentType?.MediaType == "text/event-stream")
+                : null;
             try
             {
                 await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
@@ -270,6 +286,7 @@ public sealed class ProxyServer : IAsyncDisposable
                 {
                     await context.Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellation).ConfigureAwait(false);
                     await context.Response.Body.FlushAsync(cancellation).ConfigureAwait(false);
+                    Meter(meter, buffer.AsSpan(0, read));
                 }
             }
             catch (OperationCanceledException)
@@ -283,6 +300,37 @@ public sealed class ProxyServer : IAsyncDisposable
                 // llama-server stopped mid-answer (a model switch or Stop).
                 context.Abort();
             }
+            finally
+            {
+                // Counted however it ended (a client gone midway too): what the server said by then.
+                if (meter is not null) Record(lease.Model, meter);
+            }
+        }
+    }
+
+    /// <summary>The statistics never break an answer: a fault in them is dropped.</summary>
+    static void Meter(Usage.UsageMeter? meter, ReadOnlySpan<byte> bytes)
+    {
+        if (meter is null) return;
+        try
+        {
+            meter.Feed(bytes);
+        }
+        catch (Exception)
+        {
+            // Not counted; the answer goes on.
+        }
+    }
+
+    void Record(ModelEntry model, Usage.UsageMeter meter)
+    {
+        try
+        {
+            UsageRecorded?.Invoke(model, meter.Finish());
+        }
+        catch (Exception)
+        {
+            // Not counted; the answer is already out.
         }
     }
 
