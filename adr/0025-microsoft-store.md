@@ -32,13 +32,20 @@ of adr/0001.
     it has no required reviewer. Who the reviewers are is the environment's
     setting: the maintainer only;
   - its secrets are the Partner Center app's: `PARTNER_CENTER_TENANT_ID`,
-    `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`,
-    `PARTNER_CENTER_CLIENT_SECRET` (an Entra app added to Partner Center
-    with the Manager role);
-  - the Microsoft Store Developer CLI (`msstore` v0.4.4, `msstore publish
-    <the .msixupload> --appId <Store ID>`) makes a new submission from the
-    last published one (listing, pricing and the rest kept), puts this
-    package in it and commits it to certification;
+    `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET` (an Entra
+    app added to Partner Center with the Manager role);
+  - `tools/LLMTray.Store` talks to the Store submission API itself: a new
+    submission from the last published one (pricing, properties, age
+    rating kept), with this package, the **listing texts** of
+    `store/listings/<language>.json` (title, short and long description,
+    features, search terms, copyright; checked against the Store's limits
+    by the Core tests) and **this commit's screenshots**, which CI takes
+    on a 1920 × 1080 screen (`ui-x64/store`: the chat and Settings' tabs,
+    maximized). Without them the published screenshots stay. Everything
+    goes up as one zip, then the submission is committed and its checks
+    are waited for; a failed check prints the Store's errors;
+  - a submission left open in Partner Center stops it: that one is the
+    maintainer's to finish or delete, never thrown away from CI;
   - one run at a time across tags.
 - **Betas don't go to the Store.** They stay on GitHub, Scoop and the
   app's beta channel. Package flights can come later.
@@ -60,9 +67,9 @@ of adr/0001.
    PublisherDisplayName) and the Store ID into the repository variables.
 3. Entra ID: an app registration with a client secret; Partner Center ›
    Account settings › User management › Microsoft Entra applications: add
-   it with the Manager role. Put the tenant, seller (Partner Center's
-   Seller ID), client ID and secret into the `store` environment's
-   secrets, and make the maintainer its required reviewer.
+   it with the Manager role. Put the tenant, client ID and secret into
+   the `store` environment's secrets, and make the maintainer its
+   required reviewer.
 
 ## Open
 

@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Yapay zeka modellerini kendi bilgisayarınızda çalıştırın: sohbet edin, belgelerinizle çalışın ve uygulamalarınıza ile kodlama ajanlarınıza OpenAI uyumlu bir API sunun. Gizli, hesapsız, bulutsuz.",
+  "description": "LLMTray, yapay zeka modellerini bilgisayarınızda çalıştırır. Açık modellerle sohbet edin, belgeleriniz ve klasörlerinizle çalışmalarına izin verin, uygulamalarınıza ve kodlama ajanlarınıza OpenAI uyumlu bir API sunun; hepsi kendi donanımınızda, hesap ve bulut olmadan.\n\nDAHA AZ VERİ MERKEZİ. DAHA ÇOK KENDİ DONANIMINIZ.\nBilgisayarınız zaten yetenekli bir yapay zeka makinesi. LLMTray onu işe koşar: modeller tam burada çalışır, bu yüzden istemleriniz, dosyalarınız ve yanıtlarınız onu asla terk etmez ve hiçbir şey sunucu kuyruğunda beklemez.\n\nAÇIK MODELLERLE SOHBET\n• Adım adım kurulum işlemcinize, belleğinize ve ekran kartınıza bakar ve uygun bir model önerir.\n• GGUF modellerini Hugging Face'ten veya Kaggle'dan indirin ya da elinizdeki modelleri, örneğin LM Studio klasörünü kullanın.\n• Vulkan ile ekran kartında (NVIDIA, AMD ve Intel) ya da işlemcide çalışır.\n• Görebilen modeller görsellerinizi okur; akıl yürüten modeller düşünme sürecini gösterir, çabayı siz seçersiniz.\n• Duyabilen modellerle konuşun: sohbetin içinde sesli mesaj kaydedin.\n• Sekmeler, geçmiş, arama, geçici sohbetler ve uzun sohbetlerin otomatik sıkıştırılması.\n\nDOSYALARINIZ, KAYNAKLARIYLA\n• Projeler, sohbetleri kendi talimatları ve belgeleriyle bir araya getirir.\n• Bir projeye PDF, Word, Excel, PowerPoint (eski .doc, .xls ve .ppt dahil), Markdown, HTML, metin ve kod dosyaları ekleyin: model bunlarda arama yapar ve kullandığı sayfaları kaynak gösterir.\n• Taranmış PDF sayfaları Windows'un kendi metin tanıma özelliğiyle okunur.\n• Bir uygulamada takıldığınızda modele bir pencereyi, ekranı veya bir tarayıcı sekmesini gösterin.\n\nKONTROLÜNÜZDE KALAN ARAÇLAR\n• Tarih ve saat ile hesap makinesi için yerleşik araçlar; yalnızca siz açarsanız web araması, haberler, Wikipedia, hava durumu ve daha fazlası.\n• Bir sohbetin, izin verdiğiniz bir klasörde çalışmasına olanak tanıyın: yeni klasörler, taşımalar ve yeniden adlandırmalar önerir; siz onaylayana kadar hiçbir şey değişmez.\n• Modellere daha fazla araç vermek için oturum açmayla birlikte MCP sunucularını bağlayın.\n• Bellek, açarsanız, sohbetler arasında sizinle ilgili kısa notlar tutar; her not geldiği sözlerle birlikte saklanır, bunları okuyabilir ve silebilirsiniz.\n\nKODLAMA AJANLARINIZI VE UYGULAMALARINIZI BAĞLAYIN\n• LLMTray, bilgisayarınızda http://localhost:8765/v1 adresinde OpenAI uyumlu bir API sunar. Bu API'yi konuşan herhangi bir uygulamayı veya kodlama ajanını LLMTray'e yönlendirin.\n• Uygulamalar modeli adıyla seçer; LLMTray onu ilk istekte yükler.\n• llmtray komut satırı, uygulamayı herhangi bir terminalden yönetir.\n• API yalnızca bilgisayarınızda dinler.\n\nHER MODELE GÖRE AYARLI\n• Örnekleme, bağlam boyutu, KV cache nicemlemesi ve llama.cpp başlatma seçenekleri için modele özel profiller.\n\nİSTEMEDİĞİNİZ HİÇBİR ŞEY YOK\n• Her ağır özellik siz açana kadar kapalıdır ve siz seçmeden hiçbir şey indirilmez.\n• Hesap yok, reklam yok, izleme yok. Anonim kullanım istatistikleri isteğe bağlıdır ve Ayarlar'dan kapatılabilir.\n\nİndirdiğiniz yapay zeka modelleri başkaları tarafından yapılmıştır ve her biri kendi lisansına tabidir. Yanıtları yanlış ya da uygunsuz olabilir: önemli olanı kontrol edin.",
+  "features": [
+    "Yapay zeka modellerini bilgisayarınızda, ekran kartında (Vulkan: NVIDIA, AMD, Intel) veya işlemcide çalıştırır",
+    "Bilgisayarınızın belleğine uygun bir model öneren adım adım kurulum",
+    "Hugging Face veya Kaggle'dan GGUF modelleri ya da kendi klasörünüz",
+    "Belgeli projeler: PDF, Word, Excel, PowerPoint, Markdown ve metin, sayfa kaynaklarıyla",
+    "Görebilen modeller görselleri okur; modele bir pencereyi, ekranı veya tarayıcı sekmesini gösterin",
+    "Duyabilen modeller için sesli mesajlar",
+    "Akıl yürüten modeller için düşünme çabası",
+    "İsteğe bağlı web araması, haberler, Wikipedia, hava durumu ve daha fazlası",
+    "Siz onaylayana kadar hiçbir şeyi değiştirmeyen klasör araçları",
+    "Oturum açmalı MCP sunucuları",
+    "Sohbetler arasında isteğe bağlı bellek, her not okunabilir ve silinebilir",
+    "Uygulamalar ve kodlama ajanları için localhost:8765'te OpenAI uyumlu API",
+    "llmtray komut satırı",
+    "Modele özel profiller ve llama.cpp seçenekleri",
+    "Hesap yok, reklam yok, izleme yok"
+  ],
+  "search_terms": [
+    "yerel yapay zeka",
+    "LLM",
+    "sohbet botu",
+    "OpenAI API",
+    "llama.cpp",
+    "GGUF",
+    "çevrimdışı yapay zeka"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

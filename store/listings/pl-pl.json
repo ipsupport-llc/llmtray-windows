@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Uruchamiaj modele AI na swoim PC: czatuj, pracuj z dokumentami i udostępnij aplikacjom oraz agentom do kodowania API zgodne z OpenAI. Prywatnie, bez konta, bez chmury.",
+  "description": "LLMTray uruchamia modele AI na Twoim PC. Czatuj z otwartymi modelami, pozwól im pracować z Twoimi dokumentami i folderami i udostępnij swoim aplikacjom oraz agentom do kodowania API zgodne z OpenAI – wszystko na Twoim własnym sprzęcie, bez konta i bez chmury.\n\nMNIEJ CENTRUM DANYCH. WIĘCEJ WŁASNEGO SPRZĘTU.\nTwój PC to już teraz sprawna maszyna do AI. LLMTray zaprzęga go do pracy: modele działają właśnie tutaj, więc Twoje prompty, pliki i odpowiedzi nigdy go nie opuszczają, a nic nie czeka w kolejce na serwerze.\n\nCZATUJ Z OTWARTYMI MODELAMI\n• Konfiguracja krok po kroku sprawdza procesor, pamięć i kartę graficzną i podpowiada model, który pasuje.\n• Pobieraj modele GGUF z Hugging Face lub Kaggle albo używaj tych, które już masz, na przykład z folderu LM Studio.\n• Działa na karcie graficznej przez Vulkan (NVIDIA, AMD i Intel) albo na procesorze.\n• Modele, które widzą, czytają Twoje obrazy; modele, które rozumują, pokazują tok myślenia, z wysiłkiem, który sam wybierasz.\n• Mów do modeli, które słyszą: nagraj wiadomość głosową prosto w czacie.\n• Karty, historia, wyszukiwanie, czaty tymczasowe i automatyczna kompakcja długich czatów.\n\nTWOJE PLIKI, ZE ŹRÓDŁAMI\n• Projekty grupują czaty z własnymi instrukcjami i dokumentami.\n• Dodaj do projektu pliki PDF, Word, Excel, PowerPoint (także stare .doc, .xls i .ppt), Markdown, HTML, tekstowe i z kodem: model je przeszukuje i podaje strony, z których skorzystał.\n• Zeskanowane strony PDF są odczytywane wbudowanym w Windows rozpoznawaniem tekstu.\n• Pokaż modelowi okno, ekran lub kartę przeglądarki, gdy utkniesz w jakiejś aplikacji.\n\nNARZĘDZIA, KTÓRE ZOSTAJĄ POD TWOJĄ KONTROLĄ\n• Wbudowane narzędzia: data i godzina oraz kalkulator, a – tylko jeśli je włączysz – wyszukiwanie w sieci, wiadomości, Wikipedia, pogoda i inne.\n• Pozwól czatowi pracować w folderze, na który wyrazisz zgodę: proponuje nowe foldery, przeniesienia i zmiany nazw, a nic się nie zmienia, dopóki nie zatwierdzisz.\n• Podłączaj serwery MCP, z logowaniem, aby dać modelom więcej narzędzi.\n• Pamięć, jeśli ją włączysz, zachowuje krótkie notatki o Tobie między czatami, każdą ze słowami, z których powstała; możesz je czytać i usuwać.\n\nPODŁĄCZ SWOICH AGENTÓW DO KODOWANIA I APLIKACJE\n• LLMTray udostępnia API zgodne z OpenAI na Twoim PC pod adresem http://localhost:8765/v1. Skieruj na LLMTray dowolną aplikację lub agenta do kodowania, który je obsługuje.\n• Aplikacje wybierają model po nazwie; LLMTray ładuje go przy pierwszym żądaniu.\n• Wiersz poleceń llmtray steruje aplikacją z dowolnego terminala.\n• API nasłuchuje tylko na Twoim PC.\n\nDOSTROJONE DO KAŻDEGO MODELU\n• Profile dla poszczególnych modeli: próbkowanie, rozmiar kontekstu, kwantyzacja pamięci podręcznej KV i opcje uruchamiania llama.cpp.\n\nNIC, O CO NIE PROSISZ\n• Każda ciężka funkcja jest wyłączona, dopóki jej nie włączysz, i nic nie jest pobierane, zanim tego nie wybierzesz.\n• Bez konta, bez reklam, bez śledzenia. Anonimowe statystyki użycia są opcjonalne i można je wyłączyć w Ustawieniach.\n\nPobierane modele AI tworzą inni, każdy na własnej licencji. Ich odpowiedzi mogą być błędne lub niestosowne: sprawdzaj to, co ważne.",
+  "features": [
+    "Uruchamia modele AI na Twoim PC: na karcie graficznej (Vulkan: NVIDIA, AMD, Intel) lub na procesorze",
+    "Konfiguracja krok po kroku, która podpowiada model pasujący do pamięci Twojego PC",
+    "Modele GGUF z Hugging Face lub Kaggle albo z Twojego folderu",
+    "Projekty z dokumentami: PDF, Word, Excel, PowerPoint, Markdown i tekst, ze stronami jako źródłami",
+    "Modele, które widzą, czytają obrazy; pokaż modelowi okno, ekran lub kartę przeglądarki",
+    "Wiadomości głosowe dla modeli, które słyszą",
+    "Wysiłek myślenia dla modeli, które rozumują",
+    "Opcjonalnie wyszukiwanie w sieci, wiadomości, Wikipedia, pogoda i inne",
+    "Narzędzia do folderów, które nic nie zmieniają bez Twojej zgody",
+    "Serwery MCP, z logowaniem",
+    "Opcjonalna pamięć między czatami, każdą notatkę można przeczytać i usunąć",
+    "API zgodne z OpenAI pod localhost:8765 dla aplikacji i agentów do kodowania",
+    "Wiersz poleceń llmtray",
+    "Profile dla poszczególnych modeli i opcje llama.cpp",
+    "Bez konta, bez reklam, bez śledzenia"
+  ],
+  "search_terms": [
+    "lokalna AI",
+    "LLM",
+    "chatbot",
+    "API OpenAI",
+    "llama.cpp",
+    "GGUF",
+    "AI offline"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

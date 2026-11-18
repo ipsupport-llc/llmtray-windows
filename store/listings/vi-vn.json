@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Chạy mô hình AI ngay trên PC của bạn: trò chuyện, làm việc với tài liệu và cung cấp API tương thích OpenAI cho ứng dụng và tác nhân lập trình. Riêng tư, không cần tài khoản, không cần đám mây.",
+  "description": "LLMTray chạy các mô hình AI ngay trên PC của bạn. Trò chuyện với mô hình mở, để chúng làm việc với tài liệu và thư mục của bạn, và cung cấp cho ứng dụng cùng tác nhân lập trình một API tương thích OpenAI, tất cả trên phần cứng của chính bạn, không cần tài khoản, không cần đám mây.\n\nBỚT TRUNG TÂM DỮ LIỆU. THÊM PHẦN CỨNG CỦA CHÍNH BẠN.\nPC của bạn vốn đã là một cỗ máy AI mạnh mẽ. LLMTray đưa nó vào việc: mô hình chạy ngay tại đây, nên câu lệnh, tệp và câu trả lời của bạn không bao giờ rời khỏi máy, và không gì phải xếp hàng chờ máy chủ.\n\nTRÒ CHUYỆN VỚI MÔ HÌNH MỞ\n• Trình thiết lập có hướng dẫn xem xét bộ xử lý, bộ nhớ và card đồ họa của bạn rồi gợi ý mô hình phù hợp.\n• Tải mô hình GGUF từ Hugging Face hoặc Kaggle, hoặc dùng các mô hình bạn đã có, chẳng hạn thư mục của LM Studio.\n• Chạy trên card đồ họa qua Vulkan (NVIDIA, AMD và Intel) hoặc trên bộ xử lý.\n• Mô hình biết nhìn sẽ đọc hình ảnh của bạn; mô hình biết suy luận sẽ hiển thị quá trình suy nghĩ, với mức nỗ lực do bạn chọn.\n• Nói chuyện với mô hình biết nghe: ghi âm tin nhắn thoại ngay trong cuộc trò chuyện.\n• Thẻ, lịch sử, tìm kiếm, trò chuyện tạm và tự động thu gọn các cuộc trò chuyện dài.\n\nTỆP CỦA BẠN, KÈM NGUỒN\n• Dự án gom các cuộc trò chuyện cùng hướng dẫn và tài liệu riêng.\n• Thêm tệp PDF, Word, Excel, PowerPoint (kể cả .doc, .xls và .ppt cũ), Markdown, HTML, văn bản và mã nguồn vào dự án: mô hình tìm trong đó và trích dẫn những trang đã dùng.\n• Các trang PDF quét được đọc bằng tính năng nhận dạng văn bản có sẵn của Windows.\n• Cho mô hình xem một cửa sổ, màn hình hoặc thẻ trình duyệt khi bạn bị kẹt trong một ứng dụng.\n\nCÔNG CỤ LUÔN TRONG TẦM KIỂM SOÁT CỦA BẠN\n• Công cụ tích hợp cho ngày giờ, máy tính và, chỉ khi bạn bật, tìm web, tin tức, Wikipedia, thời tiết và nhiều hơn nữa.\n• Cho phép cuộc trò chuyện làm việc trong thư mục bạn cho phép: nó đề xuất thư mục mới, di chuyển và đổi tên, và không gì thay đổi cho đến khi bạn phê duyệt.\n• Kết nối máy chủ MCP, có đăng nhập, để cung cấp thêm công cụ cho mô hình.\n• Bộ nhớ, nếu bạn bật, lưu những ghi chú ngắn về bạn giữa các cuộc trò chuyện, mỗi ghi chú kèm câu nói gốc; bạn có thể đọc và xóa chúng.\n\nKẾT NỐI TÁC NHÂN LẬP TRÌNH VÀ ỨNG DỤNG CỦA BẠN\n• LLMTray cung cấp API tương thích OpenAI trên PC của bạn tại http://localhost:8765/v1. Trỏ bất kỳ ứng dụng hay tác nhân lập trình nào dùng được API này vào LLMTray.\n• Ứng dụng chọn mô hình theo tên; LLMTray nạp mô hình ở yêu cầu đầu tiên.\n• Dòng lệnh llmtray điều khiển ứng dụng từ bất kỳ terminal nào.\n• API chỉ lắng nghe trên PC của bạn.\n\nTINH CHỈNH CHO TỪNG MÔ HÌNH\n• Hồ sơ riêng cho từng mô hình: lấy mẫu, kích cỡ ngữ cảnh, lượng tử hóa KV cache và tùy chọn khởi chạy llama.cpp.\n\nKHÔNG CÓ GÌ BẠN KHÔNG YÊU CẦU\n• Mọi tính năng nặng đều tắt cho đến khi bạn bật, và không gì được tải về trước khi bạn chọn.\n• Không tài khoản, không quảng cáo, không theo dõi. Thống kê sử dụng ẩn danh là tùy chọn và có thể tắt trong Cài đặt.\n\nCác mô hình AI bạn tải về do bên khác tạo ra, mỗi mô hình theo giấy phép riêng. Câu trả lời của chúng có thể sai hoặc không phù hợp: hãy kiểm tra những gì quan trọng.",
+  "features": [
+    "Chạy mô hình AI trên PC của bạn, trên card đồ họa (Vulkan: NVIDIA, AMD, Intel) hoặc bộ xử lý",
+    "Trình thiết lập có hướng dẫn gợi ý mô hình phù hợp với bộ nhớ PC",
+    "Mô hình GGUF từ Hugging Face hoặc Kaggle, hoặc thư mục của riêng bạn",
+    "Dự án với tài liệu: PDF, Word, Excel, PowerPoint, Markdown và văn bản, kèm trích dẫn trang",
+    "Mô hình biết nhìn đọc hình ảnh; cho mô hình xem cửa sổ, màn hình hoặc thẻ trình duyệt",
+    "Tin nhắn thoại cho mô hình biết nghe",
+    "Mức nỗ lực suy nghĩ cho mô hình biết suy luận",
+    "Tìm web, tin tức, Wikipedia, thời tiết và nhiều hơn nữa, tùy chọn",
+    "Công cụ thư mục không thay đổi gì cho đến khi bạn phê duyệt",
+    "Máy chủ MCP, có đăng nhập",
+    "Bộ nhớ tùy chọn giữa các cuộc trò chuyện, mọi ghi chú đều đọc và xóa được",
+    "API tương thích OpenAI tại localhost:8765 cho ứng dụng và tác nhân lập trình",
+    "Dòng lệnh llmtray",
+    "Hồ sơ riêng cho từng mô hình và tùy chọn llama.cpp",
+    "Không tài khoản, không quảng cáo, không theo dõi"
+  ],
+  "search_terms": [
+    "AI cục bộ",
+    "LLM",
+    "chatbot",
+    "OpenAI API",
+    "llama.cpp",
+    "GGUF",
+    "AI ngoại tuyến"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

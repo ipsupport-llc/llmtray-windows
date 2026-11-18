@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Führen Sie KI-Modelle auf Ihrem PC aus: chatten, mit Ihren Dokumenten arbeiten und Ihren Apps und Code-Agenten eine OpenAI-kompatible API bereitstellen. Privat, ohne Konto, ohne Cloud.",
+  "description": "LLMTray führt KI-Modelle auf Ihrem PC aus. Chatten Sie mit offenen Modellen, lassen Sie sie mit Ihren Dokumenten und Ordnern arbeiten und geben Sie Ihren Apps und Code-Agenten eine OpenAI-kompatible API, alles auf Ihrer eigenen Hardware, ohne Konto und ohne Cloud.\n\nWENIGER RECHENZENTRUM. MEHR EIGENE HARDWARE.\nIhr PC ist längst eine leistungsfähige KI-Maschine. LLMTray lässt ihn arbeiten: Die Modelle laufen direkt hier, Ihre Prompts, Dateien und Antworten verlassen ihn also nie, und nichts wartet in einer Server-Warteschlange.\n\nMIT OFFENEN MODELLEN CHATTEN\n• Eine geführte Einrichtung prüft Prozessor, Arbeitsspeicher und Grafikkarte und schlägt ein passendes Modell vor.\n• Laden Sie GGUF-Modelle von Hugging Face oder Kaggle herunter oder nutzen Sie vorhandene Modelle, etwa den Ordner von LM Studio.\n• Läuft auf der Grafikkarte über Vulkan (NVIDIA, AMD und Intel) oder auf dem Prozessor.\n• Modelle, die sehen können, lesen Ihre Bilder; Modelle, die schlussfolgern, zeigen ihren Gedankengang, mit einem Aufwand, den Sie wählen.\n• Sprechen Sie mit Modellen, die hören können: Nehmen Sie direkt im Chat eine Sprachnachricht auf.\n• Tabs, Verlauf, Suche, temporäre Chats und automatische Kompaktierung langer Chats.\n\nIHRE DATEIEN, MIT QUELLEN\n• Projekte bündeln Chats mit eigenen Anweisungen und Dokumenten.\n• Fügen Sie PDF-, Word-, Excel-, PowerPoint- (auch alte .doc-, .xls- und .ppt-), Markdown-, HTML-, Text- und Code-Dateien zu einem Projekt hinzu: Das Modell durchsucht sie und nennt die Seiten, die es verwendet hat.\n• Gescannte PDF-Seiten werden mit der Texterkennung von Windows gelesen.\n• Zeigen Sie dem Modell ein Fenster, den Bildschirm oder einen Browser-Tab, wenn Sie in einer App nicht weiterkommen.\n\nTOOLS, DIE UNTER IHRER KONTROLLE BLEIBEN\n• Integrierte Tools für Datum und Uhrzeit sowie ein Taschenrechner und – nur wenn Sie sie einschalten – Websuche, Nachrichten, Wikipedia, Wetter und mehr.\n• Lassen Sie einen Chat in einem Ordner arbeiten, den Sie freigeben: Er schlägt neue Ordner, Verschiebungen und Umbenennungen vor, und nichts ändert sich, bis Sie zustimmen.\n• Verbinden Sie MCP-Server, mit Anmeldung, um Modellen weitere Tools zu geben.\n• Der Speicher, wenn Sie ihn einschalten, behält kurze Notizen über Sie zwischen Chats, jeweils mit den Worten, aus denen sie stammen; Sie können sie lesen und löschen.\n\nIHRE CODE-AGENTEN UND APPS VERBINDEN\n• LLMTray stellt auf Ihrem PC unter http://localhost:8765/v1 eine OpenAI-kompatible API bereit. Richten Sie jede App und jeden Code-Agenten, der sie spricht, auf LLMTray aus.\n• Apps wählen das Modell per Namen; LLMTray lädt es bei der ersten Anfrage.\n• Die Befehlszeile llmtray steuert die App aus jedem Terminal.\n• Die API lauscht nur auf Ihrem PC.\n\nFÜR JEDES MODELL ABGESTIMMT\n• Profile pro Modell für Sampling, Kontextgröße, KV-Cache-Quantisierung und Startoptionen von llama.cpp.\n\nNICHTS, WAS SIE NICHT WOLLTEN\n• Jede aufwendige Funktion ist aus, bis Sie sie einschalten, und nichts wird heruntergeladen, bevor Sie es auswählen.\n• Kein Konto, keine Werbung, kein Tracking. Anonyme Nutzungsstatistiken sind optional und lassen sich in den Einstellungen abschalten.\n\nDie KI-Modelle, die Sie herunterladen, stammen von anderen und unterliegen jeweils eigenen Lizenzen. Ihre Antworten können falsch oder unangemessen sein: Prüfen Sie, was wichtig ist.",
+  "features": [
+    "Führt KI-Modelle auf Ihrem PC aus, auf der Grafikkarte (Vulkan: NVIDIA, AMD, Intel) oder dem Prozessor",
+    "Geführte Einrichtung, die ein zum Arbeitsspeicher Ihres PCs passendes Modell vorschlägt",
+    "GGUF-Modelle von Hugging Face oder Kaggle oder aus Ihrem eigenen Ordner",
+    "Projekte mit Dokumenten: PDF, Word, Excel, PowerPoint, Markdown und Text, mit Seitenangaben",
+    "Modelle, die sehen können, lesen Bilder; zeigen Sie ihnen ein Fenster, den Bildschirm oder einen Browser-Tab",
+    "Sprachnachrichten für Modelle, die hören können",
+    "Denkaufwand für Modelle, die schlussfolgern",
+    "Optional: Websuche, Nachrichten, Wikipedia, Wetter und mehr",
+    "Ordner-Tools, die nichts ändern, bis Sie zustimmen",
+    "MCP-Server, mit Anmeldung",
+    "Optionaler Speicher zwischen Chats, jede Notiz les- und löschbar",
+    "OpenAI-kompatible API unter localhost:8765 für Apps und Code-Agenten",
+    "Die Befehlszeile llmtray",
+    "Profile pro Modell und llama.cpp-Optionen",
+    "Kein Konto, keine Werbung, kein Tracking"
+  ],
+  "search_terms": [
+    "lokale KI",
+    "LLM",
+    "Chatbot",
+    "OpenAI API",
+    "llama.cpp",
+    "GGUF",
+    "Offline-KI"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}
