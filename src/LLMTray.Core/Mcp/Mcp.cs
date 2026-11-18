@@ -108,6 +108,52 @@ public sealed record McpTool(string Name, string? Title, string Description, str
 
     public JsonObject InputSchema => JsonNode.Parse(InputSchemaJson) as JsonObject ?? [];
 
+    /// <summary>
+    /// The tool's action field (Mac adr/0027): a string property with fixed
+    /// values ("action": read, send, delete). Of several, one named like an
+    /// action (action, operation, op, method, command, mode, verb) first,
+    /// then a required one, then the first by name. Such a tool is allowed
+    /// per action, never whole.
+    /// </summary>
+    public (string Name, IReadOnlyList<string> Values)? ActionField
+    {
+        get
+        {
+            var schema = InputSchema;
+            if (schema["properties"] is not JsonObject properties) return null;
+            var required = (schema["required"] as JsonArray)?.Select(n => n is JsonValue v && v.TryGetValue<string>(out var r) ? r : null).OfType<string>().ToHashSet() ?? [];
+            var fields = new List<(string Name, IReadOnlyList<string> Values)>();
+            foreach (var (key, value) in properties.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                if (value is not JsonObject p) continue;
+                if (p["type"] is JsonValue t && (!t.TryGetValue<string>(out var type) || type != "string")) continue;
+                if (p["enum"] is not JsonArray values || values.Count == 0) continue;
+                var strings = values.Select(n => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : null).ToList();
+                if (strings.Any(x => x is null)) continue;
+                fields.Add((key, strings.OfType<string>().Distinct(StringComparer.Ordinal).ToList()));
+            }
+            if (fields.Count == 0) return null;
+            string[] named = ["action", "operation", "op", "method", "command", "mode", "verb"];
+            foreach (var name in named)
+            {
+                if (fields.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) is { Name: not null } n) return n;
+            }
+            return fields.FirstOrDefault(f => required.Contains(f.Name)) is { Name: not null } r ? r : fields[0];
+        }
+    }
+
+    /// <summary>
+    /// The action a call is for: the value it gives the action field (null:
+    /// none, the tool has no such field, or the call names the field twice in
+    /// different cases, which a server might read either way).
+    /// </summary>
+    public string? ActionOf(JsonObject arguments)
+    {
+        if (ActionField is not { } f) return null;
+        if (arguments.Count(p => string.Equals(p.Key, f.Name, StringComparison.OrdinalIgnoreCase)) != 1) return null;
+        return arguments[f.Name] is JsonValue v && v.TryGetValue<string>(out var action) ? action : null;
+    }
+
     /// <summary>The tool's request entry under the name the model sees.</summary>
     public JsonObject Definition(string modelName) => new()
     {

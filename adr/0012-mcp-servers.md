@@ -26,7 +26,17 @@ their tools, called the way the built-in ones are (adr/0009).
   #356). A deny refuses the tool for the rest of the turn. **Run without
   asking** is a per-tool switch, off until turned on; Always Allow turns it
   on, and the server's row sets it for everything, the tools that only
-  read, or nothing at once (Mac #354). Approval is bound to
+  read, or nothing at once (Mac #354). **Per action** (Mac adr/0027): a
+  tool whose schema has a string field with fixed values (`action`:
+  read, send, delete; of several, one named like an action — action,
+  operation, op, method, command, mode, verb — then a required one, then
+  the first by name) is
+  allowed per value, never whole: Settings shows a box per action and
+  All, Always Allow names the action, and a call with no action or one the
+  tool doesn't list (or that names the field twice in two cases) can be
+  allowed only once. Only that field is told apart: a server that acts on
+  another argument the same way is still asked per that field's value. A tool allowed whole before
+  this counts for each of its listed actions until one is changed. Approval is bound to
   the server and the tool's definition (a hash of its name, title,
   description, schema and read-only/destructive hints): a tool changed or
   added since the review is hidden from the model until accepted, one by
@@ -89,7 +99,7 @@ SSE stream stays open. Nothing is retried. 20 s to start, 60 s to list.
 
 ## Not yet
 
-The registry catalog, `.mcpb` bundles, per-action approval, secrets in Credential
+The registry catalog, `.mcpb` bundles, secrets in Credential
 Manager (environment values and headers are in `mcp-servers.json` in the
 user's profile), image results. OAuth sign-in came with adr/0015; each
 server became a tool group loaded on demand with adr/0024 ("Tools loaded
