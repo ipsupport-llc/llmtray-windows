@@ -75,7 +75,9 @@ public sealed class LegacyOfficeTests : IDisposable
     {
         // Cells "A", empty, "B", then the row's own mark (index 5), which the paragraph properties name.
         var page = Assert.Single(Read(Save("t.doc", Word(main: "A\u0007\u0007B\u0007\u0007next\r", rowMarks: [5]))));
-        Assert.Equal("Title \u201Cq\u201D\nlink end\nA | | B\nnext\n\nFootnotes:\nnote one", page.Text);
+        Assert.Equal("Title \u201Cq\u201D\nlink end\nA |  | B\nnext\n\nFootnotes:\nnote one", page.Text);
+        // Without row marks known: two cell marks end a row; a cell's own "|" stays.
+        Assert.Equal("a|\nb | c\n", LegacyOffice.WordPlain("a|\u0007\u0007b\u0007c\u0007\u0007"));
     }
 
     [Fact]
@@ -83,7 +85,7 @@ public sealed class LegacyOfficeTests : IDisposable
     {
         var page = Assert.Single(Read(Save("b.xls", Excel())));
         Assert.Equal("Data", page.Label);
-        Assert.Equal("Alpha | abПр\n3 | 1.5 | joined\nTRUE | #DIV/0!\n1 | -2\n", page.Text + "\n");
+        Assert.Equal("Alpha | abПр\n3 | 1.5 | joined\nTRUE | #DIV/0! | ЖЯ | #GETTING_DATA\n1 | -2\n", page.Text + "\n");
     }
 
     [Fact]
@@ -307,8 +309,10 @@ public sealed class LegacyOfficeTests : IDisposable
             .. Biff(0x0809, Le16(0x0600), Le16(0x0005), new byte[12]),
             .. encrypted ? Biff(0x002F, new byte[6]) : [],
             .. Biff(0x0085, Le32(sheetAt), [0, 0, 4, 0], Encoding.Latin1.GetBytes("Data")),
-            .. Biff(0x00FC, Le32(2), Le32(2), Le16(5), [0], Encoding.Latin1.GetBytes("Alpha"), Le16(4), [0], Encoding.Latin1.GetBytes("ab")),
-            .. Biff(0x003C, [1], Encoding.Unicode.GetBytes("Пр")),
+            .. Biff(0x00FC, Le32(3), Le32(3), Le16(5), [0], Encoding.Latin1.GetBytes("Alpha"), Le16(4), [0], Encoding.Latin1.GetBytes("ab")),
+            .. Biff(0x003C, [1], Encoding.Unicode.GetBytes("Пр"), Le16(2), [1], Encoding.Unicode.GetBytes("Ж"), [Encoding.Unicode.GetBytes("Я")[0]]),
+            // A character cut in two by the record's end, as Excel sometimes writes: the flags byte sits between its halves.
+            .. Biff(0x003C, [1], [Encoding.Unicode.GetBytes("Я")[1]]),
             .. Biff(0x000A),
         ];
         var sheet = new List<byte>();
@@ -326,6 +330,8 @@ public sealed class LegacyOfficeTests : IDisposable
         sheet.AddRange(Biff(0x0205, Cell(5, 65535), [1, 0]));
         sheet.AddRange(Biff(0x0205, Cell(2, 0), [1, 0]));
         sheet.AddRange(Biff(0x0205, Cell(2, 1), [0x07, 1]));
+        sheet.AddRange(Biff(0x00FD, Cell(2, 2), Le32(2)));
+        sheet.AddRange(Biff(0x0205, Cell(2, 3), [0x2B, 1]));
         // 100 / 100 and -2 as integers.
         sheet.AddRange(Biff(0x00BD, Le16(3), Le16(0), Le16(15), Le32(100 << 2 | 3), Le16(15), Le32(unchecked((uint)(-2 << 2 | 2))), Le16(1)));
         sheet.AddRange(Biff(0x0809, Le16(0x0600), Le16(0x0020), new byte[12]));
@@ -366,9 +372,9 @@ public sealed class LegacyOfficeTests : IDisposable
             Box(0x0FF0, 0,
                 SlidePersist(2, 256), Rec(0x0F9F, Le32(0)), Chars("Quarterly plan"), Bytes("Revenue grows 12%"),
                 SlidePersist(3, 257), Chars("Второй слайд")),
-            Box(0x0FF0, 2, SlidePersist(4, 300), Chars("Speaker note"))));
-        // The title drawn again (said once), a caption, a slide number ("*" beside its field).
-        var slide1 = Put(Box(0x03EE, 0, SlideAtom(300), Box(0xF002, 0, Box(0xF004, 0, Chars("Quarterly plan"), Chars("Drawn caption")), Box(0xF00D, 0, Chars("*"), Rec(0x0FD8, new byte[4])))));
+            Box(0x0FF0, 2, SlidePersist(4, 300))));
+        // The title's shape points at its text in the slide list; a caption; a slide number ("*" with its field).
+        var slide1 = Put(Box(0x03EE, 0, SlideAtom(300), Box(0xF002, 0, Box(0xF004, 0, Rec(0x0F9E, Le32(0)), Chars("Drawn caption")), Box(0xF00D, 0, Rec(0x0F9F, Le32(4)), Chars("*"), Rec(0x0FD8, new byte[4])))));
         var oldSlide2 = Put(Box(0x03EE, 0, SlideAtom(0), Box(0xF002, 0, Bytes("OLD TEXT"))));
         var notes = Put(Box(0x03F0, 0, Box(0xF002, 0, Chars("Speaker note"), Chars("Extra note"))));
         var oldDir = Put(Rec(0x1772, [.. Le32(1 | 4u << 20), .. Le32(document), .. Le32(slide1), .. Le32(oldSlide2), .. Le32(notes)]));

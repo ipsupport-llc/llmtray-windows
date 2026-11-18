@@ -96,7 +96,7 @@ public static class LegacyOffice
         var pieces = (plcLength - 4) / 12;
         // One character past the cap is enough to know the document is too large.
         var wanted = Math.Min(parts.Sum(p => (long)p), ExtractLimits.Default.MaxTextChars + 1);
-        var rowParagraphs = RowEndParagraphs(word, table, pairs);
+        var rowParagraphs = RowEndParagraphs(word, table, file.Stream("Data"), pairs);
         var rowEnds = new HashSet<int>();
         var text = new StringBuilder();
         for (var i = 0; i < pieces && text.Length < wanted; i++)
@@ -108,7 +108,8 @@ public static class LegacyOffice
             var fc = CompoundFile.U32(table, plc + (pieces + 1) * 4 + i * 8 + 2);
             var compressed = (fc & 0x40000000) != 0;
             // Compressed: one byte a character at half the offset; otherwise UTF-16.
-            var at = compressed ? (long)(fc & 0x3FFFFFFF) / 2 : fc;
+            // The top bit is reserved and ignored.
+            var at = compressed ? (long)(fc & 0x3FFFFFFF) / 2 : fc & 0x3FFFFFFF;
             if (at + count * (compressed ? 1L : 2L) > word.Length) throw Damaged();
             var piece = compressed ? Compressed(word, (int)at, count) : Encoding.Unicode.GetString(word, (int)at, count * 2);
             if (rowParagraphs is { Count: > 0 })
@@ -167,20 +168,26 @@ public static class LegacyOffice
     /// sprmPFTtp or sprmPFInnerTtp), as stream offset ranges from the
     /// paragraph property pages; null when there are none to read.
     /// </summary>
-    static List<(long From, long To)>? RowEndParagraphs(byte[] word, byte[] table, int pairs)
+    static List<(long From, long To)>? RowEndParagraphs(byte[] word, byte[] table, byte[]? data, int pairs)
     {
         var fc = CompoundFile.U32(word, pairs + 2 + 13 * 8);
         var lcb = CompoundFile.U32(word, pairs + 2 + 13 * 8 + 4);
         if (lcb < 12 || fc > table.Length || lcb > table.Length - fc || (lcb - 4) % 8 != 0) return null;
         var pages = (int)(lcb - 4) / 8;
         var ranges = new List<(long From, long To)>();
+        var seen = new HashSet<long>();
+        long budget = 0;
         for (var i = 0; i < pages; i++)
         {
             var page = (long)(CompoundFile.U32(table, (int)fc + (pages + 1) * 4 + i * 4) & 0x3FFFFF) * 512;
             if (page + 512 > word.Length) return null;
+            // A page named twice is read once; there can't be more pages than the stream holds.
+            if (!seen.Add(page)) continue;
             var p = (int)page;
             var runs = word[p + 511];
             if (runs > 29) continue;
+            // More runs than a page-full a paragraph: not a document's.
+            if ((budget += runs) > MaxItems) return null;
             for (var r = 0; r < runs; r++)
             {
                 var offset = word[p + 4 * (runs + 1) + r * 13];
@@ -191,23 +198,27 @@ public static class LegacyOffice
                 else (start, length) = (papx + 2, 2 * word[Math.Min(papx + 1, p + 511)]);
                 if (start + length > p + 511) continue;
                 // The style's index (2 bytes), then the properties.
-                if (RowEnd(word, start + 2, start + length)) ranges.Add((CompoundFile.U32(word, p + r * 4), CompoundFile.U32(word, p + (r + 1) * 4)));
+                if (RowEnd(word, start + 2, start + length, data)) ranges.Add((CompoundFile.U32(word, p + r * 4), CompoundFile.U32(word, p + (r + 1) * 4)));
             }
         }
         ranges.Sort();
         return ranges;
     }
 
-    /// <summary>Whether a list of paragraph properties marks the end of a table row.</summary>
-    static bool RowEnd(byte[] d, int pos, int end)
+    /// <summary>
+    /// Whether a list of paragraph properties marks the end of a table row
+    /// (the last sprmPFTtp or sprmPFInnerTtp wins). Properties too large for
+    /// the page are elsewhere: sprmPHugePapx points into the Data stream.
+    /// </summary>
+    static bool RowEnd(byte[] d, int pos, int end, byte[]? data = null)
     {
+        var row = false;
         while (pos + 2 <= end)
         {
             var op = CompoundFile.U16(d, pos);
             pos += 2;
-            if (pos >= end) return false;
-            if (op is 0x2417 or 0x244C && d[pos] == 1) return true;
-            int size;
+            if (pos >= end) break;
+            long size;
             switch (op >> 13)
             {
                 case 0 or 1: size = 1; break;
@@ -215,14 +226,33 @@ public static class LegacyOffice
                 case 3: size = 4; break;
                 case 7: size = 3; break;
                 default:
-                    // Variable: a length byte first; tab changes with 255 there are laid out otherwise and end the look.
-                    if (op == 0xC615 && d[pos] == 255) return false;
-                    size = 1 + d[pos];
+                    if (op == 0xD608)
+                    {
+                        // sprmTDefTable: a two-byte length, one more than what follows it.
+                        size = 2 + Math.Max(0, CompoundFile.U16(d, pos) - 1);
+                    }
+                    else if (op == 0xC615 && d[pos] == 255)
+                    {
+                        // sprmPChgTabs at its largest: two counted lists of tab stops.
+                        var deleted = pos + 1 < end ? d[pos + 1] : 0;
+                        var addAt = pos + 2 + deleted * 4;
+                        var added = addAt < end ? d[addAt] : 0;
+                        size = 2 + deleted * 4 + 1 + added * 3;
+                    }
+                    else size = 1 + d[pos];
                     break;
             }
-            pos += size;
+            if (op is 0x2417 or 0x244C) row = d[pos] == 1;
+            else if (op == 0x6646 && data is not null)
+            {
+                // The rest of the properties, in the Data stream: a length, then the list.
+                var at = CompoundFile.U32(d, pos);
+                var length = CompoundFile.U16(data, (int)Math.Min(at, int.MaxValue));
+                if (at + 2L + length <= data.Length && RowEnd(data, (int)at + 2, (int)at + 2 + length)) row = true;
+            }
+            pos = (int)Math.Min(pos + size, end);
         }
-        return false;
+        return row;
     }
 
     static bool InRanges(List<(long From, long To)> ranges, long at)
@@ -249,6 +279,8 @@ public static class LegacyOffice
         // Open fields: true once past the separator, where the shown result is.
         var fields = new Stack<bool>();
         var hidden = 0;
+        // Whether the output ends with a separator this put there (a cell's text may end with "|" of its own).
+        var separator = false;
         for (var i = 0; i < text.Length; i++)
         {
             var c = text[i];
@@ -265,21 +297,27 @@ public static class LegacyOffice
                     continue;
             }
             if (hidden > 0) continue;
+            var afterSeparator = separator;
+            separator = false;
             switch (c)
             {
                 case '\r' or '\u000B': sb.Append('\n'); break;
                 case '\u000C': sb.Append('\f'); break;
                 case '\u0007':
-                    while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
                     if (rowEnd is not null ? rowEnd(i) : i + 1 < text.Length && text[i + 1] == '\u0007')
                     {
                         // The row's own mark comes after its last cell's.
-                        if (sb.Length > 0 && sb[^1] == '|') sb.Length--;
+                        if (afterSeparator) sb.Length -= 3;
                         while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
                         sb.Append('\n');
                         if (rowEnd is null) i++;
                     }
-                    else sb.Append(" | ");
+                    else
+                    {
+                        if (!afterSeparator) while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
+                        sb.Append(" | ");
+                        separator = true;
+                    }
                     break;
                 case '\u001E': sb.Append('-'); break;
                 case ' ': sb.Append(' '); break;
@@ -307,6 +345,7 @@ public static class LegacyOffice
         var biff8 = CompoundFile.U16(records.Current.Body, 0) == 0x0600;
         var encoding = CodePage(1252);
         var sheets = new List<(long At, string Name)>();
+        var budget = new Budget();
         List<string>? shared = null;
         var globals = true;
         while (globals && records.MoveNext())
@@ -320,12 +359,22 @@ public static class LegacyOffice
                     // A sheet: where its records start, its kind (0 a worksheet), its name.
                     if (body.Length >= 8 && body[5] == 0)
                     {
-                        var reader = new Chunks([body[6..]]);
-                        sheets.Add((CompoundFile.U32(body, 0), biff8 ? reader.Chars(reader.Byte()) : encoding.GetString(body, 7, Math.Min(body[6], body.Length - 7))));
+                        var reader = new Chunks([new ArraySegment<byte>(body, 6, body.Length - 6)]);
+                        string name;
+                        try
+                        {
+                            name = biff8 ? reader.Chars(reader.Byte()) : encoding.GetString(body, 7, Math.Min(body[6], body.Length - 7));
+                        }
+                        catch (ExtractException)
+                        {
+                            // A name that runs past its record costs the sheet its name, not the workbook its sheets.
+                            name = "";
+                        }
+                        sheets.Add((CompoundFile.U32(body, 0), name));
                     }
                     break;
                 case 0x00FC:
-                    shared = SharedStrings(new Chunks(Continued(book, at, body, 0)));
+                    shared = SharedStrings(new Chunks(Continued(book, at, body, 0, budget)));
                     break;
                 case 0x000A:
                     globals = false;
@@ -337,12 +386,12 @@ public static class LegacyOffice
         {
             if (at >= book.Length) continue;
             number++;
-            yield return new ExtractedPage(number, Sheet(book, (int)at, biff8, encoding, shared ?? []), name, Table: true);
+            yield return new ExtractedPage(number, Sheet(book, (int)at, biff8, encoding, shared ?? [], budget), name, Table: true);
         }
     }
 
     /// <summary>A worksheet's cells, its own records only (an embedded chart's are skipped).</summary>
-    static string Sheet(byte[] book, int at, bool biff8, Encoding encoding, List<string> shared)
+    static string Sheet(byte[] book, int at, bool biff8, Encoding encoding, List<string> shared, Budget budget)
     {
         var rows = new SortedDictionary<int, SortedDictionary<int, string>>();
         var depth = 0;
@@ -369,15 +418,17 @@ public static class LegacyOffice
                 if (type == 0x0006) pendingString = null;
                 continue;
             }
+            // A formula's text result comes right after it (past its shared or array formula, if any), or not at all.
+            if (type is not (0x0006 or 0x0207 or 0x003C or 0x04BC or 0x0221 or 0x0236)) pendingString = null;
             switch (type)
             {
-                case 0x00FD:
+                case 0x00FD when body.Length >= 10:
                     var index = CompoundFile.U32(body, 6);
                     Set(row, column, index < shared.Count ? shared[(int)index] : "");
                     break;
                 case 0x0204 or 0x00D6:
                     if (body.Length < 8) break;
-                    Set(row, column, biff8 ? new Chunks(Continued(book, recordAt, body, 6)).Chars(CompoundFile.U16(body, 6), skipLength: 2) : Bytes(encoding, body, 8, CompoundFile.U16(body, 6)));
+                    Set(row, column, biff8 ? new Chunks(Continued(book, recordAt, body, 6, budget, StringBytes(CompoundFile.U16(body, 6)))).Chars(CompoundFile.U16(body, 6), skipLength: 2) : Bytes(encoding, body, 8, CompoundFile.U16(body, 6)));
                     break;
                 case 0x0203 when body.Length >= 14:
                     Set(row, column, Number(BitConverter.ToDouble(body, 6)));
@@ -402,7 +453,7 @@ public static class LegacyOffice
                     // A formula's text result, in the record right after it.
                     pendingString = null;
                     if (body.Length < 2) break;
-                    Set(cell.Row, cell.Column, biff8 ? new Chunks(Continued(book, recordAt, body, 0)).Chars(CompoundFile.U16(body, 0), skipLength: 2) : Bytes(encoding, body, 2, CompoundFile.U16(body, 0)));
+                    Set(cell.Row, cell.Column, biff8 ? new Chunks(Continued(book, recordAt, body, 0, budget, StringBytes(CompoundFile.U16(body, 0)))).Chars(CompoundFile.U16(body, 0), skipLength: 2) : Bytes(encoding, body, 2, CompoundFile.U16(body, 0)));
                     break;
             }
         }
@@ -422,20 +473,32 @@ public static class LegacyOffice
         return sb.ToString();
     }
 
-    /// <summary>A record's body from <paramref name="skip"/> on, with the bodies of the CONTINUE records right after it.</summary>
-    static List<byte[]> Continued(byte[] book, long at, byte[] body, int skip)
+    /// <summary>
+    /// A record's body from <paramref name="skip"/> on, with the bodies of
+    /// the CONTINUE records right after it, in place (nothing copied): as
+    /// many as hold <paramref name="most"/> bytes, each one charged to the
+    /// workbook's budget.
+    /// </summary>
+    static List<ArraySegment<byte>> Continued(byte[] book, long at, byte[] body, int skip, Budget budget, long most = long.MaxValue)
     {
-        var chunks = new List<byte[]> { body[Math.Min(skip, body.Length)..] };
+        var start = (int)at + 4 + Math.Min(skip, body.Length);
+        var chunks = new List<ArraySegment<byte>> { new(book, start, body.Length - Math.Min(skip, body.Length)) };
+        long held = chunks[0].Count;
         var next = at + 4 + body.Length;
-        while (next + 4 <= book.Length && CompoundFile.U16(book, (int)next) == 0x003C)
+        while (held < most && next + 4 <= book.Length && CompoundFile.U16(book, (int)next) == 0x003C)
         {
             var length = CompoundFile.U16(book, (int)next + 2);
             if (next + 4 + length > book.Length) throw Damaged();
-            chunks.Add(book[(int)(next + 4)..(int)(next + 4 + length)]);
+            budget.Spend(1);
+            chunks.Add(new ArraySegment<byte>(book, (int)next + 4, length));
+            held += length;
             next += 4 + length;
         }
         return chunks;
     }
+
+    /// <summary>The most bytes a string of <paramref name="count"/> characters takes, with its header and a flags byte per record.</summary>
+    static long StringBytes(int count) => 3 + 2L * count + count;
 
     /// <summary>A BIFF5 string's bytes in the workbook's code page, cut to the record.</summary>
     static string Bytes(Encoding encoding, byte[] body, int at, int count) =>
@@ -487,6 +550,7 @@ public static class LegacyOffice
         0x1D => "#NAME?",
         0x24 => "#NUM!",
         0x2A => "#N/A",
+        0x2B => "#GETTING_DATA",
         _ => "#ERROR",
     };
 
@@ -495,7 +559,7 @@ public static class LegacyOffice
     /// that go on in the next record start with a fresh flags byte there:
     /// the next part may be one byte or two a character.
     /// </summary>
-    sealed class Chunks(List<byte[]> chunks)
+    sealed class Chunks(List<ArraySegment<byte>> chunks)
     {
         int chunk;
         int pos;
@@ -504,7 +568,7 @@ public static class LegacyOffice
         {
             get
             {
-                while (chunk < chunks.Count && pos >= chunks[chunk].Length) { chunk++; pos = 0; }
+                while (chunk < chunks.Count && pos >= chunks[chunk].Count) { chunk++; pos = 0; }
                 return chunk >= chunks.Count;
             }
         }
@@ -535,7 +599,7 @@ public static class LegacyOffice
             var sb = new StringBuilder(count);
             while (sb.Length < count)
             {
-                if (chunk < chunks.Count && pos >= chunks[chunk].Length)
+                if (chunk < chunks.Count && pos >= chunks[chunk].Count)
                 {
                     // Into the next record: its first byte says how wide the rest is.
                     chunk++;
@@ -543,7 +607,20 @@ public static class LegacyOffice
                     wide = (Byte() & 1) != 0;
                     continue;
                 }
-                sb.Append(wide ? (char)U16() : (char)Byte());
+                if (!wide)
+                {
+                    sb.Append((char)Byte());
+                    continue;
+                }
+                var low = Byte();
+                if (chunk < chunks.Count && pos >= chunks[chunk].Count)
+                {
+                    // Excel itself sometimes splits a character between records: the next one's flags byte comes between its halves.
+                    chunk++;
+                    pos = 0;
+                    wide = (Byte() & 1) != 0;
+                }
+                sb.Append((char)(low | Byte() << 8));
             }
             Skip(runs * 4L);
             Skip(ext);
@@ -587,13 +664,17 @@ public static class LegacyOffice
             {
                 var pos = (long)directory + 8;
                 var dirEnd = pos + dirLength;
-                while (pos + 4 <= dirEnd)
+                // Whole entries only: an id and count, then that many offsets.
+                if (dirLength % 4 != 0) throw Damaged();
+                while (pos < dirEnd)
                 {
+                    budget.Spend(1);
                     var entry = CompoundFile.U32(doc, (int)pos);
                     pos += 4;
                     var first = entry & 0xFFFFF;
                     var count = entry >> 20;
-                    for (var k = 0u; k < count && pos + 4 <= dirEnd; k++, pos += 4)
+                    if (pos + count * 4L > dirEnd) throw Damaged();
+                    for (var k = 0u; k < count; k++, pos += 4)
                     {
                         budget.Spend(1);
                         persist.TryAdd(first + k, CompoundFile.U32(doc, (int)pos));
@@ -609,13 +690,12 @@ public static class LegacyOffice
         var slides = new List<(uint Ref, List<string> Text)>();
         // Notes by their own id, which is what a slide names them by.
         var notesText = new Dictionary<uint, (uint Ref, List<string> Text)>();
-        foreach (var (type, instance, at, length) in Children(doc, docAt))
+        foreach (var (type, instance, at, length) in Children(doc, docAt, budget))
         {
             if (type != 0x0FF0 || instance is not (0 or 2)) continue;
             List<string>? current = null;
-            foreach (var (child, _, childAt, childLength) in Children(doc, at))
+            foreach (var (child, _, childAt, childLength) in Children(doc, at, budget))
             {
-                budget.Spend(1);
                 if (child == 0x03F3)
                 {
                     if (childLength < 20) throw Damaged();
@@ -624,7 +704,8 @@ public static class LegacyOffice
                     if (instance == 0) slides.Add((id, current));
                     else notesText[CompoundFile.U32(doc, (int)childAt + 8 + 12)] = (id, current);
                 }
-                else if (current is not null && TextAtom(doc, child, childAt, childLength) is { } text) current.Add(text);
+                // A notes list holds no text ([MS-PPT] NotesListWithTextContainer): notes are read from their drawing.
+                else if (current is not null && instance == 0 && TextAtom(doc, child, childAt, childLength, budget) is { } text) current.Add(text);
             }
         }
         var number = 0;
@@ -637,7 +718,7 @@ public static class LegacyOffice
             {
                 Drawn(doc, slideAt, lines, budget);
                 // The slide atom names the slide's notes.
-                var atom = Children(doc, slideAt).FirstOrDefault(c => c.Type == 0x03EF);
+                var atom = Children(doc, slideAt, budget).FirstOrDefault(c => c.Type == 0x03EF);
                 var notesId = atom.Length >= 20 ? CompoundFile.U32(doc, (int)atom.At + 8 + 16) : 0;
                 if (notesId != 0 && notesText.TryGetValue(notesId, out var listed))
                 {
@@ -653,61 +734,73 @@ public static class LegacyOffice
         }
     }
 
+    /// <summary>What one file may make us do: records and entries read, characters of text decoded.</summary>
     sealed class Budget
     {
         long left = MaxItems;
+        long chars = ExtractLimits.Default.MaxTextChars;
 
         public void Spend(long n)
         {
             left -= n;
             if (left < 0) throw Damaged();
         }
+
+        /// <summary>Checked before the text is decoded: a 200 MB atom never becomes a string.</summary>
+        public void Text(long n)
+        {
+            chars -= n;
+            if (chars < 0) throw new ExtractException("too large: too much text");
+        }
     }
 
     static string Slide(string text) => text.Replace('\r', '\n').Replace('\u000B', '\n').Trim();
 
     /// <summary>
-    /// Text drawn on a slide or notes page. A placeholder's text is in the
-    /// slide list and may be drawn again: each listed text stands for one
-    /// drawn copy, so the same words in two shapes still read twice. A slide
-    /// number's "*" (a text with a slide number field beside it) isn't text.
+    /// Text drawn on a slide or notes page: shapes' own text. A placeholder's
+    /// shape only points at its text in the slide list (an outline text
+    /// reference), so nothing is read twice. A slide number reads "*" with
+    /// its field right after it, before the next text: that "*" isn't text.
     /// </summary>
     static void Drawn(byte[] doc, uint at, List<string> lines, Budget budget)
     {
-        var listed = new Dictionary<string, int>();
-        foreach (var line in lines.Select(Slide)) listed[line] = listed.GetValueOrDefault(line) + 1;
         Walk(at, 0);
 
         void Walk(uint container, int depth)
         {
             if (depth > 32) return;
-            var slideNumber = false;
-            foreach (var child in Children(doc, container))
+            string? star = null;
+            foreach (var (type, _, childAt, length) in Children(doc, container, budget))
             {
-                budget.Spend(1);
-                slideNumber |= child.Type == 0x0FD8;
-            }
-            foreach (var (type, _, childAt, length) in Children(doc, container))
-            {
-                budget.Spend(1);
-                if (TextAtom(doc, type, childAt, length) is { } text)
+                if (type == 0x0FD8) star = null;
+                else if (TextAtom(doc, type, childAt, length, budget) is { } text)
                 {
-                    var clean = Slide(text);
-                    if (clean.Length == 0 || (clean == "*" && slideNumber)) continue;
-                    if (listed.GetValueOrDefault(clean) > 0) listed[clean]--;
-                    else lines.Add(text);
+                    Flush();
+                    if (Slide(text) == "*") star = text;
+                    else if (Slide(text).Length > 0) lines.Add(text);
                 }
-                else if (Header(doc, childAt, out _, out var version, out _) && version == 0xF) Walk(childAt, depth + 1);
+                else
+                {
+                    if (type == 0x0F9F) Flush();
+                    if (Header(doc, childAt, out _, out var version, out _) && version == 0xF) Walk(childAt, depth + 1);
+                }
+            }
+            Flush();
+
+            void Flush()
+            {
+                if (star is not null) lines.Add(star);
+                star = null;
             }
         }
     }
 
-    static string? TextAtom(byte[] doc, int type, uint at, uint length) => type switch
+    static string? TextAtom(byte[] doc, int type, uint at, uint length, Budget budget)
     {
-        0x0FA0 => Encoding.Unicode.GetString(doc, (int)at + 8, (int)(length & ~1u)),
-        0x0FA8 => Encoding.Latin1.GetString(doc, (int)at + 8, (int)length),
-        _ => null,
-    };
+        if (type is not (0x0FA0 or 0x0FA8)) return null;
+        budget.Text(type == 0x0FA0 ? length / 2 : length);
+        return type == 0x0FA0 ? Encoding.Unicode.GetString(doc, (int)at + 8, (int)(length & ~1u)) : Encoding.Latin1.GetString(doc, (int)at + 8, (int)length);
+    }
 
     /// <summary>A record header at <paramref name="at"/> whose body fits in the stream.</summary>
     static bool Header(byte[] doc, uint at, out int type, out int version, out uint length)
@@ -723,7 +816,7 @@ public static class LegacyOffice
     }
 
     /// <summary>A container's child records: type, instance, where each starts, its body's length.</summary>
-    static IEnumerable<(int Type, int Instance, uint At, uint Length)> Children(byte[] doc, uint container)
+    static IEnumerable<(int Type, int Instance, uint At, uint Length)> Children(byte[] doc, uint container, Budget budget)
     {
         if (!Header(doc, container, out _, out _, out var length)) yield break;
         var pos = container + 8L;
@@ -731,6 +824,7 @@ public static class LegacyOffice
         while (pos + 8 <= end)
         {
             if (!Header(doc, (uint)pos, out var type, out _, out var childLength) || pos + 8 + childLength > end) yield break;
+            budget.Spend(1);
             yield return (type, CompoundFile.U16(doc, (int)pos) >> 4, (uint)pos, childLength);
             pos += 8 + childLength;
         }

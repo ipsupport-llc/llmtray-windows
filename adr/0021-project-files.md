@@ -45,14 +45,18 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   is refused at add) and the reader picks the real kind by its streams.
   - .doc: the text through the piece table, page and section breaks as
     pages, field codes dropped and their results kept, table cells as
-    `a | b`, then footnotes, comments, endnotes and text boxes. Word 95 and
-    older are refused.
+    `a | b` (a row's end from its paragraph properties, sprmPFTtp, also
+    when they're in the Data stream; a file without them falls back to two
+    cell marks in a row), then footnotes, comments, endnotes and text boxes.
+    Not read: nested tables' cells (they stay lines) and properties changed
+    in the piece table itself. Word 95 and older are refused.
   - .xls: BIFF5 and BIFF8, a page per worksheet as for .xlsx (numbers as
     stored, a formula as its saved result); text boxes and charts aren't
     read. Excel 4 and older are refused.
   - .ppt: the live slides through the last edit's persist directories (an
-    older edit's text isn't read), a page per slide, notes after; headers,
-    footers and comments aren't read.
+    older edit's text isn't read), a page per slide: its placeholders' text
+    from the slide list, then the text of its other shapes, then its notes;
+    headers, footers and comments aren't read.
   - Password-protected files fail with that reason. Every chain, record and
     count is bounded: a loop or a hostile length fails the file as damaged
     (a mutation test runs each kind through flipped bytes).
