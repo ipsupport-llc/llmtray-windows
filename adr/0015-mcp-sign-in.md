@@ -100,9 +100,14 @@ refresh and revocation requests (`client_secret_post`), never in the
 browser's address or a log. A server added that turns out to need one
 stays, off, saying so (`pendingOwnApp`), and signing in with the app
 finishes adding it. A kept registration stands only while it's the one
-the user gave (or none was given); removing the server forgets the
-secret. The fixed port in use by another program fails the sign-in with
-that said.
+the user gave (or none was given). The app is held to the sign-in server
+it was made for (asked when it's entered, else taken at its first
+sign-in): a server that later names another is refused before the
+browser opens. Changing or removing the app ends the current sign-in
+(tokens dropped); another client ID never takes the old secret.
+Removing the server, or giving it another app, during a sign-in makes
+that sign-in commit nothing; removing it forgets the secret. The fixed
+port in use by another program fails the sign-in with that said.
 
 ## Not yet
 

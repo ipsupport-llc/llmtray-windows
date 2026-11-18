@@ -299,11 +299,12 @@ public sealed class McpOAuthTests : IDisposable
         Assert.Null(opened);
 
         // The redirect to register: the fixed port and this issuer's path.
-        var redirect = await signIn.OwnAppRedirectAsync(server.Key, default);
+        var (redirect, issuer) = await signIn.OwnAppRedirectAsync(server.Key, default);
+        Assert.Equal("https://auth.example.com", issuer);
         Assert.Equal(McpOAuth.ManualRedirectUri("https://auth.example.com"), redirect);
         Assert.StartsWith("http://127.0.0.1:33418/callback/", redirect);
 
-        signIn.SetOwnApp(server.Key, " own-client ", "s3cret-9");
+        signIn.SetOwnApp(server.Key, " own-client ", "s3cret-9", issuer);
         Assert.True(signIn.HasOwnAppSecret(server.Key));
         await signIn.SignInAsync(server.Key, null, default);
         var saved = store.Load().Single();
@@ -319,10 +320,28 @@ public sealed class McpOAuthTests : IDisposable
         Assert.All(fetch.Requests.Where(r => r.Url == "https://auth.example.com/token"), r => Assert.Contains("client_secret=s3cret-9", r.Body));
         Assert.All(fetch.Requests.Where(r => r.Url != "https://auth.example.com/token"), r => Assert.DoesNotContain("s3cret", r.Body, StringComparison.Ordinal));
 
-        // Taken back: the secret goes; removed: everything goes.
-        signIn.SetOwnApp(server.Key, "own-client", "");
+        // Another Client ID never takes the old secret, and the sign-in starts over.
+        signIn.SetOwnApp(server.Key, "other-client", null);
         Assert.False(signIn.HasOwnAppSecret(server.Key));
-        signIn.SetOwnApp(server.Key, "own-client", "again");
+        Assert.Null(store.Load().Single().OAuth);
+        Assert.Null(signIn.Tokens(server.Key));
+        signIn.SetOwnApp(server.Key, "other-client", "s2", issuer);
+        Assert.True(signIn.HasOwnAppSecret(server.Key));
+        signIn.SetOwnApp(server.Key, "other-client", "");
+        Assert.False(signIn.HasOwnAppSecret(server.Key));
+
+        // The app goes to no other sign-in server: a server that now names another is refused before the browser.
+        signIn.SetOwnApp(server.Key, "other-client", "s3", issuer);
+        fetch.Answers["https://mcp.example.com/.well-known/oauth-protected-resource/mcp"] = (200,
+            """{"resource":"https://mcp.example.com/mcp","authorization_servers":["https://evil.example.net"]}""");
+        fetch.Answers["https://evil.example.net/.well-known/oauth-authorization-server"] = (200, AuthServer.Replace("auth.example.com", "evil.example.net", StringComparison.Ordinal));
+        opened = null;
+        var moved = await Assert.ThrowsAsync<McpOAuthException>(() => signIn.SignInAsync(server.Key, null, default));
+        Assert.Equal(McpOAuthFailure.OwnAppIssuerChanged, moved.Kind);
+        Assert.Null(opened);
+        Assert.DoesNotContain(fetch.Requests, r => r.Url.StartsWith("https://evil.example.net/token", StringComparison.Ordinal));
+
+        // Removed: everything goes.
         signIn.Forget(server.Key);
         Assert.Empty(secrets.Values);
     }

@@ -237,12 +237,14 @@ public sealed partial class MainWindow
     {
         var app = App.Current;
         var key = server.Key;
-        var redirect = new TextBox { IsReadOnly = true, FontFamily = Ui.Mono, Text = L.T("Asking the server…") };
+        if (Content?.XamlRoot is null) return;
+        var redirect = new TextBox { IsReadOnly = true, FontFamily = Ui.Mono, Text = L.T("Asking the server…"), MinWidth = 300 };
         var copy = Ui.Button(L.T("Copy"), () => Copy(redirect.Text));
         copy.IsEnabled = false;
         var id = new TextBox { Text = server.OAuthClientId ?? "", PlaceholderText = L.T("Client ID"), MinWidth = 360 };
         var hasSecret = app.McpSignIn.HasOwnAppSecret(key);
         var secret = new PasswordBox { PlaceholderText = hasSecret ? L.T("Client secret (saved)") : L.T("Client secret"), MinWidth = 360 };
+        var dropSecret = new CheckBox { Content = L.T("Remove the saved secret"), Visibility = hasSecret ? Visibility.Visible : Visibility.Collapsed };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(id, L.T("Client ID"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(secret, L.T("Client secret"));
         var panel = new StackPanel { Spacing = 8, MaxWidth = 520 };
@@ -251,6 +253,7 @@ public sealed partial class MainWindow
         panel.Children.Add(Ui.Horizontal(redirect, copy));
         panel.Children.Add(id);
         panel.Children.Add(secret);
+        panel.Children.Add(dropSecret);
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
@@ -261,30 +264,39 @@ public sealed partial class MainWindow
             CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Primary,
         };
+        // The sign-in server, asked while the dialog is open: the app is held to it.
+        string? issuer = null;
+        var open = true;
         using var asking = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var token = asking.Token;
         _ = Task.Run(async () =>
         {
             string text;
+            string? found = null;
             try
             {
-                text = await app.McpSignIn.OwnAppRedirectAsync(key, asking.Token);
+                (text, found) = await app.McpSignIn.OwnAppRedirectAsync(key, token);
             }
-            catch (Exception e) when (e is McpOAuthException or HttpRequestException or IOException or OperationCanceledException)
+            catch (Exception e)
             {
                 text = L.F("The server didn't say ({0}).", e.Message);
             }
             DispatcherQueue.TryEnqueue(() =>
             {
+                if (!open) return;
+                issuer = found;
                 redirect.Text = text;
-                copy.IsEnabled = text.StartsWith("http://127.0.0.1:", StringComparison.Ordinal);
+                copy.IsEnabled = found is not null;
             });
         });
-        var result = await dialog.ShowAsync();
+        var result = await ShowMcpDialogAsync(dialog);
+        open = false;
         asking.Cancel();
         if (result == ContentDialogResult.Primary)
         {
-            // An empty secret box keeps the one saved.
-            app.McpSignIn.SetOwnApp(key, id.Text, secret.Password.Length > 0 ? secret.Password : null);
+            // An empty box keeps the saved secret (for the same Client ID only); the box below removes it.
+            var typed = secret.Password.Length > 0 ? secret.Password : dropSecret.IsChecked == true ? "" : null;
+            app.McpSignIn.SetOwnApp(key, id.Text, typed, issuer);
         }
         else if (result == ContentDialogResult.Secondary)
         {

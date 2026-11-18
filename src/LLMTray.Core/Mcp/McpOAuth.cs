@@ -22,6 +22,7 @@ public sealed class McpOAuthException(string message, McpOAuthFailure kind) : Ex
         McpOAuthFailure.InsecureUrl => "its sign-in addresses aren't https",
         McpOAuthFailure.NoRegistration => "it signs in a way LLMTray doesn't support yet (no client registration)",
         McpOAuthFailure.NeedsOwnApp => "it registers no apps: make your own in its developer settings and enter its Client ID under Your Own App",
+        McpOAuthFailure.OwnAppIssuerChanged => $"it now signs in at {detail}, not where your own app was made: check the server and enter your app again",
         McpOAuthFailure.PortInUse => $"port {McpOAuth.ManualPort}, which your own app's redirect names, is in use by another program",
         McpOAuthFailure.ConfidentialRegistration => "it registered LLMTray as a client with a secret, which an app can't keep",
         McpOAuthFailure.MixUpRisk => "its sign-in can't be told apart from another server's safely",
@@ -36,7 +37,7 @@ public sealed class McpOAuthException(string message, McpOAuthFailure kind) : Ex
 
 public enum McpOAuthFailure
 {
-    NoMetadata, ResourceMismatch, IssuerMismatch, NoS256, InsecureUrl, NoRegistration, NeedsOwnApp, PortInUse, ConfidentialRegistration,
+    NoMetadata, ResourceMismatch, IssuerMismatch, NoS256, InsecureUrl, NoRegistration, NeedsOwnApp, OwnAppIssuerChanged, PortInUse, ConfidentialRegistration,
     MixUpRisk, BadCallback, Denied, Token, InvalidGrant, InvalidClient,
 }
 
