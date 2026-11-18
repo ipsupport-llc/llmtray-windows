@@ -45,7 +45,8 @@ static class Screenshots
                 if (app.SettingsWindow is { } settings) await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
             }
             // Memory's settings as they are once it's on (CI's app has it off): turned on for the shot, then back.
-            if (app.SettingsWindow is { } withMemory && !app.Memory.Settings.Enabled)
+            // Only with nothing learned or waiting: on someone's own profile no note shows and no queue is dropped.
+            if (app.SettingsWindow is { } withMemory && !app.Memory.Settings.Enabled && app.Memory.Read(f => f.Notes.Count == 0 && f.Queue.Count == 0))
             {
                 var was = app.Memory.Settings;
                 try
