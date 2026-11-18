@@ -113,6 +113,48 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task CountsUsageByClientOnlyWhenOn()
+    {
+        var recorded = new List<(string Model, LLMTray.Core.Usage.RequestStats Stats)>();
+        var on = false;
+        proxy.UsageRecorded = (m, s) => { lock (recorded) recorded.Add((m.Name, s)); };
+        proxy.CountsUsage = () => on;
+        proxy.AppToken = "secret";
+        await proxy.StartAsync();
+
+        // Off: nothing counted.
+        await client.PostAsync("/v1/chat/completions", Chat("alpha-Q4"));
+        Assert.Empty(recorded);
+
+        on = true;
+        using (var streamed = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions") { Content = Chat("alpha-Q4", stream: true) })
+        {
+            streamed.Headers.UserAgent.ParseAdd("codex_cli_rs/0.47.0");
+            using var response = await client.SendAsync(streamed);
+            // Passed on unchanged.
+            Assert.Contains("\"predicted_n\":21", await response.Content.ReadAsStringAsync());
+        }
+        using (var whole = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions") { Content = Chat("alpha-Q4") })
+        {
+            whole.Headers.Add(ProxyServer.AppHeader, "secret");
+            await client.SendAsync(whole);
+        }
+        Assert.Equal(2, recorded.Count);
+        var (model, codex) = recorded[0];
+        Assert.Equal("alpha-Q4", model);
+        Assert.Equal("Codex", codex.Client);
+        // llama-server's timings: the cached part and the processed one, prefill time, every generated token.
+        Assert.Equal(400, codex.Prompt);
+        Assert.Equal(100, codex.Cached);
+        Assert.Equal(0.6, codex.FirstTokenSeconds, 3);
+        Assert.Equal(21, codex.Tokens);
+        Assert.Equal(50, codex.DecodeTokensPerSecond!.Value, 3);
+        var app = recorded[1].Stats;
+        Assert.Equal("LLMTray", app.Client);
+        Assert.Equal((9, 4, 2), (app.Prompt, app.Cached, app.Tokens));
+    }
+
+    [Fact]
     public async Task RefusesUnknownModelsAndBadBodies()
     {
         await proxy.StartAsync();
@@ -293,14 +335,20 @@ public sealed class ProxyTests : IAsyncDisposable
                 if (body?["stream"]?.GetValue<bool>() == true)
                 {
                     context.Response.ContentType = "text/event-stream";
-                    foreach (var chunk in new[] { "{\"model\":\"" + alias + "\"}", "{\"done\":true}", "[DONE]" })
+                    foreach (var chunk in new[] { "{\"model\":\"" + alias + "\"}",
+                        "{\"done\":true,\"timings\":{\"cache_n\":100,\"prompt_n\":300,\"prompt_ms\":600,\"predicted_n\":21,\"predicted_ms\":420}}", "[DONE]" })
                     {
                         await context.Response.WriteAsync($"data: {chunk}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
                     return Results.Empty;
                 }
-                return Results.Json(new { model = alias, choices = new[] { new { message = new { role = "assistant", content = "hello" } } } });
+                return Results.Json(new
+                {
+                    model = alias,
+                    choices = new[] { new { message = new { role = "assistant", content = "hello" } } },
+                    usage = new { prompt_tokens = 9, completion_tokens = 2, prompt_tokens_details = new { cached_tokens = 4 } },
+                });
             });
             app.StartAsync().GetAwaiter().GetResult();
         }

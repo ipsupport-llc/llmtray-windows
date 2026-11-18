@@ -75,6 +75,11 @@ public sealed partial class MainWindow : Window
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.MemoryChanged += () => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
+        // A request counted: the Server tab's numbers follow (from the proxy's thread).
+        App.Current.RequestStatistics.Changed += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (page == "server" && App.Current.Settings.KeepRequestStatistics) RenderPageSoon();
+        });
         // The embedder's row (Memory, and Files in projects on Tools) goes once it's downloaded.
         App.Current.DownloadsChanged += _ =>
         {
@@ -302,6 +307,8 @@ public sealed partial class MainWindow : Window
                 Ui.Button(L.T("Profiles"), () => ShowPage("profiles"))),
             Ui.Row(L.T("Runs on"), L.T("Vulkan when this PC has a GPU it can use, otherwise the CPU."),
                 Ui.Value(Status.Device(state) ?? "—")));
+
+        foreach (var part in StatisticsPart()) yield return part;
 
         yield return Ui.Section(L.T("Diagnostics"));
         yield return Ui.Card(

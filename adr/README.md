@@ -23,6 +23,7 @@ and why.
 | [0023](0023-spoken-messages.md) | Spoken messages for models that hear (Mac adr/0023): a microphone by Send, 16 kHz WAV in memory, `input_audio`, the latest eight clips (accepted) |
 | [0024](0024-documents.md) | Documents (Mac adr/0020): `make_document` to a PDF with charts and math; Core converter and SVG charts, WebView2 prints with nothing loaded or run; tool groups (documents, each MCP server) loaded when needed with `load_tools` (accepted) |
 | [0025](0025-microsoft-store.md) | Microsoft Store releases from CI: the release's unsigned packages restamped with the Partner Center identity into one `.msixupload`; submitted on stable tags through an approved `store` environment; Store copies never self-update (accepted) |
+| [0026](0026-usage-statistics.md) | Usage statistics of the API (Mac Usage tab): requests and tokens per model, client and day, off until turned on, kept on this PC only; read from llama-server's `timings` / the answer's `usage` as the proxy passes it on (accepted) |
 | [0016](0016-folder-tools.md) | Folder tools (Mac adr/0014): granted folders only, every change approved item by item, Recycle Bin, journal and Undo (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.

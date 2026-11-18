@@ -21,6 +21,9 @@ public sealed class McpOAuthException(string message, McpOAuthFailure kind) : Ex
         McpOAuthFailure.NoS256 => "it doesn't support a safe sign-in (PKCE S256)",
         McpOAuthFailure.InsecureUrl => "its sign-in addresses aren't https",
         McpOAuthFailure.NoRegistration => "it signs in a way LLMTray doesn't support yet (no client registration)",
+        McpOAuthFailure.NeedsOwnApp => "it registers no apps: make your own in its developer settings and enter its Client ID under Your Own App",
+        McpOAuthFailure.OwnAppIssuerChanged => $"it now signs in at {detail}, not where your own app was made: check the server and enter your app again",
+        McpOAuthFailure.PortInUse => $"port {McpOAuth.ManualPort}, which your own app's redirect names, is in use by another program",
         McpOAuthFailure.ConfidentialRegistration => "it registered LLMTray as a client with a secret, which an app can't keep",
         McpOAuthFailure.MixUpRisk => "its sign-in can't be told apart from another server's safely",
         McpOAuthFailure.BadCallback => $"the sign-in came back wrong ({detail})",
@@ -34,7 +37,7 @@ public sealed class McpOAuthException(string message, McpOAuthFailure kind) : Ex
 
 public enum McpOAuthFailure
 {
-    NoMetadata, ResourceMismatch, IssuerMismatch, NoS256, InsecureUrl, NoRegistration, ConfidentialRegistration,
+    NoMetadata, ResourceMismatch, IssuerMismatch, NoS256, InsecureUrl, NoRegistration, NeedsOwnApp, OwnAppIssuerChanged, PortInUse, ConfidentialRegistration,
     MixUpRisk, BadCallback, Denied, Token, InvalidGrant, InvalidClient,
 }
 
@@ -46,6 +49,12 @@ public enum OAuthRegistration
     MetadataDocument,
     /// <summary>Dynamic Client Registration (RFC 7591), kept per issuer.</summary>
     Dynamic,
+    /// <summary>
+    /// The user's own app at a server that registers no clients (Slack): its
+    /// client id pasted, its secret (if any) kept protected and sent only to
+    /// the token endpoint; the redirect a fixed loopback port (Mac adr/0028).
+    /// </summary>
+    Manual,
 }
 
 /// <summary>An authorization server's metadata, checked (RFC 8414).</summary>
@@ -338,6 +347,13 @@ public static class McpOAuth
         return Origin(auth) == Origin(issuer) && Origin(token) == Origin(issuer);
     }
 
+    /// <summary>The loopback port of the user's own app's redirect: theirs to register, so it can't change.</summary>
+    public const int ManualPort = 33418;
+
+    /// <summary>The redirect URL the user registers for their own app at this issuer.</summary>
+    public static string ManualRedirectUri(string issuer) =>
+        $"http://127.0.0.1:{ManualPort}{CallbackPath(issuer, OAuthRegistration.Manual)}";
+
     /// <summary>RFC 7591: a public native client.</summary>
     public static string RegistrationRequest(string redirectPath) => new JsonObject
     {
@@ -419,11 +435,18 @@ public static class McpOAuth
         return request;
     }
 
-    public static HttpRequestMessage RefreshRequest(string tokenEndpoint, string refreshToken, string clientId, string resource) =>
-        FormRequest(tokenEndpoint,
+    public static HttpRequestMessage RefreshRequest(string tokenEndpoint, string refreshToken, string clientId, string resource, string? clientSecret = null) =>
+        FormRequest(tokenEndpoint, WithSecret(
         [
             new("grant_type", "refresh_token"), new("refresh_token", refreshToken), new("client_id", clientId), new("resource", resource),
-        ]);
+        ], clientSecret));
+
+    /// <summary>The user's own app's secret, in the form body (client_secret_post) and nowhere else.</summary>
+    internal static List<KeyValuePair<string, string>> WithSecret(List<KeyValuePair<string, string>> fields, string? clientSecret)
+    {
+        if (clientSecret is { Length: > 0 }) fields.Add(new("client_secret", clientSecret));
+        return fields;
+    }
 
     // ---- Local addresses ----
 
@@ -543,11 +566,16 @@ public static class McpOAuth
         }
     }
 
-    /// <summary>Who we are to this server: a kept registration, our metadata document, else a dynamic registration.</summary>
+    /// <summary>
+    /// Who we are to this server: a kept registration, the user's own app
+    /// when they gave its client id, our metadata document, else a dynamic
+    /// registration.
+    /// </summary>
     public static async Task<(string Id, OAuthRegistration Registration)> ClientAsync(OAuthServerMetadata m, (string Id, OAuthRegistration Registration)? kept,
-        Uri server, IOAuthFetcher fetch, CancellationToken cancellationToken, Func<string, Task<IPAddress[]>>? resolve = null)
+        Uri server, IOAuthFetcher fetch, CancellationToken cancellationToken, Func<string, Task<IPAddress[]>>? resolve = null, string? ownClientId = null)
     {
         if (kept is { } k) return k;
+        if (ownClientId is { Length: > 0 }) return (ownClientId, OAuthRegistration.Manual);
         if (m.AcceptsClientMetadataDocument && MixUpSafe(m, OAuthRegistration.MetadataDocument)) return (ClientMetadataUrl, OAuthRegistration.MetadataDocument);
         if (m.RegistrationEndpoint is { } endpoint && await FetchableAsync(new Uri(endpoint), server, resolve).ConfigureAwait(false))
         {
@@ -564,7 +592,7 @@ public static class McpOAuth
     }
 
     public static async Task<OAuthTokens> RefreshAsync(OAuthTokens tokens, McpOAuthState state, IOAuthFetcher fetch, DateTimeOffset now,
-        CancellationToken cancellationToken, Func<string, Task<IPAddress[]>>? resolve = null)
+        CancellationToken cancellationToken, Func<string, Task<IPAddress[]>>? resolve = null, string? clientSecret = null)
     {
         if (tokens.RefreshToken is not { } refresh) throw McpOAuthException.Of(McpOAuthFailure.InvalidGrant);
         if (!Uri.TryCreate(state.Resource, UriKind.Absolute, out var resource)
@@ -572,7 +600,8 @@ public static class McpOAuth
         {
             throw McpOAuthException.Of(McpOAuthFailure.InsecureUrl);
         }
-        using var request = RefreshRequest(state.Metadata.TokenEndpoint, refresh, state.ClientId, state.Resource);
+        using var request = RefreshRequest(state.Metadata.TokenEndpoint, refresh, state.ClientId, state.Resource,
+            state.Registration == OAuthRegistration.Manual ? clientSecret : null);
         var (body, status) = await fetch.FetchAsync(request, cancellationToken).ConfigureAwait(false);
         return Tokens(body, status, now, tokens);
     }
@@ -610,10 +639,13 @@ public sealed class OAuthFlow
     public string RedirectUri { get; }
     public string State { get; }
     public string Verifier { get; }
+    /// <summary>The user's own app's secret, if it has one: only in the token request.</summary>
+    readonly string? clientSecret;
 
     public OAuthFlow(OAuthServerMetadata metadata, string clientId, OAuthRegistration registration, string resource, string? scope, int port,
-        string? state = null, string? verifier = null)
+        string? state = null, string? verifier = null, string? clientSecret = null)
     {
+        this.clientSecret = registration == OAuthRegistration.Manual ? clientSecret : null;
         Metadata = metadata;
         ClientId = clientId;
         Registration = registration;
@@ -687,11 +719,11 @@ public sealed class OAuthFlow
         return code;
     }
 
-    public HttpRequestMessage TokenRequest(string code) => McpOAuth.FormRequest(Metadata.TokenEndpoint,
+    public HttpRequestMessage TokenRequest(string code) => McpOAuth.FormRequest(Metadata.TokenEndpoint, McpOAuth.WithSecret(
     [
         new("grant_type", "authorization_code"), new("code", code), new("redirect_uri", RedirectUri),
         new("client_id", ClientId), new("code_verifier", Verifier), new("resource", Resource),
-    ]);
+    ], clientSecret));
 
     /// <summary>The code checked and exchanged at this flow's token endpoint only.</summary>
     public async Task<OAuthTokens> ExchangeAsync(string target, IOAuthFetcher fetch, DateTimeOffset now, CancellationToken cancellationToken,
@@ -725,9 +757,10 @@ public sealed class LoopbackCallback : IDisposable
     /// <summary>Whether a request target is the callback awaited.</summary>
     public Func<string, bool>? Accepts { get; set; }
 
-    public LoopbackCallback()
+    /// <param name="port">0: a free one; the user's own app's fixed port otherwise (taken: <see cref="SocketException"/>).</param>
+    public LoopbackCallback(int port = 0)
     {
-        listener = new TcpListener(IPAddress.Loopback, 0);
+        listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         _ = AcceptLoopAsync();
