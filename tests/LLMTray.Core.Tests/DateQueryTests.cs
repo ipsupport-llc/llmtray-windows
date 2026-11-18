@@ -51,6 +51,8 @@ public class DateQueryTests
     [InlineData("We, Apr 10, 2024")]
     [InlineData("п'ятниця, 10 квітня 2024")]
     [InlineData("п’ятниця, 10 квітня 2024")]
+    [InlineData("2024/04/10th")]
+    [InlineData("10th.04.2024")]
     public void Forms(string text) => Assert.Equal("2024-04-10", Iso(text));
 
     [Fact]
@@ -65,6 +67,7 @@ public class DateQueryTests
         Assert.Equal("2026-11-15", Iso("вчера"));
         Assert.Equal("2026-11-16", Iso("Today"));
         Assert.Equal("2024-02-29", Iso("2024-02-29"));
+        Assert.Equal("2028-02-28", Iso("2028-02-28"));
     }
 
     [Fact]
@@ -106,6 +109,14 @@ public class DateQueryTests
     [InlineData("Mar 10-20 2024")]
     [InlineData("Mar 10-Mar 20 2024")]
     [InlineData("feira 13/05/2024")]
+    [InlineData("2024th Apr 10")]
+    [InlineData("10/04/2024th")]
+    [InlineData("2024th/04/10")]
+    [InlineData("10/04/24th")]
+    [InlineData("10.04.24th")]
+    [InlineData("10 04 2024")]
+    [InlineData("10, 04, 2024")]
+    [InlineData("10/04-2024")]
     public void Rejects(string text) => Assert.Null(Iso(text));
 
     [Fact]

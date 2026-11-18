@@ -292,3 +292,15 @@ public sealed class McpTests : IDisposable
         Assert.NotEqual(plain.DefinitionHash, readOnly.DefinitionHash);
     }
 }
+
+public sealed class McpRefusalTests
+{
+    [Fact]
+    public void CommonRefusalsAreSaidInWords()
+    {
+        Assert.Equal("it needs a sign-in or an API key (HTTP 403)", McpHttpTransport.Refusal(403));
+        Assert.Equal("it needs a paid account (HTTP 402)", McpHttpTransport.Refusal(402));
+        Assert.Equal("nothing answers at its address (HTTP 404)", McpHttpTransport.Refusal(404));
+        Assert.Equal("the server answered HTTP 500", McpHttpTransport.Refusal(500));
+    }
+}

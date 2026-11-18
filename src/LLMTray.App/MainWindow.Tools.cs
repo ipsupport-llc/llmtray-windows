@@ -372,6 +372,7 @@ public sealed partial class MainWindow
         panel.Children.Add(extra);
         panel.Children.Add(env);
         panel.Children.Add(Ui.Caption(L.T("It starts right away, so its tools can be listed. Add only servers you trust: a server can do anything its command or service can.")));
+        panel.Children.Add(Ui.Caption(L.T("Third-party server, not by IPSupport. No warranty of any kind: you use it at your own risk.")));
         var dialog = new ContentDialog
         {
             XamlRoot = root,
