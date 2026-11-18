@@ -341,6 +341,10 @@ public sealed class McpOAuthTests : IDisposable
         Assert.Null(opened);
         Assert.DoesNotContain(fetch.Requests, r => r.Url.StartsWith("https://evil.example.net/token", StringComparison.Ordinal));
 
+        // Saved again for the new server with the box empty: the old secret doesn't follow.
+        signIn.SetOwnApp(server.Key, "other-client", null, "https://evil.example.net");
+        Assert.False(signIn.HasOwnAppSecret(server.Key));
+
         // Removed: everything goes.
         signIn.Forget(server.Key);
         Assert.Empty(secrets.Values);

@@ -49,10 +49,11 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         {
             if (store.Load().FirstOrDefault(s => s.Key == key) is not { } config) return;
             var sameId = id == config.OAuthClientId;
-            if (sameId && secret is null && (issuer is null || issuer == config.OAuthClientIssuer)) return;
+            var sameIssuer = issuer is null || config.OAuthClientIssuer is null || McpOAuth.Canonical(issuer) == McpOAuth.Canonical(config.OAuthClientIssuer);
+            if (sameId && sameIssuer && secret is null && (issuer is null || config.OAuthClientIssuer is not null)) return;
             store.Update(key, c => c with { OAuthClientId = id, OAuthClientIssuer = id is null ? null : issuer ?? (sameId ? c.OAuthClientIssuer : null) });
-            // A secret belongs to its id: another id never takes the old one.
-            if (id is null || secret is { Length: 0 } || (!sameId && secret is null)) secrets.Set(OwnAppSecretName(key), null);
+            // A secret belongs to its id and its sign-in server: another id, or the same one at another server, never takes the old one.
+            if (id is null || secret is { Length: 0 } || (secret is null && !(sameId && sameIssuer))) secrets.Set(OwnAppSecretName(key), null);
             else if (secret is { Length: > 0 }) secrets.Set(OwnAppSecretName(key), secret);
             resets[key] = resets.GetValueOrDefault(key) + 1;
             if (config.OAuth is not null) MarkNeedsSignInLocked(key, dropRegistration: true);
@@ -213,10 +214,20 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             throw McpOAuthException.Of(McpOAuthFailure.NoMetadata);
         }
         int reset;
+        string? ownSecret;
         lock (sync)
         {
             if (!signingIn.Add(key)) throw new InvalidOperationException("a sign-in to this server is already open in the browser");
+            // The app, its sign-in server and its secret as one: a change after this ends the sign-in, never mixes them.
             reset = resets.GetValueOrDefault(key);
+            var current = store.Load().FirstOrDefault(s => s.Key == key);
+            if (current is null || !current.SameServer(config))
+            {
+                signingIn.Remove(key);
+                throw new OperationCanceledException("the server changed");
+            }
+            config = current;
+            ownSecret = secrets.Get(OwnAppSecretName(key));
         }
         Changed?.Invoke();
         try
@@ -240,11 +251,20 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
                 store.Update(key, c => c with { PendingOwnApp = true });
                 throw McpOAuthException.Of(McpOAuthFailure.NeedsOwnApp);
             }
-            // The user's own app goes only to the sign-in server it was made for.
-            if (registration == OAuthRegistration.Manual && config.OAuthClientIssuer is { } madeFor
-                && McpOAuth.Canonical(madeFor) != McpOAuth.Canonical(discovery.Server.Issuer))
+            // The user's own app goes only to the sign-in server it was made for: as entered, else where it last signed in,
+            // else (its first sign-in) this one, kept before anything of it is sent.
+            if (registration == OAuthRegistration.Manual)
             {
-                throw McpOAuthException.Of(McpOAuthFailure.OwnAppIssuerChanged, discovery.Server.Issuer);
+                var madeFor = config.OAuthClientIssuer ?? (config.OAuth is { Registration: OAuthRegistration.Manual } was && was.ClientId == clientId ? was.Metadata.Issuer : null);
+                if (madeFor is not null && McpOAuth.Canonical(madeFor) != McpOAuth.Canonical(discovery.Server.Issuer))
+                {
+                    throw McpOAuthException.Of(McpOAuthFailure.OwnAppIssuerChanged, discovery.Server.Issuer);
+                }
+                lock (sync)
+                {
+                    if (resets.GetValueOrDefault(key) != reset) throw new OperationCanceledException("the server changed during the sign-in");
+                    if (madeFor is null) store.Update(key, c => c.OAuthClientId == clientId ? c with { OAuthClientIssuer = discovery.Server.Issuer } : c);
+                }
             }
             if (!McpOAuth.MixUpSafe(discovery.Server, registration)) throw McpOAuthException.Of(McpOAuthFailure.MixUpRisk);
             var scope = discovery.Scope;
@@ -258,10 +278,15 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             // The user's own app: the fixed port its registered redirect names.
             using var listener = OpenCallback(registration);
             var flow = new OAuthFlow(discovery.Server, clientId, registration, discovery.ResourceUrl, scope, listener.Port,
-                clientSecret: registration == OAuthRegistration.Manual ? secrets.Get(OwnAppSecretName(key)) : null);
+                clientSecret: registration == OAuthRegistration.Manual ? ownSecret : null);
             listener.Accepts = flow.IsMine;
             openBrowser(flow.AuthorizationUrl);
             var target = await listener.WaitAsync(CallbackTimeout, cancellationToken).ConfigureAwait(false);
+            // Changed or removed while the browser was open: nothing of it is sent on.
+            lock (sync)
+            {
+                if (resets.GetValueOrDefault(key) != reset) throw new OperationCanceledException("the server changed during the sign-in");
+            }
             var fresh = await flow.ExchangeAsync(target, fetch, Now, cancellationToken, resolve).ConfigureAwait(false);
             lock (sync)
             {
