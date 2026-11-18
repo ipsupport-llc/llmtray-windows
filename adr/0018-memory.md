@@ -32,7 +32,9 @@ hold unless written otherwise here.
      then.
 
   A chat is read once it has been quiet for 10 minutes (a setting), when
-  the user leaves it, and before it is compacted. Messages answered one
+  the user leaves it, and before it is compacted. With "Read chats: Right
+  after each answer" (Mac adr/0024), it's read 8 seconds after each
+  answer instead; any request still stops a reading at once. Messages answered one
   by one join the chat's waiting batch, one model per batch, so a manner
   can show in two of them. Nothing is read that was said before memory
   was turned on, before a chat was remembered again, or, for an older

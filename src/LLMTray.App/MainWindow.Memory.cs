@@ -56,6 +56,39 @@ public sealed partial class MainWindow
             var queued = memory.Read(f => f.Queue.Count);
             var status = memory.Status.Length > 0 ? L.T(memory.Status) : queued > 0 ? L.F("{0} parts of chats to read.", queued) : L.T("Up to date.");
             rows.Add(Ui.Row(L.T("Reading chats"), status, Ui.Button(L.T("Learn from Past Chats Now"), () => _ = LearnFromPastAsync())));
+            // When a chat is read (Mac "Read chats"): seconds after each answer, or once it has been quiet a while.
+            var when = new ComboBox { MinWidth = 220 };
+            when.Items.Add(L.T("Right after each answer"));
+            when.Items.Add(L.T("When the chat is quiet"));
+            when.SelectedIndex = settings.ReadRightAway ? 0 : 1;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(when, L.T("Read chats"));
+            when.SelectionChanged += (_, _) =>
+            {
+                var rightAway = when.SelectedIndex == 0;
+                if (rightAway == memory.Settings.ReadRightAway) return;
+                memory.SetSettings(memory.Settings with { ReadRightAway = rightAway });
+                // Not inside the box's own event: the page is drawn anew (the minutes row comes or goes).
+                DispatcherQueue.TryEnqueue(RenderPage);
+            };
+            rows.Add(Ui.Row(L.T("Read chats"),
+                L.T("When what you wrote is read for notes: a few seconds after each answer, or once the chat has been quiet for a while -- and always when you leave it or quit. Either way it runs in the background only while the model has nothing else to do, and any chat, app or coding agent stops it at once. It never pushes your chat out of the model's prompt cache. Only your own words count, never the answers, files or web pages. Temporary chats and chats with Remember This Chat turned off are never read."),
+                when));
+            if (!settings.ReadRightAway)
+            {
+                var shown = Math.Clamp(settings.QuietMinutes, 1, 240);
+                TextBlock? title = null;
+                var minutes = Number(shown, 1, 240, 1, "0", v =>
+                {
+                    var value = (int)Math.Clamp(v, 1, 240);
+                    memory.SetSettings(memory.Settings with { QuietMinutes = value });
+                    // The title follows the number without drawing the page again (which would take the focus away).
+                    if (title is not null) title.Text = L.F("Quiet for {0} minutes", value);
+                });
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(minutes, L.T("How long a chat stays quiet before it's read."));
+                var row = Ui.Row(L.F("Quiet for {0} minutes", shown), L.T("How long a chat stays quiet before it's read."), minutes);
+                title = (TextBlock)((StackPanel)row.Children[0]).Children[0];
+                rows.Add(row);
+            }
         }
         yield return Ui.Card(rows.ToArray());
         if (memoryError is { } error) yield return Ui.Caption(error, Ui.Red);
