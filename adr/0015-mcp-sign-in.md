@@ -106,7 +106,11 @@ sign-in): a server that later names another is refused before the
 browser opens. Changing or removing the app ends the current sign-in
 (tokens dropped); another client ID never takes the old secret.
 Removing the server, or giving it another app, during a sign-in makes
-that sign-in commit nothing; removing it forgets the secret. The fixed
+that sign-in commit nothing; removing it forgets the secret. The secret is kept stamped with its client ID and
+sign-in server, and goes into a request only when both match the
+request's. Someone who can edit the user's `mcp-servers.json` (an
+endpoint in its kept metadata) is out of scope: as that user they can
+read the DPAPI-protected secret anyway. The fixed
 port in use by another program fails the sign-in with that said.
 
 ## Not yet
