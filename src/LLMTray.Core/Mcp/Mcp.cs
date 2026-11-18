@@ -108,6 +108,36 @@ public sealed record McpTool(string Name, string? Title, string Description, str
 
     public JsonObject InputSchema => JsonNode.Parse(InputSchemaJson) as JsonObject ?? [];
 
+    /// <summary>
+    /// The tool's action field (Mac adr/0027): a string property with fixed
+    /// values ("action": read, send, delete), the required one first, else the
+    /// first by name. Such a tool is allowed per action, never whole.
+    /// </summary>
+    public (string Name, IReadOnlyList<string> Values)? ActionField
+    {
+        get
+        {
+            var schema = InputSchema;
+            if (schema["properties"] is not JsonObject properties) return null;
+            var required = (schema["required"] as JsonArray)?.Select(n => n is JsonValue v && v.TryGetValue<string>(out var r) ? r : null).OfType<string>().ToHashSet() ?? [];
+            var fields = new List<(string Name, IReadOnlyList<string> Values)>();
+            foreach (var (key, value) in properties.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                if (value is not JsonObject p) continue;
+                if (p["type"] is JsonValue t && (!t.TryGetValue<string>(out var type) || type != "string")) continue;
+                if (p["enum"] is not JsonArray values || values.Count == 0) continue;
+                var strings = values.Select(n => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : null).ToList();
+                if (strings.Any(x => x is null)) continue;
+                fields.Add((key, strings.OfType<string>().Distinct(StringComparer.Ordinal).ToList()));
+            }
+            return fields.Count == 0 ? null : fields.FirstOrDefault(f => required.Contains(f.Name)) is { Name: not null } r ? r : fields[0];
+        }
+    }
+
+    /// <summary>The action a call is for: the value it gives the action field (null: none, or the tool has no such field).</summary>
+    public string? ActionOf(JsonObject arguments) =>
+        ActionField is { } f && arguments[f.Name] is JsonValue v && v.TryGetValue<string>(out var action) ? action : null;
+
     /// <summary>The tool's request entry under the name the model sees.</summary>
     public JsonObject Definition(string modelName) => new()
     {

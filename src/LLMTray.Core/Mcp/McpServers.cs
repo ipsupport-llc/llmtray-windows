@@ -25,7 +25,7 @@ public sealed record McpServerConfig
     /// <summary>Tools as reviewed: name → definition hash. A tool not here, or changed, is hidden until reviewed again.</summary>
     public Dictionary<string, string> Reviewed { get; init; } = [];
 
-    /// <summary>Tools (by definition hash) the user lets run without asking.</summary>
+    /// <summary>Tools (by definition hash), or actions of them (hash#action), the user lets run without asking.</summary>
     public HashSet<string> RunWithoutAsking { get; init; } = [];
 
     /// <summary>A URL server signed in to with OAuth (adr/0015): where and as whom; the tokens are kept apart.</summary>
@@ -46,20 +46,57 @@ public sealed record McpServerConfig
     static bool Same(Dictionary<string, string> a, Dictionary<string, string> b) =>
         a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var v) && v == p.Value);
 
+    /// <summary>The allowance of a tool, or of one action of it (Mac MCPApproval.key): its reviewed definition, and the action.</summary>
+    public static string AllowanceKey(McpTool tool, string? action) => action is null ? tool.DefinitionHash : tool.DefinitionHash + "#" + action;
+
     /// <summary>
-    /// Several tools at once (Mac MCPHub.setRunWithoutAsking): each one as
-    /// reviewed to run without asking, or to be asked again. A tool not
-    /// reviewed, or changed since, is left alone: it isn't in the chat.
+    /// Whether a call may run without asking: the user let this tool, or this
+    /// action of it, run without asking, for the definition reviewed. A tool
+    /// with actions is allowed only per action (one allowed whole before that
+    /// counts for each of its listed actions).
+    /// </summary>
+    public bool RunsWithoutAsking(McpTool tool, string? action)
+    {
+        if (!Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) return false;
+        if (tool.ActionField is not { } field) return RunWithoutAsking.Contains(hash);
+        if (action is null || !field.Values.Contains(action)) return false;
+        return RunWithoutAsking.Contains(AllowanceKey(tool, action)) || RunWithoutAsking.Contains(hash);
+    }
+
+    /// <summary>
+    /// Several tools at once (Mac MCPHub.setRunWithoutAsking): every action of
+    /// each (or the tool itself, one without actions) as reviewed, to run
+    /// without asking or to be asked again. A tool not reviewed, or changed
+    /// since, is left alone: it isn't in the chat.
     /// </summary>
     public McpServerConfig WithRunWithoutAsking(IEnumerable<McpTool> tools, bool on)
     {
-        var set = new HashSet<string>(RunWithoutAsking);
+        var config = this;
         foreach (var tool in tools)
         {
-            if (!Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) continue;
-            if (on) set.Add(hash);
-            else set.Remove(hash);
+            if (tool.ActionField is { } field) foreach (var action in field.Values) config = config.WithRunWithoutAsking(tool, action, on);
+            else config = config.WithRunWithoutAsking(tool, null, on);
         }
+        return config;
+    }
+
+    /// <summary>One tool, or one action of it, as reviewed: to run without asking or to be asked again.</summary>
+    public McpServerConfig WithRunWithoutAsking(McpTool tool, string? action, bool on)
+    {
+        if (!Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) return this;
+        var set = new HashSet<string>(RunWithoutAsking);
+        if (tool.ActionField is { } field)
+        {
+            if (action is null || !field.Values.Contains(action)) return this;
+            // Allowed whole before actions were told apart: each action now on its own.
+            if (set.Remove(hash)) foreach (var each in field.Values) set.Add(AllowanceKey(tool, each));
+        }
+        else if (action is not null)
+        {
+            return this;
+        }
+        if (on) set.Add(AllowanceKey(tool, action));
+        else set.Remove(AllowanceKey(tool, action));
         return this with { RunWithoutAsking = set };
     }
 }

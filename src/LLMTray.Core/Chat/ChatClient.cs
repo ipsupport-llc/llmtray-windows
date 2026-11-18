@@ -122,9 +122,10 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
 /// for a tool the server marks read-only on a command server (Mac adr/0027). Only then are they offered.
 /// </param>
 /// <param name="AllowedButAsked">The user let it run without asking, yet it's asked (after outside text): the question says why.</param>
+/// <param name="Action">The tool's action this call is for (Mac adr/0027): what Always Allow allows.</param>
 /// <param name="EverythingOffered">Always Allow Everything from the server is offered: never after outside text.</param>
 public sealed record McpApprovalRequest(string Server, string Tool, string Arguments, bool AfterOutsideText, bool? ReadOnly,
-    bool AllowancesHold = true, bool AllowedButAsked = false, bool EverythingOffered = true);
+    bool AllowancesHold = true, bool AllowedButAsked = false, bool EverythingOffered = true, string? Action = null);
 
 public enum McpApproval
 {
@@ -1051,10 +1052,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             return (new Tools.ToolOutcome(Tools.SelectableTool.Error($"{call.Name}: arguments aren't a JSON object ({e.Message})"), null, true), false);
         }
+        // A tool with actions is allowed per action (Mac adr/0027): this call's, as it gives it.
+        var action = mcp.Tool.ActionOf(arguments);
+        var allowance = mcp.Tool.ActionField is null ? hash : hash + "#" + action;
         var shown = arguments.ToJsonString(new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         void Record(string outcome)
         {
-            lock (sync) answer.McpCalls.Add(new McpCallRecord(mcp.Server.Name, mcp.Tool.Name, null, shown.Length > 2000 ? shown[..2000] : shown, outcome, DateTimeOffset.UtcNow));
+            lock (sync) answer.McpCalls.Add(new McpCallRecord(mcp.Server.Name, mcp.Tool.Name, action, shown.Length > 2000 ? shown[..2000] : shown, outcome, DateTimeOffset.UtcNow));
         }
         if (deniedThisTurn.Contains(hash))
         {
@@ -1064,7 +1068,7 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         // The permission as it is now: switched off in Settings mid-turn counts at once.
         var server = options.Mcp!.Current(mcp.Server.Key) ?? mcp.Server;
         bool standing;
-        lock (sync) standing = server.RunWithoutAsking.Contains(mcp.Tool.DefinitionHash) || chatAllowed.Contains(hash);
+        lock (sync) standing = server.RunsWithoutAsking(mcp.Tool, action) || chatAllowed.Contains(allowance);
         // After outside text, a standing allowance holds only for a read-only tool of a command server: what it
         // reads comes back into the chat, its arguments go nowhere. A change, or any call to a server on the web, is asked.
         var allowancesHold = !outsideText || (server.IsCommand && mcp.Tool.ReadOnlyHint == true);
@@ -1072,11 +1076,13 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         {
             answer.Activity = "approval";
             Changed?.Invoke();
+            // A call with no action (or one the tool doesn't list) can be allowed once, not from now on.
+            allowancesHold &= mcp.Tool.ActionField is null || (action is not null && mcp.Tool.ActionField.Value.Values.Contains(action));
             // Everything from the server: the tools listed when asked, not whatever is listed by the time it's answered.
             // Not after outside text: a read-only tool may be allowed then, never the server's other tools.
             var listedWhenAsked = allowancesHold && !outsideText ? options.Mcp.State(server).Tools ?? [mcp.Tool] : null;
             var decision = await options.Approve!(new McpApprovalRequest(mcp.Server.Name, mcp.Tool.Title ?? mcp.Tool.Name, shown, outsideText, mcp.Tool.ReadOnlyHint,
-                    allowancesHold, AllowedButAsked: standing, EverythingOffered: listedWhenAsked is not null), token)
+                    allowancesHold, AllowedButAsked: standing, EverythingOffered: listedWhenAsked is not null, Action: action), token)
                 .WaitAsync(token).ConfigureAwait(false);
             // Stopped as it was answered: nothing is allowed or run.
             token.ThrowIfCancellationRequested();
@@ -1093,11 +1099,11 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
             // Only for the server the question was about: one replaced under its key meanwhile gets nothing.
             if (decision == McpApproval.AllowForThisChat && allowancesHold)
             {
-                lock (sync) chatAllowed.Add(hash);
+                lock (sync) chatAllowed.Add(allowance);
             }
             else if (decision == McpApproval.AllowAlways && allowancesHold)
             {
-                options.Mcp.Store.Update(server.Key, c => c.SameServer(server) ? c.WithRunWithoutAsking([mcp.Tool], true) : c);
+                options.Mcp.Store.Update(server.Key, c => c.SameServer(server) ? c.WithRunWithoutAsking(mcp.Tool, action, true) : c);
             }
             else if (decision == McpApproval.AllowServerAlways && listedWhenAsked is not null)
             {

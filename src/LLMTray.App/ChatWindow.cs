@@ -438,7 +438,8 @@ sealed partial class ChatWindow : Window
                 }
                 Activate();
                 var body = new StackPanel { Spacing = 8, MaxWidth = 520 };
-                body.Children.Add(new TextBlock { Text = L.F("{0} wants to use {1}.", request.Server, request.Tool), TextWrapping = TextWrapping.Wrap });
+                var what = request.Action is { } act ? $"{request.Tool} · {act.Replace('_', ' ')}" : request.Tool;
+                body.Children.Add(new TextBlock { Text = L.F("{0} wants to use {1}.", request.Server, what), TextWrapping = TextWrapping.Wrap });
                 body.Children.Add(new TextBox
                 {
                     Text = request.Arguments,
@@ -464,7 +465,8 @@ sealed partial class ChatWindow : Window
                     Title = L.T("Allow this tool call?"),
                     Content = new ScrollViewer { Content = body },
                     PrimaryButtonText = L.T("Allow"),
-                    SecondaryButtonText = request.AllowancesHold ? L.T("Always Allow") : "",
+                    // Per action where the tool has them (Mac adr/0027): "Always Allow send".
+                    SecondaryButtonText = !request.AllowancesHold ? "" : request.Action is { } a ? L.F("Always Allow {0}", a.Replace('_', ' ')) : L.T("Always Allow"),
                     CloseButtonText = L.T("Deny"),
                     DefaultButton = ContentDialogButton.None,
                 };

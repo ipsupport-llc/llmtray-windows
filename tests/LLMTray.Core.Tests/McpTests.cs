@@ -304,3 +304,54 @@ public sealed class McpRefusalTests
         Assert.Equal("the server answered HTTP 500", McpHttpTransport.Refusal(500));
     }
 }
+
+public sealed class McpPerActionTests
+{
+    static McpTool Tool(string schema) => McpTool.From(System.Text.Json.Nodes.JsonNode.Parse($$"""{"name":"mail","description":"Mail.","inputSchema":{{schema}}}"""))!;
+
+    static readonly McpTool Mail = Tool("""{"type":"object","properties":{"folder":{"type":"string","enum":["inbox","sent"]},"action":{"type":"string","enum":["read","send","delete"]},"text":{"type":"string"}},"required":["action"]}""");
+
+    [Fact]
+    public void TheActionFieldIsTheRequiredEnum()
+    {
+        Assert.Equal("action", Mail.ActionField!.Value.Name);
+        Assert.Equal(["read", "send", "delete"], Mail.ActionField.Value.Values);
+        // None required: the first by name.
+        Assert.Equal("folder", Tool("""{"type":"object","properties":{"mode":{"enum":["a"]},"folder":{"type":"string","enum":["x"]}}}""").ActionField!.Value.Name);
+        // Not strings, or no values: no action field.
+        Assert.Null(Tool("""{"type":"object","properties":{"n":{"type":"integer","enum":[1,2]},"t":{"type":"string"}}}""").ActionField);
+        Assert.Equal("send", Mail.ActionOf(new() { ["action"] = "send" }));
+        Assert.Null(Mail.ActionOf(new() { ["text"] = "hi" }));
+    }
+
+    [Fact]
+    public void AToolWithActionsIsAllowedPerAction()
+    {
+        var config = new McpServerConfig { Name = "m", Command = "m", Reviewed = new() { ["mail"] = Mail.DefinitionHash } };
+        var reading = config.WithRunWithoutAsking(Mail, "read", true);
+        Assert.True(reading.RunsWithoutAsking(Mail, "read"));
+        Assert.False(reading.RunsWithoutAsking(Mail, "send"));
+        // No action, or one the tool doesn't list: asked.
+        Assert.False(reading.RunsWithoutAsking(Mail, null));
+        Assert.False(reading.WithRunWithoutAsking(Mail, "purge", true).RunsWithoutAsking(Mail, "purge"));
+        Assert.False(reading.WithRunWithoutAsking(Mail, null, true).RunsWithoutAsking(Mail, null));
+
+        // Everything: each action; nothing: none.
+        var all = config.WithRunWithoutAsking([Mail], true);
+        Assert.All(Mail.ActionField!.Value.Values, a => Assert.True(all.RunsWithoutAsking(Mail, a)));
+        Assert.Empty(all.WithRunWithoutAsking([Mail], false).RunWithoutAsking);
+
+        // Allowed whole before actions were told apart: each listed action, and turning one off keeps the others.
+        var whole = config with { RunWithoutAsking = [Mail.DefinitionHash] };
+        Assert.True(whole.RunsWithoutAsking(Mail, "delete"));
+        Assert.False(whole.RunsWithoutAsking(Mail, null));
+        var noDelete = whole.WithRunWithoutAsking(Mail, "delete", false);
+        Assert.False(noDelete.RunsWithoutAsking(Mail, "delete"));
+        Assert.True(noDelete.RunsWithoutAsking(Mail, "send"));
+        Assert.DoesNotContain(Mail.DefinitionHash, noDelete.RunWithoutAsking);
+
+        // A changed definition isn't the one allowed.
+        var changed = Tool("""{"type":"object","properties":{"action":{"type":"string","enum":["read","send","delete","forward"]}},"required":["action"]}""");
+        Assert.False(all.RunsWithoutAsking(changed, "read"));
+    }
+}

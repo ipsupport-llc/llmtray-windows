@@ -105,14 +105,26 @@ public sealed partial class MainWindow
                             Ui.Button(L.T("Accept"), () => _ = AcceptMcpToolAsync(server, tool.Name, tool.DefinitionHash))));
                         continue;
                     }
-                    var free = server.RunWithoutAsking.Contains(tool.DefinitionHash);
-                    var ask = Ui.Toggle(free, on => app.Mcp.Store.Update(key, c =>
+                    if (tool.ActionField is { } field)
                     {
-                        var set = new HashSet<string>(c.RunWithoutAsking);
-                        if (on) set.Add(tool.DefinitionHash);
-                        else set.Remove(tool.DefinitionHash);
-                        return c with { RunWithoutAsking = set };
-                    }), L.F("Run {0} without asking", tool.Name));
+                        // A tool with actions (Mac adr/0027): each action on its own, and All.
+                        var actions = new VariableSizedWrapGrid { Orientation = Orientation.Horizontal, ItemWidth = 150 };
+                        var allOn = field.Values.All(a => server.RunsWithoutAsking(tool, a));
+                        var all = new CheckBox { Content = L.T("All"), IsChecked = allOn, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
+                        all.Click += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking([tool], all.IsChecked == true));
+                        actions.Children.Add(all);
+                        foreach (var action in field.Values)
+                        {
+                            var box = new CheckBox { Content = action.Replace('_', ' '), IsChecked = server.RunsWithoutAsking(tool, action) };
+                            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, L.F("Run {0} without asking", $"{tool.Name} {action}"));
+                            box.Click += (_, _) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(tool, action, box.IsChecked == true));
+                            actions.Children.Add(box);
+                        }
+                        rows.Add(Ui.StackedRow(tool.Title ?? tool.Name, help + " " + L.T("Run without asking:"), actions));
+                        continue;
+                    }
+                    var free = server.RunsWithoutAsking(tool, null);
+                    var ask = Ui.Toggle(free, on => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(tool, null, on)), L.F("Run {0} without asking", tool.Name));
                     ToolTipService.SetToolTip(ask, L.T("Run without asking"));
                     rows.Add(Ui.Row(tool.Title ?? tool.Name, help, Ui.Horizontal(Ui.Caption(L.T("Run without asking")), ask)));
                 }
