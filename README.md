@@ -3,6 +3,17 @@
 **Local AI Runtime for Windows.** Run local models. Serve an
 OpenAI-compatible API. Connect your coding agents and apps.
 
+## Download
+
+For Windows 11, without administrator rights:
+
+- [**LLMTray-x64-setup.exe**](https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-x64-setup.exe) for most PCs
+- [**LLMTray-ARM64-setup.exe**](https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-ARM64-setup.exe) for Snapdragon laptops
+
+The `.msix` package and the portable ZIP are on the
+[latest release](https://github.com/ipsupport-llc/llmtray-windows/releases/latest);
+see [Installing](#installing) for the difference.
+
 A port of [LLMTray for macOS](https://github.com/ipsupport-llc/llmtray) to
 Windows, on [llama.cpp](https://github.com/ggml-org/llama.cpp). The goal is
 the same features and the same local API at `http://localhost:8765/v1`, in an
