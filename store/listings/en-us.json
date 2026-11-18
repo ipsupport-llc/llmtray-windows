@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Run AI models on your PC: chat, work with your documents, and serve an OpenAI-compatible API to your apps and coding agents. Private, no account, no cloud.",
+  "description": "LLMTray runs AI models on your PC. Chat with open models, let them work with your documents and folders, and give your apps and coding agents an OpenAI-compatible API, all on your own hardware, with no account and no cloud.\n\nLESS DATA CENTER. MORE YOUR OWN HARDWARE.\nYour PC is already a capable AI machine. LLMTray puts it to work: the models run right here, so your prompts, files and answers never leave it, and nothing waits in a server queue.\n\nCHAT WITH OPEN MODELS\n• A guided setup looks at your processor, memory and graphics card and suggests a model that fits.\n• Download GGUF models from Hugging Face or Kaggle, or use the models you already have, such as LM Studio's folder.\n• Runs on the graphics card through Vulkan (NVIDIA, AMD and Intel) or on the processor.\n• Models that see read your images; models that reason show their thinking, with an effort you choose.\n• Speak to models that hear: record a voice message right in the chat.\n• Tabs, history, search, temporary chats and automatic compaction of long chats.\n\nYOUR FILES, WITH SOURCES\n• Projects group chats with their own instructions and documents.\n• Add PDF, Word, Excel, PowerPoint (including old .doc, .xls and .ppt), Markdown, HTML, text and code files to a project: the model searches them and cites the pages it used.\n• Scanned PDF pages are read with Windows' own text recognition.\n• Show the model a window, the screen or a browser tab when you're stuck in an app.\n\nTOOLS THAT STAY UNDER YOUR CONTROL\n• Built-in tools for date and time and a calculator, and, only if you turn them on, web search, news, Wikipedia, weather and more.\n• Let a chat work in a folder you allow: it proposes new folders, moves and renames, and nothing changes until you approve.\n• Connect MCP servers, with sign-in, to give models more tools.\n• Memory, if you turn it on, keeps short notes about you between chats, each with the words it came from; you can read and delete them.\n\nCONNECT YOUR CODING AGENTS AND APPS\n• LLMTray serves an OpenAI-compatible API on your PC at http://localhost:8765/v1. Point any app or coding agent that speaks it at LLMTray.\n• Apps pick the model by name; LLMTray loads it on the first request.\n• The llmtray command line controls the app from any terminal.\n• The API listens only on your PC.\n\nTUNED PER MODEL\n• Per-model profiles for sampling, context size, KV cache quantization and llama.cpp launch options.\n\nNOTHING YOU DIDN'T ASK FOR\n• Every heavy feature is off until you turn it on, and nothing is downloaded before you choose it.\n• No account, no ads, no tracking. Anonymous usage statistics are optional and can be turned off in Settings.\n\nThe AI models you download are made by others, each under its own license. Their answers can be wrong or inappropriate: check what matters.",
+  "features": [
+    "Runs AI models on your PC, on the graphics card (Vulkan: NVIDIA, AMD, Intel) or the processor",
+    "Guided setup that suggests a model that fits your PC's memory",
+    "GGUF models from Hugging Face or Kaggle, or your own folder",
+    "Projects with documents: PDF, Word, Excel, PowerPoint, Markdown and text, with cited pages",
+    "Models that see read images; show the model a window, the screen or a browser tab",
+    "Voice messages for models that hear",
+    "Thinking effort for models that reason",
+    "Optional web search, news, Wikipedia, weather and more",
+    "Folder tools that change nothing until you approve",
+    "MCP servers, with sign-in",
+    "Optional memory between chats, every note readable and deletable",
+    "OpenAI-compatible API at localhost:8765 for apps and coding agents",
+    "The llmtray command line",
+    "Per-model profiles and llama.cpp options",
+    "No account, no ads, no tracking"
+  ],
+  "search_terms": [
+    "local AI",
+    "LLM",
+    "chatbot",
+    "OpenAI API",
+    "llama.cpp",
+    "GGUF",
+    "offline AI"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

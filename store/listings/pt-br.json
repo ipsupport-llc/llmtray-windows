@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Rode modelos de IA no seu PC: converse, trabalhe com seus documentos e ofereça uma API compatível com OpenAI aos seus apps e agentes de código. Privado, sem conta, sem nuvem.",
+  "description": "O LLMTray roda modelos de IA no seu PC. Converse com modelos abertos, deixe que trabalhem com seus documentos e pastas e dê aos seus apps e agentes de código uma API compatível com OpenAI, tudo no seu próprio hardware, sem conta e sem nuvem.\n\nMENOS DATA CENTER. MAIS DO SEU PRÓPRIO HARDWARE.\nSeu PC já é uma máquina de IA capaz. O LLMTray o coloca para trabalhar: os modelos rodam aqui mesmo, então seus prompts, arquivos e respostas nunca saem dele, e nada espera na fila de um servidor.\n\nCONVERSE COM MODELOS ABERTOS\n• Uma configuração guiada analisa seu processador, sua memória e sua placa de vídeo e sugere um modelo que caiba.\n• Baixe modelos GGUF do Hugging Face ou do Kaggle, ou use os modelos que você já tem, como a pasta do LM Studio.\n• Roda na placa de vídeo via Vulkan (NVIDIA, AMD e Intel) ou no processador.\n• Modelos que enxergam leem suas imagens; modelos que raciocinam mostram a linha de raciocínio, com um esforço que você escolhe.\n• Fale com modelos que ouvem: grave uma mensagem de voz direto no chat.\n• Abas, histórico, busca, chats temporários e compactação automática de conversas longas.\n\nSEUS ARQUIVOS, COM FONTES\n• Projetos agrupam conversas com instruções e documentos próprios.\n• Adicione a um projeto arquivos PDF, Word, Excel, PowerPoint (incluindo os antigos .doc, .xls e .ppt), Markdown, HTML, de texto e de código: o modelo pesquisa neles e cita as páginas que usou.\n• Páginas de PDF digitalizadas são lidas com o reconhecimento de texto do próprio Windows.\n• Mostre ao modelo uma janela, a tela ou uma aba do navegador quando você travar em um app.\n\nFERRAMENTAS QUE FICAM SOB O SEU CONTROLE\n• Ferramentas integradas de data e hora e uma calculadora e, só se você ativar, busca na web, notícias, Wikipedia, clima e mais.\n• Deixe um chat trabalhar em uma pasta que você permitir: ele propõe novas pastas, movimentações e renomeações, e nada muda até você aprovar.\n• Conecte servidores MCP, com login, para dar mais ferramentas aos modelos.\n• A memória, se você ativar, guarda notas curtas sobre você entre as conversas, cada uma com as palavras de onde veio; você pode lê-las e apagá-las.\n\nCONECTE SEUS AGENTES DE CÓDIGO E APPS\n• O LLMTray serve uma API compatível com OpenAI no seu PC em http://localhost:8765/v1. Aponte para o LLMTray qualquer app ou agente de código que fale essa API.\n• Os apps escolhem o modelo pelo nome; o LLMTray o carrega na primeira requisição.\n• A linha de comando llmtray controla o app de qualquer terminal.\n• A API escuta apenas no seu PC.\n\nAJUSTADO PARA CADA MODELO\n• Perfis por modelo para amostragem, tamanho de contexto, quantização do cache KV e opções de inicialização do llama.cpp.\n\nNADA QUE VOCÊ NÃO PEDIU\n• Todo recurso pesado fica desativado até você ativar, e nada é baixado antes de você escolher.\n• Sem conta, sem anúncios, sem rastreamento. As estatísticas de uso anônimas são opcionais e podem ser desativadas nos Ajustes.\n\nOs modelos de IA que você baixa são feitos por terceiros, cada um com sua própria licença. As respostas podem estar erradas ou ser inadequadas: confira o que importa.",
+  "features": [
+    "Roda modelos de IA no seu PC, na placa de vídeo (Vulkan: NVIDIA, AMD, Intel) ou no processador",
+    "Configuração guiada que sugere um modelo que caiba na memória do seu PC",
+    "Modelos GGUF do Hugging Face ou do Kaggle, ou da sua própria pasta",
+    "Projetos com documentos: PDF, Word, Excel, PowerPoint, Markdown e texto, com páginas citadas",
+    "Modelos que enxergam leem imagens; mostre ao modelo uma janela, a tela ou uma aba do navegador",
+    "Mensagens de voz para modelos que ouvem",
+    "Esforço de raciocínio para modelos que raciocinam",
+    "Busca na web, notícias, Wikipedia, clima e mais, de forma opcional",
+    "Ferramentas de pasta que não mudam nada até você aprovar",
+    "Servidores MCP, com login",
+    "Memória opcional entre conversas, com cada nota legível e apagável",
+    "API compatível com OpenAI em localhost:8765 para apps e agentes de código",
+    "A linha de comando llmtray",
+    "Perfis por modelo e opções do llama.cpp",
+    "Sem conta, sem anúncios, sem rastreamento"
+  ],
+  "search_terms": [
+    "IA local",
+    "LLM",
+    "chatbot",
+    "API OpenAI",
+    "llama.cpp",
+    "GGUF",
+    "IA offline"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

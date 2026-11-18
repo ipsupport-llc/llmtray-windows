@@ -1,0 +1,32 @@
+{
+  "title": "LLMTray",
+  "short_description": "Jalankan model AI di PC Anda: chat, kerjakan dokumen Anda, dan sediakan API yang kompatibel dengan OpenAI untuk aplikasi dan agen kode Anda. Privat, tanpa akun, tanpa cloud.",
+  "description": "LLMTray menjalankan model AI di PC Anda. Chat dengan model terbuka, biarkan model mengerjakan dokumen dan folder Anda, dan beri aplikasi serta agen kode Anda API yang kompatibel dengan OpenAI, semuanya di perangkat keras Anda sendiri, tanpa akun dan tanpa cloud.\n\nLEBIH SEDIKIT PUSAT DATA. LEBIH BANYAK PERANGKAT KERAS ANDA SENDIRI.\nPC Anda sudah menjadi mesin AI yang mumpuni. LLMTray membuatnya bekerja: model berjalan langsung di sini, sehingga prompt, file, dan hasil Anda tidak pernah meninggalkannya, dan tidak ada yang menunggu di antrean server.\n\nCHAT DENGAN MODEL TERBUKA\n• Penyiapan terpandu memeriksa prosesor, memori, dan kartu grafis Anda, lalu menyarankan model yang cocok.\n• Unduh model GGUF dari Hugging Face atau Kaggle, atau pakai model yang sudah Anda miliki, misalnya folder LM Studio.\n• Berjalan di kartu grafis lewat Vulkan (NVIDIA, AMD, dan Intel) atau di prosesor.\n• Model yang bisa melihat membaca gambar Anda; model yang bernalar menampilkan proses berpikirnya, dengan tingkat usaha yang Anda pilih.\n• Bicara dengan model yang bisa mendengar: rekam pesan suara langsung di chat.\n• Tab, riwayat, pencarian, chat sementara, dan pemadatan otomatis untuk chat yang panjang.\n\nFILE ANDA, LENGKAP DENGAN SUMBER\n• Proyek mengelompokkan chat dengan instruksi dan dokumennya sendiri.\n• Tambahkan file PDF, Word, Excel, PowerPoint (termasuk .doc, .xls, dan .ppt lama), Markdown, HTML, teks, dan kode ke proyek: model menelusurinya dan mengutip halaman yang digunakannya.\n• Halaman PDF hasil pindai dibaca dengan pengenalan teks bawaan Windows.\n• Tunjukkan kepada model sebuah jendela, layar, atau tab browser saat Anda buntu di sebuah aplikasi.\n\nALAT YANG TETAP DALAM KENDALI ANDA\n• Alat bawaan untuk tanggal dan waktu serta kalkulator, dan, hanya jika Anda mengaktifkannya, pencarian web, berita, Wikipedia, cuaca, dan lainnya.\n• Biarkan chat bekerja di folder yang Anda izinkan: chat mengusulkan folder baru, pemindahan, dan penggantian nama, dan tidak ada yang berubah sampai Anda menyetujuinya.\n• Hubungkan server MCP, lengkap dengan proses masuk, untuk memberi model lebih banyak alat.\n• Memori, jika Anda mengaktifkannya, menyimpan catatan singkat tentang Anda di antara chat, masing-masing dengan kata-kata asalnya; Anda bisa membaca dan menghapusnya.\n\nHUBUNGKAN AGEN KODE DAN APLIKASI ANDA\n• LLMTray menyediakan API yang kompatibel dengan OpenAI di PC Anda di http://localhost:8765/v1. Arahkan aplikasi atau agen kode apa pun yang mendukungnya ke LLMTray.\n• Aplikasi memilih model berdasarkan nama; LLMTray memuatnya pada permintaan pertama.\n• Baris perintah llmtray mengendalikan aplikasi dari terminal mana pun.\n• API hanya mendengarkan di PC Anda.\n\nDISETEL PER MODEL\n• Profil per model untuk pengambilan sampel, ukuran konteks, kuantisasi KV cache, dan opsi peluncuran llama.cpp.\n\nTIDAK ADA YANG TIDAK ANDA MINTA\n• Setiap fitur berat nonaktif sampai Anda mengaktifkannya, dan tidak ada yang diunduh sebelum Anda memilihnya.\n• Tanpa akun, tanpa iklan, tanpa pelacakan. Statistik penggunaan anonim bersifat opsional dan dapat dimatikan di Pengaturan.\n\nModel AI yang Anda unduh dibuat oleh pihak lain, masing-masing dengan lisensinya sendiri. Jawabannya bisa salah atau tidak pantas: periksa hal-hal yang penting.",
+  "features": [
+    "Menjalankan model AI di PC Anda, di kartu grafis (Vulkan: NVIDIA, AMD, Intel) atau di prosesor",
+    "Penyiapan terpandu yang menyarankan model sesuai memori PC Anda",
+    "Model GGUF dari Hugging Face atau Kaggle, atau folder Anda sendiri",
+    "Proyek dengan dokumen: PDF, Word, Excel, PowerPoint, Markdown, dan teks, dengan halaman yang dikutip",
+    "Model yang bisa melihat membaca gambar; tunjukkan jendela, layar, atau tab browser ke model",
+    "Pesan suara untuk model yang bisa mendengar",
+    "Tingkat usaha berpikir untuk model yang bernalar",
+    "Pencarian web, berita, Wikipedia, cuaca, dan lainnya (opsional)",
+    "Alat folder yang tidak mengubah apa pun sebelum Anda setujui",
+    "Server MCP, dengan proses masuk",
+    "Memori opsional di antara chat, setiap catatan bisa dibaca dan dihapus",
+    "API kompatibel OpenAI di localhost:8765 untuk aplikasi dan agen kode",
+    "Baris perintah llmtray",
+    "Profil per model dan opsi llama.cpp",
+    "Tanpa akun, tanpa iklan, tanpa pelacakan"
+  ],
+  "search_terms": [
+    "AI lokal",
+    "LLM",
+    "chatbot",
+    "OpenAI API",
+    "llama.cpp",
+    "GGUF",
+    "AI offline"
+  ],
+  "copyright": "© 2026 IPSupport LLC"
+}

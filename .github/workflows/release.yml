@@ -394,42 +394,43 @@ jobs:
           $rules = gh api "repos/$env:GITHUB_REPOSITORY/environments/store" --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length'
           if ($LASTEXITCODE -ne 0) { throw "the store environment's settings couldn't be read" }
           if ([int]$rules -lt 1) { throw 'the store environment has no required reviewer: add the maintainer before anything is submitted' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: store
-          path: store
-      - name: Set up the Microsoft Store Developer CLI
-        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
-        with:
-          version: v0.4.4
-      - name: Sign in to Partner Center
-        shell: pwsh
+          path: store-upload
+      # The Store screenshots of this commit: CI took them on main (ui-x64/store). Without them the published ones stay.
+      - name: This commit's screenshots
         env:
-          TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
-          SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
-          CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
         run: |
-          foreach ($n in 'TENANT_ID', 'SELLER_ID', 'CLIENT_ID', 'CLIENT_SECRET') {
-            if (-not [Environment]::GetEnvironmentVariable($n)) { throw "the store environment has no PARTNER_CENTER_$n secret" }
-          }
-          msstore reconfigure --tenantId $env:TENANT_ID --sellerId $env:SELLER_ID --clientId $env:CLIENT_ID --clientSecret $env:CLIENT_SECRET
-          if ($LASTEXITCODE -ne 0) { throw 'Partner Center refused the credentials' }
+          $run = gh run list --repo $env:GITHUB_REPOSITORY --workflow ci.yml --commit $env:GITHUB_SHA --status success --json databaseId --jq '.[0].databaseId'
+          if ($run) { gh run download $run --repo $env:GITHUB_REPOSITORY --name ui-x64 --dir ui }
+          if (Test-Path ui/store) { Get-ChildItem ui/store | ForEach-Object { Write-Host "screenshot: $($_.Name)" } }
+          else { Write-Host "::warning::no Store screenshots from CI for $env:GITHUB_SHA: the published ones stay" }
       - name: Submit for certification
         shell: pwsh
         env:
           PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
         run: |
-          $upload = @(Get-ChildItem store -Filter *.msixupload)
+          foreach ($n in 'TENANT_ID', 'CLIENT_ID', 'CLIENT_SECRET') {
+            if (-not [Environment]::GetEnvironmentVariable("PARTNER_CENTER_$n")) { throw "the store environment has no PARTNER_CENTER_$n secret" }
+          }
+          $upload = @(Get-ChildItem store-upload -Filter *.msixupload)
           if ($upload.Count -ne 1) { throw "expected one .msixupload, found $($upload.Count)" }
-          # A new submission from the last published one (listing, pricing kept), this package in it, committed.
-          # msstore v0.4.4: the package file is the argument (.msix, .msixbundle or .msixupload).
-          msstore publish $upload[0].FullName --appId $env:PRODUCT_ID
+          # A new submission from the last published one (pricing, properties kept): this package, the
+          # listing texts of store/listings, this commit's screenshots; then committed (tools/LLMTray.Store).
+          dotnet run --project tools/LLMTray.Store -c Release -- submit --app $env:PRODUCT_ID --package $upload[0].FullName --listings store/listings --screenshots ui/store
           if ($LASTEXITCODE -ne 0) { throw 'the submission failed' }
-          # Where it stands now, for the log only: certification takes hours to days. A failure here mustn't
-          # fail the job (a re-run would publish again and replace the submission just committed).
-          msstore submission status $env:PRODUCT_ID
-          exit 0
 
   # The Scoop bucket (ipsupport-llc/scoop-bucket, adr/0005) follows the
   # release by itself: the ZIPs' own SHA-256, pushed with that repo's deploy
