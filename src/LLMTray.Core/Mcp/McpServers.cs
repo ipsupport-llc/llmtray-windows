@@ -37,6 +37,31 @@ public sealed record McpServerConfig
     /// <summary>What the server is, in a line.</summary>
     [JsonIgnore]
     public string Summary => IsCommand ? Runtime.CommandLine.Join(Command!, Arguments) : Url ?? "";
+
+    /// <summary>The same server: its command, arguments, address, environment and headers (an allowance given to one isn't another's).</summary>
+    public bool SameServer(McpServerConfig other) =>
+        Key == other.Key && Command == other.Command && Url == other.Url && Arguments.SequenceEqual(other.Arguments)
+        && Same(Environment, other.Environment) && Same(Headers, other.Headers);
+
+    static bool Same(Dictionary<string, string> a, Dictionary<string, string> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var v) && v == p.Value);
+
+    /// <summary>
+    /// Several tools at once (Mac MCPHub.setRunWithoutAsking): each one as
+    /// reviewed to run without asking, or to be asked again. A tool not
+    /// reviewed, or changed since, is left alone: it isn't in the chat.
+    /// </summary>
+    public McpServerConfig WithRunWithoutAsking(IEnumerable<McpTool> tools, bool on)
+    {
+        var set = new HashSet<string>(RunWithoutAsking);
+        foreach (var tool in tools)
+        {
+            if (!Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) continue;
+            if (on) set.Add(hash);
+            else set.Remove(hash);
+        }
+        return this with { RunWithoutAsking = set };
+    }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

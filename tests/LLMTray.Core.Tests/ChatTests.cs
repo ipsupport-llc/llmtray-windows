@@ -861,6 +861,58 @@ public sealed class ChatClientTests : IAsyncDisposable
         Assert.Empty(temporary.Messages[^1].McpCalls);
     }
 
+    [Theory]
+    [InlineData(McpApproval.AllowAlways)]
+    [InlineData(McpApproval.AllowServerAlways)]
+    public async Task AlwaysAllowLetsTheToolRunWithoutAskingFromNowOn(McpApproval decision)
+    {
+        var store = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(root, "mcp.json"));
+        await using var hub = new LLMTray.Core.Mcp.McpHub(store, new HttpClient(), "test", root, transport: _ => new FakeMcpServer());
+        await hub.ReviewAndEnableAsync(store.Add(new LLMTray.Core.Mcp.McpServerConfig { Name = "Fake", Command = "fake" }), default);
+        var asked = new List<McpApprovalRequest>();
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        chat.LoadToolGroup("fake");
+        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (r, _) => { asked.Add(r); return Task.FromResult(decision); }));
+        var request = Assert.Single(asked);
+        // Nothing read yet: an allowance would hold, so it's offered.
+        Assert.True(request.AllowancesHold);
+        Assert.False(request.AllowedButAsked);
+        Assert.Equal("done", Assert.Single(chat.Messages[^1].McpCalls).Outcome);
+        var server = Assert.Single(store.Load());
+        Assert.Equal(server.Reviewed.Values.ToHashSet(), server.RunWithoutAsking);
+
+        // Another chat: run without asking.
+        var other = new ChatClient(http, api, new ChatStore(root));
+        other.LoadToolGroup("fake");
+        await other.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (_, _) => throw new InvalidOperationException("asked")));
+        Assert.Equal("done", Assert.Single(other.Messages[^1].McpCalls).Outcome);
+
+        // Turned off in Settings: asked again, in this chat too.
+        store.Update(server.Key, c => c with { RunWithoutAsking = [] });
+        await chat.SendAsync("echo hi", new ChatOptions(null, Mcp: hub, Approve: (r, _) => { asked.Add(r); return Task.FromResult(McpApproval.Allow); }));
+        Assert.Equal(2, asked.Count);
+    }
+
+    [Fact]
+    public void RunWithoutAskingSetsOnlyReviewedTools()
+    {
+        var reviewed = new LLMTray.Core.Mcp.McpTool("read", null, "Reads.", "{}", true, null);
+        var changed = new LLMTray.Core.Mcp.McpTool("write", null, "Writes.", "{}", null, true);
+        var config = new LLMTray.Core.Mcp.McpServerConfig
+        {
+            Name = "S", Command = "s",
+            Reviewed = new() { ["read"] = reviewed.DefinitionHash, ["write"] = "an older definition" },
+        };
+        // Another command, environment or address under the same key isn't the same server.
+        Assert.True(config.SameServer(config with { Name = "Renamed" }));
+        Assert.False(config.SameServer(config with { Command = "other" }));
+        Assert.False(config.SameServer(config with { Environment = new() { ["TOKEN"] = "x" } }));
+        Assert.False(config.SameServer(config with { Arguments = ["--root", "/"] }));
+        var on = config.WithRunWithoutAsking([reviewed, changed], true);
+        Assert.Equal([reviewed.DefinitionHash], on.RunWithoutAsking);
+        Assert.Empty(on.WithRunWithoutAsking([reviewed], false).RunWithoutAsking);
+    }
+
     [Fact]
     public async Task StopWhileMcpServersStartEndsTheTurn()
     {

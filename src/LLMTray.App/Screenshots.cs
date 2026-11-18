@@ -44,6 +44,24 @@ static class Screenshots
                 await Task.Delay(1200);
                 if (app.SettingsWindow is { } settings) await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
             }
+            // Memory's settings as they are once it's on (CI's app has it off): turned on for the shot, then back.
+            // Only with nothing learned or waiting: on someone's own profile no note shows and no queue is dropped.
+            if (app.SettingsWindow is { } withMemory && !app.Memory.Settings.Enabled && app.Memory.Read(f => f.Notes.Count == 0 && f.Queue.Count == 0))
+            {
+                var was = app.Memory.Settings;
+                try
+                {
+                    app.Memory.SetSettings(was with { Enabled = true });
+                    withMemory.ShowPage("memory");
+                    await Task.Delay(1200);
+                    await SaveAsync(withMemory, Path.Combine(folder, "settings-memory-on.png"));
+                }
+                finally
+                {
+                    app.Memory.SetSettings(was);
+                    withMemory.ShowPage("memory");
+                }
+            }
             // Settings › Server with usage statistics on (adr/0026): CI's app has them off and no clients, so two
             // made-up requests are counted for the shot, then cleared and the setting put back.
             if (app.SettingsWindow is { } withUsage && !app.Settings.KeepRequestStatistics && app.RequestStatistics.Read(l => l.Rows.Count) == 0)
