@@ -159,9 +159,9 @@ public sealed class CompoundFile
     /// <summary>A directory entry's stream size; a version 3 file's high half is junk by the spec.</summary>
     long Length(byte[] directory, int o) => size == 512 ? U32(directory, o + 120) : (long)Math.Min(BinaryPrimitives.ReadUInt64LittleEndian(directory.AsSpan(o + 120)), long.MaxValue);
 
-    internal static ushort U16(byte[] d, int o) => o >= 0 && o + 2 <= d.Length ? BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(o)) : (ushort)0;
+    internal static ushort U16(byte[] d, int o) => o >= 0 && (long)o + 2 <= d.Length ? BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(o)) : (ushort)0;
 
-    internal static uint U32(byte[] d, int o) => o >= 0 && o + 4 <= d.Length ? BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o)) : NoStream;
+    internal static uint U32(byte[] d, int o) => o >= 0 && (long)o + 4 <= d.Length ? BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o)) : NoStream;
 
     static ExtractException Damaged() => new("the file is damaged");
 }

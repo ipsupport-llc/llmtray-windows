@@ -70,8 +70,8 @@ public static class LegacyOffice
         var cbRgFcLcb = CompoundFile.U16(word, pairs);
         if (cslw < 11 || cbRgFcLcb < 34) throw Damaged();
         int Count(int i) => (int)Math.Min(CompoundFile.U32(word, longs + i * 4), int.MaxValue);
-        // ccpText, ccpFtn, ccpHdd, ccpMcr, ccpAtn, ccpEdn, ccpTxbx: the parts in their order in the text.
-        int[] parts = [Count(3), Count(4), Count(5), Count(6), Count(7), Count(8), Count(9)];
+        // ccpText, ccpFtn, ccpHdd, (reserved: must be ignored), ccpAtn, ccpEdn, ccpTxbx: the parts in their order in the text.
+        int[] parts = [Count(3), Count(4), Count(5), 0, Count(7), Count(8), Count(9)];
         var fcClx = CompoundFile.U32(word, pairs + 2 + 33 * 8);
         var lcbClx = CompoundFile.U32(word, pairs + 2 + 33 * 8 + 4);
         if (fcClx > table.Length || lcbClx > table.Length - fcClx) throw Damaged();
@@ -96,14 +96,15 @@ public static class LegacyOffice
         var pieces = (plcLength - 4) / 12;
         // One character past the cap is enough to know the document is too large.
         var wanted = Math.Min(parts.Sum(p => (long)p), ExtractLimits.Default.MaxTextChars + 1);
-        var rowParagraphs = RowEndParagraphs(word, table, file.Stream("Data"), pairs);
-        var rowEnds = new HashSet<int>();
+        var rowParagraphs = RowEndParagraphs(word, table, () => file.Stream("Data"), pairs);
+        var marks = new Dictionary<int, Mark>();
         var text = new StringBuilder();
         for (var i = 0; i < pieces && text.Length < wanted; i++)
         {
             var from = CompoundFile.U32(table, plc + i * 4);
             var to = CompoundFile.U32(table, plc + (i + 1) * 4);
-            if (to < from) throw Damaged();
+            // The pieces start at the text's start and follow on.
+            if (to < from || (i == 0 && from != 0)) throw Damaged();
             var count = (int)Math.Min(to - from, wanted - text.Length);
             var fc = CompoundFile.U32(table, plc + (pieces + 1) * 4 + i * 8 + 2);
             var compressed = (fc & 0x40000000) != 0;
@@ -114,14 +115,17 @@ public static class LegacyOffice
             var piece = compressed ? Compressed(word, (int)at, count) : Encoding.Unicode.GetString(word, (int)at, count * 2);
             if (rowParagraphs is { Count: > 0 })
             {
-                for (var k = piece.IndexOf('\u0007'); k >= 0; k = piece.IndexOf('\u0007', k + 1))
+                // Cell marks, and paragraph marks (a nested table's cells and rows end with those), with what their paragraph says.
+                for (var k = piece.IndexOfAny(['\u0007', '\r']); k >= 0; k = piece.IndexOfAny(['\u0007', '\r'], k + 1))
                 {
-                    if (InRanges(rowParagraphs, at + k * (compressed ? 1L : 2L))) rowEnds.Add(text.Length + k);
+                    var mark = Find(rowParagraphs, at + k * (compressed ? 1L : 2L));
+                    if (mark != Mark.None) marks[text.Length + k] = mark;
                 }
             }
             text.Append(piece);
         }
         if (text.Length > ExtractLimits.Default.MaxTextChars) throw new ExtractException("too large: too much text");
+        if (text.Length < Math.Min(parts[0], wanted)) throw Damaged();
         var all = text.ToString();
         string Part(int index)
         {
@@ -129,8 +133,8 @@ public static class LegacyOffice
             if (start >= all.Length) return "";
             var length = (int)Math.Min(parts[index], all.Length - start);
             // Without a row mark known from the paragraphs, two cell marks in a row are taken for one.
-            Func<int, bool>? rowEnd = rowEnds.Count > 0 ? k => rowEnds.Contains((int)start + k) : null;
-            return WordPlain(all.Substring((int)start, length), rowEnd);
+            Func<int, Mark>? mark = rowParagraphs is { Count: > 0 } ? k => marks.GetValueOrDefault((int)start + k) : null;
+            return WordPlain(all.Substring((int)start, length), mark);
         }
         var body = new StringBuilder(Part(0).TrimEnd());
         foreach (var (index, label) in new[] { (1, "Footnotes"), (4, "Comments"), (5, "Endnotes"), (6, "Text boxes") })
@@ -168,19 +172,21 @@ public static class LegacyOffice
     /// sprmPFTtp or sprmPFInnerTtp), as stream offset ranges from the
     /// paragraph property pages; null when there are none to read.
     /// </summary>
-    static List<(long From, long To)>? RowEndParagraphs(byte[] word, byte[] table, byte[]? data, int pairs)
+    static List<(long From, long To, Mark Mark)>? RowEndParagraphs(byte[] word, byte[] table, Func<byte[]?> loadData, int pairs)
     {
         var fc = CompoundFile.U32(word, pairs + 2 + 13 * 8);
         var lcb = CompoundFile.U32(word, pairs + 2 + 13 * 8 + 4);
         if (lcb < 12 || fc > table.Length || lcb > table.Length - fc || (lcb - 4) % 8 != 0) return null;
         var pages = (int)(lcb - 4) / 8;
-        var ranges = new List<(long From, long To)>();
+        var ranges = new List<(long From, long To, Mark Mark)>();
         var seen = new HashSet<long>();
         long budget = 0;
+        var huge = new HugeProperties(loadData);
         for (var i = 0; i < pages; i++)
         {
             var page = (long)(CompoundFile.U32(table, (int)fc + (pages + 1) * 4 + i * 4) & 0x3FFFFF) * 512;
-            if (page + 512 > word.Length) return null;
+            // A page past the stream's end is skipped, not the others with it.
+            if (page + 512 > word.Length) continue;
             // A page named twice is read once; there can't be more pages than the stream holds.
             if (!seen.Add(page)) continue;
             var p = (int)page;
@@ -198,7 +204,8 @@ public static class LegacyOffice
                 else (start, length) = (papx + 2, 2 * word[Math.Min(papx + 1, p + 511)]);
                 if (start + length > p + 511) continue;
                 // The style's index (2 bytes), then the properties.
-                if (RowEnd(word, start + 2, start + length, data)) ranges.Add((CompoundFile.U32(word, p + r * 4), CompoundFile.U32(word, p + (r + 1) * 4)));
+                var mark = Paragraph(word, start + 2, start + length, huge);
+                if (mark != Mark.None) ranges.Add((CompoundFile.U32(word, p + r * 4), CompoundFile.U32(word, p + (r + 1) * 4), mark));
             }
         }
         ranges.Sort();
@@ -210,9 +217,11 @@ public static class LegacyOffice
     /// (the last sprmPFTtp or sprmPFInnerTtp wins). Properties too large for
     /// the page are elsewhere: sprmPHugePapx points into the Data stream.
     /// </summary>
-    static bool RowEnd(byte[] d, int pos, int end, byte[]? data = null)
+    static Mark Paragraph(byte[] d, int pos, int end, HugeProperties? huge = null)
     {
         var row = false;
+        var cell = false;
+        var hugeMark = Mark.None;
         while (pos + 2 <= end)
         {
             var op = CompoundFile.U16(d, pos);
@@ -243,19 +252,56 @@ public static class LegacyOffice
                     break;
             }
             if (op is 0x2417 or 0x244C) row = d[pos] == 1;
-            else if (op == 0x6646 && data is not null)
-            {
-                // The rest of the properties, in the Data stream: a length, then the list.
-                var at = CompoundFile.U32(d, pos);
-                var length = CompoundFile.U16(data, (int)Math.Min(at, int.MaxValue));
-                if (at + 2L + length <= data.Length && RowEnd(data, (int)at + 2, (int)at + 2 + length)) row = true;
-            }
+            else if (op == 0x244B) cell = d[pos] == 1;
+            else if (op == 0x6646 && huge is not null) hugeMark = huge.Paragraph(CompoundFile.U32(d, pos));
             pos = (int)Math.Min(pos + size, end);
         }
-        return row;
+        return row ? Mark.Row : cell ? Mark.Cell : hugeMark;
     }
 
-    static bool InRanges(List<(long From, long To)> ranges, long at)
+    /// <summary>
+    /// Paragraph properties too large for their page, in the Data stream
+    /// (sprmPHugePapx): the stream read only when one is named, each list
+    /// read once, and no more of them than the stream's size in all.
+    /// </summary>
+    sealed class HugeProperties(Func<byte[]?> load)
+    {
+        readonly Dictionary<uint, Mark> known = [];
+        byte[]? data;
+        bool loaded;
+        long read;
+
+        public Mark Paragraph(uint at)
+        {
+            if (known.TryGetValue(at, out var row)) return row;
+            if (!loaded)
+            {
+                loaded = true;
+                try
+                {
+                    data = load();
+                }
+                catch (ExtractException)
+                {
+                    // A damaged Data stream costs the table layout, not the text.
+                }
+            }
+            row = Mark.None;
+            if (data is not null && at + 2L <= data.Length)
+            {
+                var length = CompoundFile.U16(data, (int)at);
+                // A list holds no further pointer of this kind ([MS-DOC] PrcData), so one step is all.
+                if (at + 2L + length <= data.Length && (read += length) <= data.Length) row = LegacyOffice.Paragraph(data, (int)at + 2, (int)at + 2 + length);
+            }
+            known[at] = row;
+            return row;
+        }
+    }
+
+    /// <summary>What a paragraph's mark ends: a table cell (nested tables'), a table row, or neither.</summary>
+    internal enum Mark { None, Cell, Row }
+
+    static Mark Find(List<(long From, long To, Mark Mark)> ranges, long at)
     {
         int low = 0, high = ranges.Count - 1;
         while (low <= high)
@@ -263,17 +309,19 @@ public static class LegacyOffice
             var mid = (low + high) / 2;
             if (at < ranges[mid].From) high = mid - 1;
             else if (at >= ranges[mid].To) low = mid + 1;
-            else return true;
+            else return ranges[mid].Mark;
         }
-        return false;
+        return Mark.None;
     }
 
     /// <summary>
     /// Word's special characters as text: paragraph marks, breaks, cells,
-    /// fields. <paramref name="rowEnd"/>: whether the cell mark at an index
-    /// ends a row; without it, a mark right after another is taken for one.
+    /// fields. <paramref name="mark"/>: what the mark at an index ends, from
+    /// its paragraph's properties (a nested table's cells and rows end with
+    /// paragraph marks); without it, a cell mark right after another is
+    /// taken for the row's.
     /// </summary>
-    internal static string WordPlain(string text, Func<int, bool>? rowEnd = null)
+    internal static string WordPlain(string text, Func<int, Mark>? mark = null)
     {
         var sb = new StringBuilder(text.Length);
         // Open fields: true once past the separator, where the shown result is.
@@ -287,7 +335,9 @@ public static class LegacyOffice
             switch (c)
             {
                 case '\u0013':
-                    if (fields.Count < 64) { fields.Push(false); hidden++; }
+                    // No cap: the stack is never deeper than the text is long.
+                    fields.Push(false);
+                    hidden++;
                     continue;
                 case '\u0014':
                     if (fields.Count > 0 && !fields.Peek()) { fields.Pop(); fields.Push(true); hidden--; }
@@ -299,25 +349,24 @@ public static class LegacyOffice
             if (hidden > 0) continue;
             var afterSeparator = separator;
             separator = false;
+            var kind = mark?.Invoke(i) ?? Mark.None;
             switch (c)
             {
+                case '\r' when kind == Mark.Cell:
+                    Cell();
+                    break;
+                case '\r' when kind == Mark.Row:
+                    Row();
+                    break;
                 case '\r' or '\u000B': sb.Append('\n'); break;
                 case '\u000C': sb.Append('\f'); break;
                 case '\u0007':
-                    if (rowEnd is not null ? rowEnd(i) : i + 1 < text.Length && text[i + 1] == '\u0007')
+                    if (mark is not null ? kind == Mark.Row : i + 1 < text.Length && text[i + 1] == '\u0007')
                     {
-                        // The row's own mark comes after its last cell's.
-                        if (afterSeparator) sb.Length -= 3;
-                        while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
-                        sb.Append('\n');
-                        if (rowEnd is null) i++;
+                        Row();
+                        if (mark is null) i++;
                     }
-                    else
-                    {
-                        if (!afterSeparator) while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
-                        sb.Append(" | ");
-                        separator = true;
-                    }
+                    else Cell();
                     break;
                 case '\u001E': sb.Append('-'); break;
                 case ' ': sb.Append(' '); break;
@@ -325,6 +374,21 @@ public static class LegacyOffice
                 default:
                     if (!char.IsControl(c)) sb.Append(c);
                     break;
+            }
+
+            void Cell()
+            {
+                if (!afterSeparator) while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
+                sb.Append(" | ");
+                separator = true;
+            }
+
+            // The row's own mark comes after its last cell's.
+            void Row()
+            {
+                if (afterSeparator) sb.Length -= 3;
+                while (sb.Length > 0 && sb[^1] == ' ') sb.Length--;
+                sb.Append('\n');
             }
         }
         return sb.ToString();
@@ -411,15 +475,11 @@ public static class LegacyOffice
             if (type == 0x0809) { depth++; continue; }
             if (type == 0x000A) { if (--depth <= 0) break; continue; }
             if (depth != 1) continue;
+            // A formula's text result comes right after it (past its shared or array formula, if any), or not at all.
+            if (type is not (0x0207 or 0x003C or 0x04BC or 0x0221 or 0x0236)) pendingString = null;
             int row = CompoundFile.U16(body, 0), column = CompoundFile.U16(body, 2);
             // A sheet is 256 columns wide: a cell past that is damage, and would pad its row with thousands of empty ones.
-            if (column > 255 && type != 0x0207)
-            {
-                if (type == 0x0006) pendingString = null;
-                continue;
-            }
-            // A formula's text result comes right after it (past its shared or array formula, if any), or not at all.
-            if (type is not (0x0006 or 0x0207 or 0x003C or 0x04BC or 0x0221 or 0x0236)) pendingString = null;
+            if (column > 255 && type != 0x0207) continue;
             switch (type)
             {
                 case 0x00FD when body.Length >= 10:
@@ -443,7 +503,6 @@ public static class LegacyOffice
                     Set(row, column, body[7] == 0 ? (body[6] != 0 ? "TRUE" : "FALSE") : Error(body[6]));
                     break;
                 case 0x0006 when body.Length >= 14:
-                    pendingString = null;
                     if (CompoundFile.U16(body, 12) != 0xFFFF) Set(row, column, Number(BitConverter.ToDouble(body, 6)));
                     else if (body[6] == 0) pendingString = (row, column);
                     else if (body[6] == 1) Set(row, column, body[8] != 0 ? "TRUE" : "FALSE");

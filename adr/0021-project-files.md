@@ -45,11 +45,12 @@ Files in projects** is on; nothing is read, embedded or downloaded before.
   is refused at add) and the reader picks the real kind by its streams.
   - .doc: the text through the piece table, page and section breaks as
     pages, field codes dropped and their results kept, table cells as
-    `a | b` (a row's end from its paragraph properties, sprmPFTtp, also
-    when they're in the Data stream; a file without them falls back to two
-    cell marks in a row), then footnotes, comments, endnotes and text boxes.
-    Not read: nested tables' cells (they stay lines) and properties changed
-    in the piece table itself. Word 95 and older are refused.
+    `a | b` (a row's end, and a nested table's cells and rows, from the
+    paragraph properties, also when they're in the Data stream; a file
+    without them falls back to two cell marks in a row, which reads an
+    empty cell as a row's end), then footnotes, comments, endnotes and text
+    boxes. Not read: properties changed in the piece table itself. Word 95
+    and older are refused.
   - .xls: BIFF5 and BIFF8, a page per worksheet as for .xlsx (numbers as
     stored, a formula as its saved result); text boxes and charts aren't
     read. Excel 4 and older are refused.

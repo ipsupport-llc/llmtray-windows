@@ -78,6 +78,17 @@ public sealed class LegacyOfficeTests : IDisposable
         Assert.Equal("Title \u201Cq\u201D\nlink end\nA |  | B\nnext\n\nFootnotes:\nnote one", page.Text);
         // Without row marks known: two cell marks end a row; a cell's own "|" stays.
         Assert.Equal("a|\nb | c\n", LegacyOffice.WordPlain("a|\u0007\u0007b\u0007c\u0007\u0007"));
+        // A nested table: its cells and row end with paragraph marks, told apart by their properties.
+        var marks = new Dictionary<int, LegacyOffice.Mark> { [1] = LegacyOffice.Mark.Cell, [3] = LegacyOffice.Mark.Row };
+        Assert.Equal("x | y\nz\n", LegacyOffice.WordPlain("x\ry\rz\r", i => marks.GetValueOrDefault(i)));
+    }
+
+    [Fact]
+    public void WordFieldsNestedDeepStayBalanced()
+    {
+        // 70 nested fields, each code then result: only the innermost result shows, then the text after them all.
+        var nested = string.Concat(Enumerable.Repeat("\u0013code\u0014", 70)) + "shown" + new string('\u0015', 70) + " after";
+        Assert.Equal("shown after", LegacyOffice.WordPlain(nested));
     }
 
     [Fact]
