@@ -410,10 +410,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          # Missing (no CI run, its artifact expired): the submission goes on with the published screenshots.
           $run = gh run list --repo $env:GITHUB_REPOSITORY --workflow ci.yml --commit $env:GITHUB_SHA --status success --json databaseId --jq '.[0].databaseId'
-          if ($run) { gh run download $run --repo $env:GITHUB_REPOSITORY --name ui-x64 --dir ui }
+          if ($LASTEXITCODE -eq 0 -and $run) { gh run download $run --repo $env:GITHUB_REPOSITORY --name ui-x64 --dir ui }
           if (Test-Path ui/store) { Get-ChildItem ui/store | ForEach-Object { Write-Host "screenshot: $($_.Name)" } }
           else { Write-Host "::warning::no Store screenshots from CI for $env:GITHUB_SHA: the published ones stay" }
+          exit 0
       - name: Submit for certification
         shell: pwsh
         env:

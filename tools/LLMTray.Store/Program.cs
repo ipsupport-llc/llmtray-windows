@@ -93,6 +93,8 @@ static async Task SubmitAsync(string app, string package, IReadOnlyDictionary<st
         await using var stream = File.OpenRead(zip);
         blob.Content = new StreamContent(stream);
         blob.Headers.Add("x-ms-blob-type", "BlockBlob");
+        // Without it the address's own (old) storage version rules, which takes at most 64 MiB in one request.
+        blob.Headers.Add("x-ms-version", "2021-08-06");
         // The upload address carries its own key: no bearer token goes to it.
         using var plain = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
         using var response = await plain.SendAsync(blob);
@@ -102,7 +104,7 @@ static async Task SubmitAsync(string app, string package, IReadOnlyDictionary<st
     Console.WriteLine("uploaded");
 
     await JsonAsync(http, HttpMethod.Post, $"{root}/submissions/{id}/commit");
-    // Committing checks the submission; certification itself takes hours to days.
+    // Committing checks the submission; certification itself takes hours to days and isn't waited for.
     for (var wait = 0; ; wait++)
     {
         var state = await JsonAsync(http, HttpMethod.Get, $"{root}/submissions/{id}/status");
@@ -113,10 +115,11 @@ static async Task SubmitAsync(string app, string package, IReadOnlyDictionary<st
             continue;
         }
         foreach (var warning in state["statusDetails"]?["warnings"] as JsonArray ?? []) Console.WriteLine($"warning: {warning?["code"]}: {warning?["details"]}");
-        if (status == "CommitFailed")
+        if (status == "CommitStarted") throw new InvalidOperationException($"submission {id} was still being checked after 30 minutes: see Partner Center");
+        if (status.EndsWith("Failed", StringComparison.Ordinal) || status == "Canceled" || status.Length == 0)
         {
             foreach (var error in state["statusDetails"]?["errors"] as JsonArray ?? []) Console.Error.WriteLine($"error: {error?["code"]}: {error?["details"]}");
-            throw new InvalidOperationException($"submission {id} failed its checks (it stays in Partner Center to look at)");
+            throw new InvalidOperationException($"submission {id}: {(status.Length == 0 ? "no status" : status)} (it stays in Partner Center to look at)");
         }
         Console.WriteLine($"submission {id}: {status}");
         return;
