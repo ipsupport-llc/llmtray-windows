@@ -92,6 +92,9 @@ public partial class App : Application
     public event Action? FoldersChanged;
     public string DataFolder { get; private set; } = "";
 
+    /// <summary>The API's usage statistics (adr/0026): on this PC only, while turned on.</summary>
+    public LLMTray.Core.Usage.UsageStore RequestStatistics { get; private set; } = null!;
+
     /// <summary>Why the API isn't served (port taken), or null.</summary>
     public string? ProxyError { get; private set; }
 
@@ -299,6 +302,7 @@ public partial class App : Application
         PinRatios = new LLMTray.Core.ProjectFiles.PinTokenRatios(Path.Combine(DataFolder, "pin-ratios.json"));
         Downloads.Completed += _ => ProjectFiles.Poke();
 
+        RequestStatistics = new LLMTray.Core.Usage.UsageStore(Path.Combine(DataFolder, "usage.json"));
         Telemetry = new LLMTray.Core.Telemetry.TelemetryService(Path.Combine(DataFolder, "telemetry.json"), CreateTelemetryClient(),
             () => Settings is { ShareUsage: true, UsageId: not null }, () => Settings.ShareUsage == true ? Settings.UsageId : null, UsageEnvironment,
             endpoint: DevelopmentEndpoint(),
@@ -314,6 +318,9 @@ public partial class App : Application
             AppToken = appToken,
             Background = background,
             OutsideRequest = model => Telemetry.Record(LLMTray.Core.Telemetry.TelemetryFeature.ApiServer, model.FullPath),
+            // Kept on this PC only (adr/0026), while the user has them on.
+            CountsUsage = () => Settings.KeepRequestStatistics,
+            UsageRecorded = (model, stats) => RequestStatistics.Record(stats, model.Name, DateTime.Now),
         };
         try
         {
@@ -704,6 +711,7 @@ public partial class App : Application
             Program.ShowEvent.Set();
             if (control is not null) await control.DisposeAsync();
             if (proxy is not null) await proxy.DisposeAsync();
+            RequestStatistics?.Dispose();
             if (Telemetry is not null) await Telemetry.DisposeAsync();
             if (Memory is not null) await Memory.DisposeAsync();
             if (ProjectFiles is not null) await ProjectFiles.DisposeAsync();

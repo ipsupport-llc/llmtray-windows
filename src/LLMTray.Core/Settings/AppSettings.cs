@@ -56,6 +56,12 @@ public sealed record AppSettings
     /// <summary>The random install id reports carry while sharing is on; a new one each time it's turned on.</summary>
     public Guid? UsageId { get; init; }
 
+    /// <summary>
+    /// Usage statistics of the API (adr/0026): requests and tokens per model, client and day, kept on
+    /// this PC only and never sent. Off until turned on; nothing to do with <see cref="ShareUsage"/>.
+    /// </summary>
+    public bool KeepRequestStatistics { get; init; }
+
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
 }

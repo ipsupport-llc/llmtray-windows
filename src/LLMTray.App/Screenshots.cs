@@ -62,6 +62,26 @@ static class Screenshots
                     withMemory.ShowPage("memory");
                 }
             }
+            // Settings › Server with usage statistics on (adr/0026): CI's app has them off and no clients, so two
+            // made-up requests are counted for the shot, then cleared and the setting put back.
+            if (app.SettingsWindow is { } withUsage && !app.Settings.KeepRequestStatistics && app.RequestStatistics.Read(l => l.Rows.Count) == 0)
+            {
+                try
+                {
+                    app.UpdateSettings(app.Settings with { KeepRequestStatistics = true });
+                    app.RequestStatistics.Record(new LLMTray.Core.Usage.RequestStats("Codex", 12_400, 11_900, 0.42, 380, 6.1), "gemma-4-E4B-it-Q4_K_M", DateTime.Now);
+                    app.RequestStatistics.Record(new LLMTray.Core.Usage.RequestStats("LLMTray", 2_300, 0, 1.9, 220, 3.4), "gemma-4-E4B-it-Q4_K_M", DateTime.Now);
+                    withUsage.ShowPage("server");
+                    await Task.Delay(1200);
+                    await SaveAsync(withUsage, Path.Combine(folder, "settings-server-usage.png"));
+                }
+                finally
+                {
+                    app.RequestStatistics.Clear();
+                    app.UpdateSettings(app.Settings with { KeepRequestStatistics = false });
+                    withUsage.ShowPage("general");
+                }
+            }
             // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
             await StoreAsync(app, Path.Combine(folder, "store"));
             app.ShowAbout();
