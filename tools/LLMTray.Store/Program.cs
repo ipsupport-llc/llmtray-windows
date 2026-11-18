@@ -8,7 +8,8 @@
 //
 // Credentials come from the environment: PARTNER_CENTER_TENANT_ID,
 // PARTNER_CENTER_CLIENT_ID and PARTNER_CENTER_CLIENT_SECRET (an Entra app
-// added to Partner Center with the Manager role).
+// added to Partner Center with the Developer role, or Manager if the Store
+// refuses that: adr/0025).
 
 using System.IO.Compression;
 using System.Net.Http.Headers;
