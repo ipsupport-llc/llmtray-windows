@@ -31,8 +31,39 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
     /// <summary>Where the user's own app's secret is kept (protected, never in the settings file).</summary>
     public static string OwnAppSecretName(string key) => $"mcp.{key}.client-secret";
 
+    /// <summary>The user's own app's secret as kept: stamped with the client id and the sign-in server it's for (null: not known yet).</summary>
+    sealed record StampedSecret(string ClientId, string? Issuer, string Secret);
+
+    StampedSecret? Stamped(string key)
+    {
+        if (secrets.Get(OwnAppSecretName(key)) is not { Length: > 0 } text) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            return root.TryGetProperty("clientId", out var id) && id.ValueKind == JsonValueKind.String
+                && root.TryGetProperty("secret", out var secret) && secret.ValueKind == JsonValueKind.String
+                ? new StampedSecret(id.GetString()!, root.TryGetProperty("issuer", out var i) && i.ValueKind == JsonValueKind.String ? i.GetString() : null, secret.GetString()!)
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    void Stamp(string key, StampedSecret? stamped) => secrets.Set(OwnAppSecretName(key), stamped is null ? null
+        : new System.Text.Json.Nodes.JsonObject { ["clientId"] = stamped.ClientId, ["issuer"] = stamped.Issuer, ["secret"] = stamped.Secret }.ToJsonString());
+
+    /// <summary>
+    /// The secret for a request as this client id at this sign-in server: only the one stamped for exactly
+    /// those. Whatever changed in between, a secret never goes anywhere but where it was made for.
+    /// </summary>
+    string? SecretFor(string key, string clientId, string issuer) =>
+        Stamped(key) is { } s && s.ClientId == clientId && s.Issuer is { } i && McpOAuth.Canonical(i) == McpOAuth.Canonical(issuer) ? s.Secret : null;
+
     /// <summary>Whether a secret of the user's own app is kept for this server (the secret itself never leaves here but to the token endpoint).</summary>
-    public bool HasOwnAppSecret(string key) => secrets.Get(OwnAppSecretName(key)) is { Length: > 0 };
+    public bool HasOwnAppSecret(string key) => Stamped(key) is not null;
 
     /// <summary>
     /// The user's own app for a server (Slack and the like): its client id
@@ -49,12 +80,16 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         {
             if (store.Load().FirstOrDefault(s => s.Key == key) is not { } config) return;
             var sameId = id == config.OAuthClientId;
-            var sameIssuer = issuer is null || config.OAuthClientIssuer is null || McpOAuth.Canonical(issuer) == McpOAuth.Canonical(config.OAuthClientIssuer);
-            if (sameId && sameIssuer && secret is null && (issuer is null || config.OAuthClientIssuer is not null)) return;
-            store.Update(key, c => c with { OAuthClientId = id, OAuthClientIssuer = id is null ? null : issuer ?? (sameId ? c.OAuthClientIssuer : null) });
-            // A secret belongs to its id and its sign-in server: another id, or the same one at another server, never takes the old one.
-            if (id is null || secret is { Length: 0 } || (secret is null && !(sameId && sameIssuer))) secrets.Set(OwnAppSecretName(key), null);
-            else if (secret is { Length: > 0 }) secrets.Set(OwnAppSecretName(key), secret);
+            var boundTo = id is null ? null : issuer ?? (sameId ? config.OAuthClientIssuer : null);
+            var sameIssuer = (boundTo is null && config.OAuthClientIssuer is null)
+                || (boundTo is not null && config.OAuthClientIssuer is not null && McpOAuth.Canonical(boundTo) == McpOAuth.Canonical(config.OAuthClientIssuer));
+            if (sameId && sameIssuer && secret is null) return;
+            store.Update(key, c => c with { OAuthClientId = id, OAuthClientIssuer = boundTo });
+            // A secret belongs to its id and its sign-in server: one typed now is stamped for them; one kept stays only
+            // for exactly the same (another id, another server, or a server named for the first time drops it).
+            if (id is null || secret is { Length: 0 }) Stamp(key, null);
+            else if (secret is { Length: > 0 }) Stamp(key, new StampedSecret(id, boundTo, secret));
+            else if (!(sameId && sameIssuer)) Stamp(key, null);
             resets[key] = resets.GetValueOrDefault(key) + 1;
             if (config.OAuth is not null) MarkNeedsSignInLocked(key, dropRegistration: true);
         }
@@ -152,7 +187,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             try
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var fresh = await McpOAuth.RefreshAsync(t, state, fetch, Now, limit.Token, resolve, secrets.Get(OwnAppSecretName(key))).ConfigureAwait(false);
+                var fresh = await McpOAuth.RefreshAsync(t, state, fetch, Now, limit.Token, resolve, SecretFor(key, state.ClientId, state.Metadata.Issuer)).ConfigureAwait(false);
                 // Checked and kept together: a sign-in or sign-out since wins.
                 lock (sync)
                 {
@@ -214,7 +249,6 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             throw McpOAuthException.Of(McpOAuthFailure.NoMetadata);
         }
         int reset;
-        string? ownSecret;
         lock (sync)
         {
             if (!signingIn.Add(key)) throw new InvalidOperationException("a sign-in to this server is already open in the browser");
@@ -227,7 +261,6 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
                 throw new OperationCanceledException("the server changed");
             }
             config = current;
-            ownSecret = secrets.Get(OwnAppSecretName(key));
         }
         Changed?.Invoke();
         try
@@ -263,7 +296,12 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
                 lock (sync)
                 {
                     if (resets.GetValueOrDefault(key) != reset) throw new OperationCanceledException("the server changed during the sign-in");
-                    if (madeFor is null) store.Update(key, c => c.OAuthClientId == clientId ? c with { OAuthClientIssuer = discovery.Server.Issuer } : c);
+                    if (madeFor is null)
+                    {
+                        // Its first sign-in: bound to this sign-in server before anything of it is sent, the secret too.
+                        store.Update(key, c => c.OAuthClientId == clientId ? c with { OAuthClientIssuer = discovery.Server.Issuer } : c);
+                        if (Stamped(key) is { Issuer: null } unbound && unbound.ClientId == clientId) Stamp(key, unbound with { Issuer = discovery.Server.Issuer });
+                    }
                 }
             }
             if (!McpOAuth.MixUpSafe(discovery.Server, registration)) throw McpOAuthException.Of(McpOAuthFailure.MixUpRisk);
@@ -278,7 +316,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             // The user's own app: the fixed port its registered redirect names.
             using var listener = OpenCallback(registration);
             var flow = new OAuthFlow(discovery.Server, clientId, registration, discovery.ResourceUrl, scope, listener.Port,
-                clientSecret: registration == OAuthRegistration.Manual ? ownSecret : null);
+                clientSecret: registration == OAuthRegistration.Manual ? SecretFor(key, clientId, discovery.Server.Issuer) : null);
             listener.Accepts = flow.IsMine;
             openBrowser(flow.AuthorizationUrl);
             var target = await listener.WaitAsync(CallbackTimeout, cancellationToken).ConfigureAwait(false);
@@ -333,7 +371,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var request = McpOAuth.FormRequest(endpoint, McpOAuth.WithSecret([new("token", t.RefreshToken ?? t.AccessToken), new("client_id", state.ClientId)],
-                    state.Registration == OAuthRegistration.Manual ? secrets.Get(OwnAppSecretName(key)) : null));
+                    state.Registration == OAuthRegistration.Manual ? SecretFor(key, state.ClientId, state.Metadata.Issuer) : null));
                 await fetch.FetchAsync(request, limit.Token).ConfigureAwait(false);
             }
             catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException)
@@ -351,7 +389,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             generation[key] = generation.GetValueOrDefault(key) + 1;
             resets[key] = resets.GetValueOrDefault(key) + 1;
             Keep(key, null);
-            secrets.Set(OwnAppSecretName(key), null);
+            Stamp(key, null);
         }
     }
 

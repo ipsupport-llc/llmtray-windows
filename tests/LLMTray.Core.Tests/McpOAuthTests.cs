@@ -345,6 +345,15 @@ public sealed class McpOAuthTests : IDisposable
         signIn.SetOwnApp(server.Key, "other-client", null, "https://evil.example.net");
         Assert.False(signIn.HasOwnAppSecret(server.Key));
 
+        // A secret entered while the sign-in server wasn't known doesn't follow the first one named later.
+        signIn.SetOwnApp(server.Key, "late-client", "s4");
+        Assert.True(signIn.HasOwnAppSecret(server.Key));
+        signIn.SetOwnApp(server.Key, "late-client", null, "https://evil.example.net");
+        Assert.False(signIn.HasOwnAppSecret(server.Key));
+        // Kept as a stamped record, never as the bare secret.
+        signIn.SetOwnApp(server.Key, "late-client", "s5", "https://auth.example.com");
+        Assert.Contains("\"issuer\":\"https://auth.example.com\"", secrets.Values[McpSignIn.OwnAppSecretName(server.Key)]);
+
         // Removed: everything goes.
         signIn.Forget(server.Key);
         Assert.Empty(secrets.Values);
