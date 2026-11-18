@@ -156,6 +156,12 @@ jobs:
           $msix = Get-ChildItem out -Recurse -Filter *.msix | Select-Object -First 1
           Add-AppxPackage -Path $msix.FullName
           Get-AppxPackage IPSupportLLC.LLMTray | Format-List Name, Version, Architecture, PackageFamilyName
+          # The command line's alias (adr/0013), declared on the app's own entry.
+          $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\llmtray.exe'
+          if (-not (Test-Path $alias)) { throw "no llmtray alias at $alias" }
+          $version = & $alias version
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw "llmtray version through the alias failed: $LASTEXITCODE" }
+          Write-Host "llmtray alias: $version"
       - name: Cache the smoke-test model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
