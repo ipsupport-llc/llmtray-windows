@@ -3,6 +3,22 @@
 **Local AI Runtime for Windows.** Run local models. Serve an
 OpenAI-compatible API. Connect your coding agents and apps.
 
+<p align="center">
+  <img src="docs/assets/chat.png" width="800" alt="LLMTray for Windows: a chat with a local model, its answer formatted with code">
+</p>
+
+<p align="center">
+  <a href="https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-x64-setup.exe"><img src="https://img.shields.io/badge/Download-LLMTray--x64--setup.exe-0078D4?style=for-the-badge" alt="Download LLMTray-x64-setup.exe"></a>
+  &nbsp;
+  <a href="https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-ARM64-setup.exe"><img src="https://img.shields.io/badge/Download-LLMTray--ARM64--setup.exe-0078D4?style=for-the-badge" alt="Download LLMTray-ARM64-setup.exe"></a>
+  <br>
+  <sub>Windows 11 · x64 for most PCs, ARM64 for Snapdragon laptops · no administrator rights</sub>
+  <br><br>
+  <a href="https://ipsupport.us/llmtray/">ipsupport.us/llmtray</a>
+  <br>
+  <sub>Also as an <code>.msix</code> package, a portable ZIP and with <a href="#installing">Scoop</a>, on the <a href="https://github.com/ipsupport-llc/llmtray-windows/releases/latest">latest release</a>. LLMTray for Mac: <a href="https://github.com/ipsupport-llc/llmtray">ipsupport-llc/llmtray</a></sub>
+</p>
+
 A port of [LLMTray for macOS](https://github.com/ipsupport-llc/llmtray) to
 Windows, on [llama.cpp](https://github.com/ggml-org/llama.cpp). The goal is
 the same features and the same local API at `http://localhost:8765/v1`, in an

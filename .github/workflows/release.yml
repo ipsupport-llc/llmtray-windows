@@ -319,6 +319,16 @@ jobs:
           NOTES
           flags=()
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          # A stable release also carries each file under a name without the version
+          # (LLMTray-x64-setup.exe), so .../releases/latest/download/<name> always gets
+          # the newest one (the website links there). The updater and Scoop keep using
+          # the versioned names.
+          if [ "$PRERELEASE" != true ]; then
+            for f in dist/LLMTray-"${TAG#v}"-*; do
+              cp "$f" "dist/LLMTray-${f#dist/LLMTray-${TAG#v}-}"
+            done
+            ls dist
+          fi
           gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --verify-tag \
             --title "LLMTray for Windows ${TAG#v}" --notes-file notes.md "${flags[@]}"
 
