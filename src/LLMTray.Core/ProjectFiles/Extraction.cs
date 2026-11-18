@@ -24,7 +24,7 @@ public sealed record ExtractedPage(int Number, string Text, string? Label = null
 /// <param name="page">The page's number, from 1.</param>
 public delegate string? PageRecognizer(string path, int page);
 
-public enum DocumentFormat { Unsupported, Text, Markdown, Code, Html, Pdf, Docx, Xlsx, Pptx, Odt, Rtf, Legacy }
+public enum DocumentFormat { Unsupported, Text, Markdown, Code, Html, Pdf, Docx, Xlsx, Pptx, Odt, Rtf, Legacy, Doc, Xls, Ppt }
 
 /// <summary>What a file is, from its content first and its extension second (Mac adr/0012).</summary>
 public static class DocumentFormats
@@ -41,7 +41,7 @@ public static class DocumentFormats
 
     /// <summary>The extensions the Add dialog offers: what this version indexes, nothing else.</summary>
     public static IReadOnlyList<string> Offered { get; } =
-        ["pdf", "docx", "xlsx", "pptx", "odt", "rtf", .. HtmlExtensions, .. MarkdownExtensions, .. TextExtensions, .. CodeExtensions];
+        ["pdf", "docx", "xlsx", "pptx", "odt", "rtf", "doc", "xls", "ppt", .. HtmlExtensions, .. MarkdownExtensions, .. TextExtensions, .. CodeExtensions];
 
     public static string Extension(string path) => Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
 
@@ -58,7 +58,7 @@ public static class DocumentFormats
         if (head.StartsWith("%PDF-"u8)) return DocumentFormat.Pdf;
         if (head.StartsWith("PK\u0003\u0004"u8)) return zipKind();
         if (head.StartsWith("{\\rtf"u8)) return DocumentFormat.Rtf;
-        if (head.StartsWith(new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 })) return DocumentFormat.Legacy;
+        if (head.StartsWith(CompoundFile.Magic)) return CompoundKind(ext);
         // UTF-32 before UTF-16: its little-endian BOM starts like UTF-16's.
         if (head.StartsWith(new byte[] { 0xFF, 0xFE, 0, 0 }) || head.StartsWith(new byte[] { 0, 0, 0xFE, 0xFF })) return TextKind(ext);
         if (!LooksLikeText(head)) return DocumentFormat.Unsupported;
@@ -100,6 +100,19 @@ public static class DocumentFormats
     };
 
     /// <summary>
+    /// An OLE2 compound file's kind, from its extension like a zip's: the
+    /// reader process finds out from the streams inside what it really is.
+    /// Other compound files (Outlook messages, installers) aren't documents.
+    /// </summary>
+    static DocumentFormat CompoundKind(string ext) => ext switch
+    {
+        "doc" or "dot" => DocumentFormat.Doc,
+        "xls" or "xlt" => DocumentFormat.Xls,
+        "ppt" or "pps" or "pot" => DocumentFormat.Ppt,
+        _ => DocumentFormat.Legacy,
+    };
+
+    /// <summary>
     /// The copy's extension: the format's own, never the file's when that
     /// could make Windows run it (an .hta that's HTML, a .bat that's text).
     /// </summary>
@@ -111,6 +124,9 @@ public static class DocumentFormats
         DocumentFormat.Pptx => "pptx",
         DocumentFormat.Odt => "odt",
         DocumentFormat.Rtf => "rtf",
+        DocumentFormat.Doc => "doc",
+        DocumentFormat.Xls => "xls",
+        DocumentFormat.Ppt => "ppt",
         DocumentFormat.Html => "html",
         DocumentFormat.Markdown => "md",
         _ => "txt",
@@ -118,11 +134,12 @@ public static class DocumentFormats
 
     /// <summary>Formats whose copy opens in its own app; the rest open as text in Notepad.</summary>
     public static bool OpensInItsApp(DocumentFormat format) =>
-        format is DocumentFormat.Pdf or DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt or DocumentFormat.Rtf or DocumentFormat.Html;
+        format is DocumentFormat.Pdf or DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt or DocumentFormat.Rtf or DocumentFormat.Html
+        or DocumentFormat.Doc or DocumentFormat.Xls or DocumentFormat.Ppt;
 
     public static string Describe(DocumentFormat format) => format switch
     {
-        DocumentFormat.Legacy => "old Office formats (.doc, .xls, .ppt) aren't supported yet",
+        DocumentFormat.Legacy => "this kind of file isn't supported; Word, Excel and PowerPoint 97-2003 files are, named .doc, .xls or .ppt",
         DocumentFormat.Unsupported => "this kind of file isn't supported yet",
         _ => "",
     };
@@ -161,6 +178,7 @@ public static class DocumentExtractor
             DocumentFormat.Pdf => Pdf(path, recognize),
             DocumentFormat.Docx or DocumentFormat.Xlsx or DocumentFormat.Pptx or DocumentFormat.Odt => Package(path),
             DocumentFormat.Rtf => TextPagesWithBreaks(RtfText.Text(File.ReadAllBytes(path))),
+            DocumentFormat.Doc or DocumentFormat.Xls or DocumentFormat.Ppt => LegacyOffice.Pages(path),
             _ => throw new ExtractException(DocumentFormats.Describe(format)),
         };
         return Capped(pages, limits);
