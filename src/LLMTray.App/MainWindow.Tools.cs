@@ -81,6 +81,18 @@ public sealed partial class MainWindow
             }
             if (state.Tools is { } tools)
             {
+                // Several at once (Mac Configure): everything, the tools that only read, or nothing.
+                var visible = tools.Where(t => server.Reviewed.TryGetValue(t.Name, out var h) && h == t.DefinitionHash).ToList();
+                if (server.Enabled && visible.Count > 0)
+                {
+                    void SetAll(IEnumerable<McpTool> on) => app.Mcp.Store.Update(key, c => c.WithRunWithoutAsking(visible, false).WithRunWithoutAsking(on, true));
+                    var all = new List<UIElement> { Ui.Button(L.T("Everything"), () => SetAll(visible)) };
+                    if (visible.Any(t => t.ReadOnlyHint == true)) all.Add(Ui.Button(L.T("Reads Only"), () => SetAll(visible.Where(t => t.ReadOnlyHint == true))));
+                    all.Add(Ui.Button(L.T("Nothing"), () => SetAll([])));
+                    rows.Add(Ui.Row(L.T("Run without asking:"),
+                        L.T("Reading on this PC never asks once allowed. After the chat reads a mail, a file or the web, a change (send, move, delete) or a call to a server on the web is asked anyway."),
+                        Ui.Horizontal(all.ToArray())));
+                }
                 foreach (var tool in tools)
                 {
                     var reviewed = server.Reviewed.TryGetValue(tool.Name, out var hash) && hash == tool.DefinitionHash;

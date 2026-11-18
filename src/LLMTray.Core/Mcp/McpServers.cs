@@ -37,6 +37,23 @@ public sealed record McpServerConfig
     /// <summary>What the server is, in a line.</summary>
     [JsonIgnore]
     public string Summary => IsCommand ? Runtime.CommandLine.Join(Command!, Arguments) : Url ?? "";
+
+    /// <summary>
+    /// Several tools at once (Mac MCPHub.setRunWithoutAsking): each one as
+    /// reviewed to run without asking, or to be asked again. A tool not
+    /// reviewed, or changed since, is left alone: it isn't in the chat.
+    /// </summary>
+    public McpServerConfig WithRunWithoutAsking(IEnumerable<McpTool> tools, bool on)
+    {
+        var set = new HashSet<string>(RunWithoutAsking);
+        foreach (var tool in tools)
+        {
+            if (!Reviewed.TryGetValue(tool.Name, out var hash) || hash != tool.DefinitionHash) continue;
+            if (on) set.Add(hash);
+            else set.Remove(hash);
+        }
+        return this with { RunWithoutAsking = set };
+    }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

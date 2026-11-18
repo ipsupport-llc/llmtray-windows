@@ -420,8 +420,9 @@ sealed partial class ChatWindow : Window
 
     /// <summary>
     /// Before an MCP call (adr/0012): the server, the tool and its arguments
-    /// in full; Allow, Allow for This Chat (not after outside text) or Deny.
-    /// No default button: Enter mustn't approve.
+    /// in full; Allow, Always Allow, More (Allow for This Chat, Always Allow
+    /// Everything from the server) or Deny. The allowances only where they
+    /// would hold (Mac adr/0027). No default button: Enter mustn't approve.
     /// </summary>
     Task<McpApproval> AskAsync(McpApprovalRequest request, CancellationToken stopped)
     {
@@ -449,6 +450,10 @@ sealed partial class ChatWindow : Window
                 });
                 if (request.ReadOnly == true) body.Children.Add(Ui.Caption(L.T("The server says this tool only reads.")));
                 body.Children.Add(Ui.Caption(L.T("The server may do more than these arguments show.")));
+                if (request.AllowedButAsked)
+                {
+                    body.Children.Add(Ui.Caption(L.T("Asked although you allowed it: this turn has read mail, files or the web, and this call can change things or goes to the web.")));
+                }
                 if (request.AfterOutsideText)
                 {
                     body.Children.Add(Ui.Caption(L.T("Proposed right after reading outside text: check it."), Ui.Orange));
@@ -459,17 +464,36 @@ sealed partial class ChatWindow : Window
                     Title = L.T("Allow this tool call?"),
                     Content = new ScrollViewer { Content = body },
                     PrimaryButtonText = L.T("Allow"),
-                    SecondaryButtonText = request.AfterOutsideText ? "" : L.T("Allow for This Chat"),
+                    SecondaryButtonText = request.AllowancesHold ? L.T("Always Allow") : "",
                     CloseButtonText = L.T("Deny"),
                     DefaultButton = ContentDialogButton.None,
                 };
+                // More: the other allowances, each closing the question with its answer.
+                McpApproval? picked = null;
+                if (request.AllowancesHold)
+                {
+                    var more = new MenuFlyout();
+                    void Pick(string text, McpApproval answer)
+                    {
+                        var item = new MenuFlyoutItem { Text = text };
+                        item.Click += (_, _) =>
+                        {
+                            picked = answer;
+                            dialog.Hide();
+                        };
+                        more.Items.Add(item);
+                    }
+                    Pick(L.T("Allow for This Chat"), McpApproval.AllowForThisChat);
+                    Pick(L.F("Always Allow Everything from {0}", request.Server), McpApproval.AllowServerAlways);
+                    body.Children.Add(new DropDownButton { Content = L.T("More"), Flyout = more, HorizontalAlignment = HorizontalAlignment.Right });
+                }
                 // Stop closes the question with the turn: no dialog is left behind to block the next one.
                 using var closing = stopped.Register(() => DispatcherQueue.TryEnqueue(dialog.Hide));
                 var result = await dialog.ShowAsync();
-                done.TrySetResult(result switch
+                done.TrySetResult(stopped.IsCancellationRequested ? McpApproval.Deny : picked ?? result switch
                 {
                     ContentDialogResult.Primary => McpApproval.Allow,
-                    ContentDialogResult.Secondary => McpApproval.AllowForThisChat,
+                    ContentDialogResult.Secondary => McpApproval.AllowAlways,
                     _ => McpApproval.Deny,
                 });
             }

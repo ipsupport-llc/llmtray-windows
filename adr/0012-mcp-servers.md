@@ -21,9 +21,12 @@ their tools, called the way the built-in ones are (adr/0009).
   (or the structured content), at most 16,000 characters; other parts
   are named, not passed; `isError` goes back as the tool's error.
 - **Asked before a call.** Every call shows the server, the tool and its
-  arguments in full: Allow, Allow for This Chat, Deny; no default button.
-  A deny refuses the tool for the rest of the turn. **Run without
-  asking** is a per-tool switch, off until turned on. Approval is bound to
+  arguments in full: Allow, Always Allow, More (Allow for This Chat,
+  Always Allow Everything from the server), Deny; no default button (Mac
+  #356). A deny refuses the tool for the rest of the turn. **Run without
+  asking** is a per-tool switch, off until turned on; Always Allow turns it
+  on, and the server's row sets it for everything, the tools that only
+  read, or nothing at once (Mac #354). Approval is bound to
   the server and the tool's definition (a hash of its name, title,
   description, schema and read-only/destructive hints): a tool changed or
   added since the review is hidden from the model until accepted, one by
@@ -36,7 +39,8 @@ their tools, called the way the built-in ones are (adr/0009).
 - **After outside text everything is asked**: once the turn has web or
   MCP text in it, a call is asked even with an allowance, except a tool
   its command server marks read-only (what it reads comes back, its
-  arguments go nowhere); Allow for This Chat isn't offered then. **MCP
+  arguments go nowhere); the allowances are offered then only for such a
+  tool, and a call asked although it was allowed says why. **MCP
   results are outside text**: after one, the built-in tools that reach the
   internet are refused for the rest of the turn.
 - **A record in the chat**: each call leaves a line under the answer,
