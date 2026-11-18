@@ -42,7 +42,7 @@ public sealed partial class MainWindow
 
         var rows = new List<UIElement?>
         {
-            Ui.ButtonRow([period, Ui.Caption(L.T("By")), grouping],
+            Ui.ButtonRow([period, Centered(Ui.Caption(L.T("By"))), grouping],
                 [Ui.Button(L.T("Clear Statistics…"), () => _ = ClearStatisticsAsync()),
                  Ui.Button(L.T("Turn Off"), () =>
                  {
@@ -57,7 +57,15 @@ public sealed partial class MainWindow
         else
         {
             rows.Add(Tiles(total));
-            rows.Add(Table(lines));
+            // A narrow window scrolls the table sideways rather than cut its last columns.
+            rows.Add(new ScrollViewer
+            {
+                Content = Table(lines),
+                HorizontalScrollMode = ScrollMode.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollMode = ScrollMode.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            });
         }
         yield return Ui.Card(rows.ToArray());
         yield return Ui.Caption(L.T("Kept only on this PC. Clients are named by LLMTray's proxy from their User-Agent; a program that doesn't name itself shows as the API it calls, with its language, like OpenAI API (Go)."));
@@ -76,6 +84,12 @@ public sealed partial class MainWindow
             DispatcherQueue.TryEnqueue(RenderPage);
         };
         return box;
+    }
+
+    static T Centered<T>(T element) where T : FrameworkElement
+    {
+        element.VerticalAlignment = VerticalAlignment.Center;
+        return element;
     }
 
     static Grid Tiles(UsageCounts total)
@@ -105,7 +119,7 @@ public sealed partial class MainWindow
     {
         string[] headers = [usageGrouping switch { UsageGrouping.Model => L.T("Model"), UsageGrouping.Day => L.T("Day"), _ => L.T("Client") },
             L.T("Requests"), L.T("Prompt"), L.T("Cached"), L.T("Generated"), L.T("Prefill"), L.T("Decode"), L.T("First token")];
-        var grid = new Grid { Padding = Ui.RowPadding, ColumnSpacing = 16, RowSpacing = 6 };
+        var grid = new Grid { Padding = Ui.RowPadding, ColumnSpacing = 14, RowSpacing = 6 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 120 });
         for (var c = 1; c < headers.Length; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         void Cell(int row, int column, string text, bool header = false)
