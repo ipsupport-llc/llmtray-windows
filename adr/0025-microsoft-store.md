@@ -35,8 +35,11 @@ of adr/0001.
     `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET` (an Entra
     app added to Partner Center with the Developer role: it uploads
     packages and submits, and sees no financial info or account settings.
-    Manager isn't needed. It has no Azure roles. The secret lasts a year and
-    lives only in that environment);
+    Microsoft's guide for the submission API says Manager; Developer is the
+    smaller grant, checked so far with a token and a read of the app. If
+    the first CI submission is refused (401/403), the tool says so and the
+    role goes up to Manager. It has no Azure roles. The secret lasts a year
+    and lives only in that environment);
   - `tools/LLMTray.Store` talks to the Store submission API itself: a new
     submission from the last published one (pricing, properties, age
     rating kept), with this package, the **listing texts** of
@@ -69,9 +72,12 @@ of adr/0001.
 2. Copy Product identity (Package/Identity/Name, Publisher,
    PublisherDisplayName) and the Store ID into the repository variables.
 3. Entra ID: Partner Center needs an Entra tenant associated (Account
-   settings › Tenants), which takes a work account that's a global admin
-   there, not a personal Microsoft account; that role can go once it's
-   done. Then an app registration with a client secret; Partner Center ›
+   settings › Tenants), signing in with a work account of that tenant (a
+   personal Microsoft account can't). Adding an Entra application in
+   Partner Center takes a Manager there who is a global admin of the
+   tenant; that admin role can be removed afterwards and given back when
+   the applications need changing. Then an app registration with a client
+   secret; Partner Center ›
    Account settings › User management › Microsoft Entra applications: add
    it with the Developer role. Put the tenant, client ID and secret into
    the `store` environment's secrets, and make the maintainer its

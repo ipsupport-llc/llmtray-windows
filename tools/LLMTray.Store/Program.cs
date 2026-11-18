@@ -185,6 +185,11 @@ static async Task<JsonObject> JsonAsync(HttpClient http, HttpMethod method, stri
     else if (method == HttpMethod.Post) request.Content = new StringContent("", Encoding.UTF8, "application/json");
     using var response = await http.SendAsync(request);
     var text = await response.Content.ReadAsStringAsync();
-    if (!response.IsSuccessStatusCode) throw new HttpRequestException($"{method} {new Uri(url).AbsolutePath}: {(int)response.StatusCode} {text}");
+    if (!response.IsSuccessStatusCode)
+    {
+        // The app has the Developer role (adr/0025); if the Store wants Manager for this, that's what a refusal looks like.
+        var hint = (int)response.StatusCode is 401 or 403 ? " (if the Entra app's Partner Center role is Developer, try Manager: adr/0025)" : "";
+        throw new HttpRequestException($"{method} {new Uri(url).AbsolutePath}: {(int)response.StatusCode} {text}{hint}");
+    }
     return text.Length == 0 ? [] : JsonNode.Parse(text) as JsonObject ?? [];
 }
