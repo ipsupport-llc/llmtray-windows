@@ -58,47 +58,52 @@ static class Screenshots
     }
 
     /// <summary>
-    /// The chat with a short exchange and Settings' main tabs, each window
-    /// maximized, when the screen is at least the Store's 1366 × 768.
+    /// The chat with a short exchange and Settings' main tabs, each window at
+    /// 1440 × 810 (the Store takes 1366 × 768 or more), when the screen has
+    /// room for that.
     /// </summary>
     static async Task StoreAsync(App app, string folder)
     {
         var area = Microsoft.UI.Windowing.DisplayArea.Primary.WorkArea;
         File.AppendAllText(Path.Combine(Path.GetDirectoryName(folder)!, "store.txt"), $"work area {area.Width}x{area.Height}\n");
-        if (area.Width < 1366 || area.Height < 768) return;
+        if (area.Width < StoreWidth || area.Height < StoreHeight + 40) return;
         Directory.CreateDirectory(folder);
         app.ShowChat();
         await Task.Delay(800);
         if (app.Chat is { } chat)
         {
-            Maximize(chat);
+            var chatSize = Fit(chat);
             await Task.Delay(1500);
             await chat.StoreScreenshotAsync(folder, SaveElementAsync);
-            Restore(chat);
+            chat.AppWindow.Resize(chatSize);
         }
         app.ShowSettings();
         await Task.Delay(800);
         if (app.SettingsWindow is { } settings)
         {
-            Maximize(settings);
+            var settingsSize = Fit(settings);
             foreach (var tab in new[] { "models", "server", "tools", "memory" })
             {
                 settings.ShowPage(tab);
                 await Task.Delay(1500);
                 await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
             }
-            Restore(settings);
+            settings.AppWindow.Resize(settingsSize);
         }
     }
 
-    static void Maximize(Window window)
-    {
-        if (window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Maximize();
-    }
+    const int StoreWidth = 1440, StoreHeight = 810;
 
-    static void Restore(Window window)
+    /// <summary>The window's client area at the Store size, centered; returns its old size.</summary>
+    static Windows.Graphics.SizeInt32 Fit(Window window)
     {
+        var old = window.AppWindow.Size;
         if (window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter) presenter.Restore();
+        window.AppWindow.ResizeClient(new Windows.Graphics.SizeInt32(StoreWidth, StoreHeight));
+        var area = Microsoft.UI.Windowing.DisplayArea.Primary.WorkArea;
+        var size = window.AppWindow.Size;
+        window.AppWindow.Move(new Windows.Graphics.PointInt32(area.X + (area.Width - size.Width) / 2, area.Y + (area.Height - size.Height) / 2));
+        return old;
     }
 
     static async Task SaveAsync(Window window, string path)

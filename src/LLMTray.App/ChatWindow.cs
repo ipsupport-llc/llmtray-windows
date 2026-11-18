@@ -597,9 +597,9 @@ sealed partial class ChatWindow : Window
         var header = new StackPanel { Padding = new Thickness(12, 8, 12, 8), Spacing = 6 };
         header.Children.Add(first);
         header.Children.Add(second);
-        var notices = new Notices(updates: true).Panel;
-        notices.Margin = new Thickness(16, 0, 16, 4);
-        header.Children.Add(notices);
+        noticesPanel = new Notices(updates: true).Panel;
+        noticesPanel.Margin = new Thickness(16, 0, 16, 4);
+        header.Children.Add(noticesPanel);
 
         // In a Grid: the ScrollViewer by itself puts a column narrower than the window at its right edge.
         scroller.Content = new Grid { Children = { messages } };

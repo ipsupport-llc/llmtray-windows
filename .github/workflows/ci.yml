@@ -267,6 +267,20 @@ jobs:
         run: |
           scripts/build-portable.ps1 -Step build -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray
           scripts/build-portable.ps1 -Step pack -Rid ${{ matrix.rid }} -Platform ${{ matrix.platform }} -Release 0.0.1-beta.1 -Folder layout/LLMTray -Zip out/LLMTray-ci-${{ matrix.platform }}-portable.zip -Setup out
+      # A model in the library, so the Store screenshots show the app with one (x64's are the Store's).
+      - name: Cache the smoke-test model
+        if: matrix.platform == 'x64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.llmtray/models
+          key: smoke-model-${{ env.SMOKE_SHA256 }}
+      - name: Fetch the smoke-test model
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: |
+          $file = Join-Path $HOME ".llmtray/models/$env:SMOKE_REPO/$env:SMOKE_FILE"
+          dotnet run --project tools/LLMTray.Fetch -- hf "$env:SMOKE_REPO@$env:SMOKE_REVISION" $env:SMOKE_FILE $file $env:SMOKE_SHA256
+          if ($LASTEXITCODE -ne 0) { throw 'fetch failed' }
       - name: Unpack and start it
         shell: pwsh
         run: |
