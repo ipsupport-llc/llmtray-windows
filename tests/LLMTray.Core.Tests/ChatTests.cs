@@ -567,6 +567,32 @@ public sealed class ChatClientTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AMessageWithALinkIsToldWhichToolReadsIt()
+    {
+        var tools = new LLMTray.Core.Tools.ToolBox(LLMTray.Core.Tools.ToolCatalog.MakeTools(), enabled =>
+            new LLMTray.Core.Tools.ToolContext(enabled, new LLMTray.Core.Tools.WebFetch(http, "test"), "UTC", null, false));
+        var withPages = LLMTray.Core.Profiles.ProfileStore.NewDefault();
+        withPages.Tools.EnabledTools = ["get_current_date", "web_page"];
+        var profile = LLMTray.Core.Profiles.ProfileResolver.Resolve(null, withPages);
+        var chat = new ChatClient(http, api, new ChatStore(root));
+        await chat.SendAsync("what's at https://example.org/a?", new ChatOptions(null, Profile: profile, Tools: tools));
+        await chat.SendAsync("thanks", new ChatOptions(null, Profile: profile, Tools: tools));
+        var users = bodies.Last(b => b["stream"]!.GetValue<bool>())["messages"]!.AsArray()
+            .Where(m => m!["role"]!.GetValue<string>() == "user").Select(m => m!["content"]!.GetValue<string>()).ToList();
+        // Every message with a link carries the note (the same text each request), the others don't.
+        Assert.StartsWith("[App note, not the user's words: the message has a link.", users[0]);
+        Assert.EndsWith("\n\nwhat's at https://example.org/a?", users[0]);
+        Assert.Equal("thanks", users[1]);
+
+        // Without the page mode: nothing.
+        var plain = LLMTray.Core.Profiles.ProfileResolver.Resolve(null, LLMTray.Core.Profiles.ProfileStore.NewDefault());
+        var other = new ChatClient(http, api, new ChatStore(root));
+        await other.SendAsync("what's at https://example.org/a?", new ChatOptions(null, Profile: plain, Tools: tools));
+        var first = bodies.Last(b => b["stream"]!.GetValue<bool>() && b["messages"]!.AsArray().Count(m => m!["role"]!.GetValue<string>() == "user") == 1);
+        Assert.DoesNotContain("App note", first["messages"]!.ToJsonString());
+    }
+
+    [Fact]
     public async Task PinnedFilesGoInTheSystemPromptAndNewFilesAreSaid()
     {
         var project = Guid.NewGuid();

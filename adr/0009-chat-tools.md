@@ -54,6 +54,16 @@ every open call a result. Results are compact JSON; a failure is
 service asks for) is listed under the answer and saved with it, as the Mac
 saves `sources`; tool messages themselves aren't saved.
 
+**A link in the user's message** (Mac `LinkNote`). While the page mode
+(`web_search` with `url`) is declared, each user message with an
+http(s) link carries a one-line app note: to read it, call `web_search`
+with source=page and the link. Small models answered "I can't open this
+link" without trying the tool. Every such message carries it, not only
+the latest, so the request's prefix stays the same for the server's
+cache. Only the in-app chat adds it (never API clients), and nothing is
+added without the page mode, after something was shown, or with pinned
+files (both turn the internet tools off).
+
 **Network.** Tool requests go through the app's web client (the system
 proxy, so they work behind a corporate proxy), with an honest User-Agent
 (`LLMTray-Windows/<version>` and the repository) and nothing cached on
