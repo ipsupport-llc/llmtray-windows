@@ -117,9 +117,25 @@ public sealed record ChatOptions(string? Model, bool Thinking = true, double? Te
 
 /// <summary>What the user is asked before an MCP call (adr/0012).</summary>
 /// <param name="AfterOutsideText">The call was proposed right after the turn read outside text: check it.</param>
-public sealed record McpApprovalRequest(string Server, string Tool, string Arguments, bool AfterOutsideText, bool? ReadOnly);
+/// <param name="AllowancesHold">
+/// Whether an allowance (always, for this chat) would stand for this call: yes before outside text; after it only
+/// for a tool the server marks read-only on a command server (Mac adr/0027). Only then are they offered.
+/// </param>
+/// <param name="AllowedButAsked">The user let it run without asking, yet it's asked (after outside text): the question says why.</param>
+/// <param name="EverythingOffered">Always Allow Everything from the server is offered: never after outside text.</param>
+public sealed record McpApprovalRequest(string Server, string Tool, string Arguments, bool AfterOutsideText, bool? ReadOnly,
+    bool AllowancesHold = true, bool AllowedButAsked = false, bool EverythingOffered = true);
 
-public enum McpApproval { Deny, Allow, AllowForThisChat }
+public enum McpApproval
+{
+    Deny,
+    Allow,
+    AllowForThisChat,
+    /// <summary>This tool, from now on (as its switch in Settings › Tools).</summary>
+    AllowAlways,
+    /// <summary>Every tool of this server as reviewed, from now on.</summary>
+    AllowServerAlways,
+}
 
 /// <summary>An MCP call, kept under the answer and saved with it (the Mac's mcpCalls).</summary>
 public sealed record McpCallRecord(string Server, string Tool, string? Action, string Arguments, string Outcome, DateTimeOffset Date);
@@ -1049,14 +1065,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
         var server = options.Mcp!.Current(mcp.Server.Key) ?? mcp.Server;
         bool standing;
         lock (sync) standing = server.RunWithoutAsking.Contains(mcp.Tool.DefinitionHash) || chatAllowed.Contains(hash);
-        // After outside text, a standing allowance holds only for a read-only tool of a command server; anything else is asked.
-        var holds = standing && (!outsideText || (server.IsCommand && mcp.Tool.ReadOnlyHint == true));
-        if (!holds)
+        // After outside text, a standing allowance holds only for a read-only tool of a command server: what it
+        // reads comes back into the chat, its arguments go nowhere. A change, or any call to a server on the web, is asked.
+        var allowancesHold = !outsideText || (server.IsCommand && mcp.Tool.ReadOnlyHint == true);
+        if (!(standing && allowancesHold))
         {
             answer.Activity = "approval";
             Changed?.Invoke();
-            var decision = await options.Approve!(new McpApprovalRequest(mcp.Server.Name, mcp.Tool.Title ?? mcp.Tool.Name, shown, outsideText, mcp.Tool.ReadOnlyHint), token)
+            // Everything from the server: the tools listed when asked, not whatever is listed by the time it's answered.
+            // Not after outside text: a read-only tool may be allowed then, never the server's other tools.
+            var listedWhenAsked = allowancesHold && !outsideText ? options.Mcp.State(server).Tools ?? [mcp.Tool] : null;
+            var decision = await options.Approve!(new McpApprovalRequest(mcp.Server.Name, mcp.Tool.Title ?? mcp.Tool.Name, shown, outsideText, mcp.Tool.ReadOnlyHint,
+                    allowancesHold, AllowedButAsked: standing, EverythingOffered: listedWhenAsked is not null), token)
                 .WaitAsync(token).ConfigureAwait(false);
+            // Stopped as it was answered: nothing is allowed or run.
+            token.ThrowIfCancellationRequested();
             answer.Activity = call.Name;
             Changed?.Invoke();
             if (decision == McpApproval.Deny)
@@ -1065,9 +1088,21 @@ public sealed class ChatClient(HttpClient http, Uri apiBase, ChatStore store)
                 Record("denied");
                 return (new Tools.ToolOutcome("The user didn't allow this call. Don't ask again unless the user does.", null, true), false);
             }
-            if (decision == McpApproval.AllowForThisChat && !outsideText)
+            // An allowance only where it would hold: after outside text, anything else is asked again next time anyway.
+            // Allowed always: the Settings switch alone, so turning it off there asks again in this chat too.
+            // Only for the server the question was about: one replaced under its key meanwhile gets nothing.
+            if (decision == McpApproval.AllowForThisChat && allowancesHold)
             {
                 lock (sync) chatAllowed.Add(hash);
+            }
+            else if (decision == McpApproval.AllowAlways && allowancesHold)
+            {
+                options.Mcp.Store.Update(server.Key, c => c.SameServer(server) ? c.WithRunWithoutAsking([mcp.Tool], true) : c);
+            }
+            else if (decision == McpApproval.AllowServerAlways && listedWhenAsked is not null)
+            {
+                // Every tool as reviewed; one not reviewed (or changed since) stays hidden and asked once accepted.
+                options.Mcp.Store.Update(server.Key, c => c.SameServer(server) ? c.WithRunWithoutAsking(listedWhenAsked, true) : c);
             }
         }
         try
