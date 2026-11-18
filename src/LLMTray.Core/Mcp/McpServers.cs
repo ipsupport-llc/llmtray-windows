@@ -28,6 +28,15 @@ public sealed record McpServerConfig
     /// <summary>Tools (by definition hash) the user lets run without asking.</summary>
     public HashSet<string> RunWithoutAsking { get; init; } = [];
 
+    /// <summary>
+    /// The user's own app's client id, for a server that registers no clients (Slack); its secret, if any,
+    /// is kept protected apart (<see cref="McpSignIn.OwnAppSecretName"/>).
+    /// </summary>
+    public string? OAuthClientId { get; init; }
+
+    /// <summary>Added, but its server registers no clients: it waits, off, for the user's own app.</summary>
+    public bool PendingOwnApp { get; init; }
+
     /// <summary>A URL server signed in to with OAuth (adr/0015): where and as whom; the tokens are kept apart.</summary>
     public McpOAuthState? OAuth { get; init; }
 

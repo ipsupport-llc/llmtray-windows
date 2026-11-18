@@ -26,6 +26,40 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
 
     static string TokensName(string key) => $"mcp.{key}.oauth";
 
+    /// <summary>Where the user's own app's secret is kept (protected, never in the settings file).</summary>
+    public static string OwnAppSecretName(string key) => $"mcp.{key}.client-secret";
+
+    /// <summary>Whether a secret of the user's own app is kept for this server (the secret itself never leaves here but to the token endpoint).</summary>
+    public bool HasOwnAppSecret(string key) => secrets.Get(OwnAppSecretName(key)) is { Length: > 0 };
+
+    /// <summary>
+    /// The user's own app for a server (Slack and the like): its client id
+    /// (null or empty: none, back to registering), and its secret when one is
+    /// given (null keeps the one kept; empty removes it). The next sign-in uses it.
+    /// </summary>
+    public void SetOwnApp(string key, string? clientId, string? secret)
+    {
+        var id = clientId?.Trim() is { Length: > 0 } t ? t : null;
+        lock (sync)
+        {
+            store.Update(key, c => c with { OAuthClientId = id });
+            if (id is null || secret is { Length: 0 }) secrets.Set(OwnAppSecretName(key), null);
+            else if (secret is { Length: > 0 }) secrets.Set(OwnAppSecretName(key), secret.Trim());
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>The redirect URL to register for one's own app at this server's sign-in server (found by asking it).</summary>
+    public async Task<string> OwnAppRedirectAsync(string key, CancellationToken cancellationToken)
+    {
+        if (store.Load().FirstOrDefault(s => s.Key == key) is not { IsCommand: false } config || !Uri.TryCreate(config.Url, UriKind.Absolute, out var server))
+        {
+            throw McpOAuthException.Of(McpOAuthFailure.NoMetadata);
+        }
+        var discovery = await McpOAuth.DiscoverAsync(server, null, fetch, cancellationToken, resolve).ConfigureAwait(false);
+        return McpOAuth.ManualRedirectUri(discovery.Server.Issuer);
+    }
+
     public bool IsSigningIn(string key)
     {
         lock (sync) return signingIn.Contains(key);
@@ -106,7 +140,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             try
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var fresh = await McpOAuth.RefreshAsync(t, state, fetch, Now, limit.Token, resolve).ConfigureAwait(false);
+                var fresh = await McpOAuth.RefreshAsync(t, state, fetch, Now, limit.Token, resolve, secrets.Get(OwnAppSecretName(key))).ConfigureAwait(false);
                 // Checked and kept together: a sign-in or sign-out since wins.
                 lock (sync)
                 {
@@ -176,10 +210,23 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         {
             var parsed = McpOAuth.ParseChallenge(challenge);
             var discovery = await McpOAuth.DiscoverAsync(server, parsed, fetch, cancellationToken, resolve).ConfigureAwait(false);
-            // A kept registration of this very issuer.
+            // A kept registration of this very issuer -- unless the user has since given (or taken back) their own app.
             (string, OAuthRegistration)? kept = config.OAuth is { } old && McpOAuth.Canonical(old.Metadata.Issuer) == McpOAuth.Canonical(discovery.Server.Issuer)
+                && (old.Registration == OAuthRegistration.Manual ? old.ClientId == config.OAuthClientId : config.OAuthClientId is null)
                 ? (old.ClientId, old.Registration) : null;
-            var (clientId, registration) = await McpOAuth.ClientAsync(discovery.Server, kept, server, fetch, cancellationToken, resolve).ConfigureAwait(false);
+            string clientId;
+            OAuthRegistration registration;
+            try
+            {
+                (clientId, registration) = await McpOAuth.ClientAsync(discovery.Server, kept, server, fetch, cancellationToken, resolve, config.OAuthClientId)
+                    .ConfigureAwait(false);
+            }
+            catch (McpOAuthException e) when (e.Kind == McpOAuthFailure.NoRegistration)
+            {
+                // No registration there: it takes the user's own app (Settings › Tools says how).
+                store.Update(key, c => c with { PendingOwnApp = true });
+                throw McpOAuthException.Of(McpOAuthFailure.NeedsOwnApp);
+            }
             if (!McpOAuth.MixUpSafe(discovery.Server, registration)) throw McpOAuthException.Of(McpOAuthFailure.MixUpRisk);
             var scope = discovery.Scope;
             var stepUp = parsed?.Scope is { Length: > 0 } s ? s : config.OAuth?.StepUpScope;
@@ -189,8 +236,10 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             {
                 throw McpOAuthException.Of(McpOAuthFailure.InsecureUrl);
             }
-            using var listener = new LoopbackCallback();
-            var flow = new OAuthFlow(discovery.Server, clientId, registration, discovery.ResourceUrl, scope, listener.Port);
+            // The user's own app: the fixed port its registered redirect names.
+            using var listener = OpenCallback(registration);
+            var flow = new OAuthFlow(discovery.Server, clientId, registration, discovery.ResourceUrl, scope, listener.Port,
+                clientSecret: registration == OAuthRegistration.Manual ? secrets.Get(OwnAppSecretName(key)) : null);
             listener.Accepts = flow.IsMine;
             openBrowser(flow.AuthorizationUrl);
             var target = await listener.WaitAsync(CallbackTimeout, cancellationToken).ConfigureAwait(false);
@@ -201,6 +250,7 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
                 Keep(key, fresh);
                 store.Update(key, c => c with
                 {
+                    PendingOwnApp = false,
                     OAuth = new McpOAuthState
                     {
                         Metadata = discovery.Server,
@@ -230,7 +280,8 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
             try
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var request = McpOAuth.FormRequest(endpoint, [new("token", t.RefreshToken ?? t.AccessToken), new("client_id", state.ClientId)]);
+                using var request = McpOAuth.FormRequest(endpoint, McpOAuth.WithSecret([new("token", t.RefreshToken ?? t.AccessToken), new("client_id", state.ClientId)],
+                    state.Registration == OAuthRegistration.Manual ? secrets.Get(OwnAppSecretName(key)) : null));
                 await fetch.FetchAsync(request, limit.Token).ConfigureAwait(false);
             }
             catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException)
@@ -240,13 +291,28 @@ public sealed class McpSignIn(McpServerStore store, IMcpSecrets secrets, IOAuthF
         MarkNeedsSignIn(key);
     }
 
-    /// <summary>A server removed: its tokens go with it.</summary>
+    /// <summary>A server removed: its tokens and its own app's secret go with it.</summary>
     public void Forget(string key)
     {
         lock (sync)
         {
             generation[key] = generation.GetValueOrDefault(key) + 1;
             Keep(key, null);
+            secrets.Set(OwnAppSecretName(key), null);
+        }
+    }
+
+    /// <summary>The callback listener: any free port, or the user's own app's fixed one (in use: said so).</summary>
+    static LoopbackCallback OpenCallback(OAuthRegistration registration)
+    {
+        if (registration != OAuthRegistration.Manual) return new LoopbackCallback();
+        try
+        {
+            return new LoopbackCallback(McpOAuth.ManualPort);
+        }
+        catch (System.Net.Sockets.SocketException)
+        {
+            throw McpOAuthException.Of(McpOAuthFailure.PortInUse);
         }
     }
 }

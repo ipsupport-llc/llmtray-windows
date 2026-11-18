@@ -87,10 +87,26 @@ with the Mac app's rules unchanged:
 - The chat sees a failed call: "<server> needs the user to sign in
   (Settings › Tools)".
 
+## The user's own app
+
+For a server whose sign-in server registers no clients and takes no
+metadata document (Slack; Mac adr/0028), the user makes an app there and
+enters it under the server's **Your Own App…** in Settings › Tools: the
+redirect URL to register (asked of the sign-in server: a fixed loopback
+port, 33418, and the issuer's callback path), the client ID, and the
+secret if the app has one. The client ID is in `mcp-servers.json`; the
+secret is DPAPI-protected with the tokens, sent only in token,
+refresh and revocation requests (`client_secret_post`), never in the
+browser's address or a log. A server added that turns out to need one
+stays, off, saying so (`pendingOwnApp`), and signing in with the app
+finishes adding it. A kept registration stands only while it's the one
+the user gave (or none was given); removing the server forgets the
+secret. The fixed port in use by another program fails the sign-in with
+that said.
+
 ## Not yet
 
-A client ID the user pastes, for servers that register no clients and
-need one's own app (Slack on the Mac). Signing in to command (stdio)
+Signing in to command (stdio)
 servers, which take keys in their environment. Device-code flow. DNS
 rebinding is not checked: a host name is checked when the sign-in looks
 at it, not when it connects (as on the Mac). A public authorization page

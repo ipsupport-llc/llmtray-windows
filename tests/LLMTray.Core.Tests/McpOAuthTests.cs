@@ -267,6 +267,66 @@ public sealed class McpOAuthTests : IDisposable
         Assert.Null(signIn.Tokens(server.Key));
     }
 
+    [Fact]
+    public async Task AServerThatRegistersNoAppsTakesTheUsersOwn()
+    {
+        var store = new McpServerStore(Path.Combine(root, "mcp-servers.json"));
+        var server = store.Add(new McpServerConfig { Name = "slack", Url = "https://mcp.example.com/mcp" });
+        var fetch = new FakeFetcher();
+        fetch.Answers["https://mcp.example.com/.well-known/oauth-protected-resource/mcp"] = (200,
+            """{"resource":"https://mcp.example.com/mcp","authorization_servers":["https://auth.example.com"]}""");
+        // No registration endpoint, no metadata documents.
+        fetch.Answers["https://auth.example.com/.well-known/oauth-authorization-server"] = (200, AuthServer.Replace(
+            "\"registration_endpoint\":\"https://auth.example.com/register\",", "", StringComparison.Ordinal));
+        fetch.Answers["https://auth.example.com/token"] = (200, """{"access_token":"at-own","refresh_token":"rt-own","expires_in":3600,"token_type":"bearer"}""");
+        var secrets = new MemorySecrets();
+        using var browser = new HttpClient();
+        Uri? opened = null;
+        var signIn = new McpSignIn(store, secrets, fetch, url =>
+        {
+            opened = url;
+            var q = System.Web.HttpUtility.ParseQueryString(url.Query);
+            _ = Task.Run(async () =>
+            {
+                using var ok = await browser.GetAsync($"{q["redirect_uri"]}?code=c1&state={Uri.EscapeDataString(q["state"]!)}&iss={Uri.EscapeDataString("https://auth.example.com")}");
+            });
+        }, Public);
+
+        // Without one: it says so, and the server waits for it.
+        var e = await Assert.ThrowsAsync<McpOAuthException>(() => signIn.SignInAsync(server.Key, null, default));
+        Assert.Equal(McpOAuthFailure.NeedsOwnApp, e.Kind);
+        Assert.True(store.Load().Single().PendingOwnApp);
+        Assert.Null(opened);
+
+        // The redirect to register: the fixed port and this issuer's path.
+        var redirect = await signIn.OwnAppRedirectAsync(server.Key, default);
+        Assert.Equal(McpOAuth.ManualRedirectUri("https://auth.example.com"), redirect);
+        Assert.StartsWith("http://127.0.0.1:33418/callback/", redirect);
+
+        signIn.SetOwnApp(server.Key, " own-client ", "s3cret-9");
+        Assert.True(signIn.HasOwnAppSecret(server.Key));
+        await signIn.SignInAsync(server.Key, null, default);
+        var saved = store.Load().Single();
+        Assert.Equal("own-client", saved.OAuth!.ClientId);
+        Assert.Equal(OAuthRegistration.Manual, saved.OAuth.Registration);
+        Assert.False(saved.PendingOwnApp);
+        Assert.Contains("redirect_uri=" + Uri.EscapeDataString(redirect), opened!.Query);
+        // The secret: never in the browser's address or the settings file, only in the token requests.
+        Assert.DoesNotContain("s3cret", opened.AbsoluteUri, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cret", File.ReadAllText(Path.Combine(root, "mcp-servers.json")), StringComparison.Ordinal);
+        Assert.Contains("client_secret=s3cret-9", fetch.Requests.Single(r => r.Url == "https://auth.example.com/token").Body);
+        await signIn.RefreshAsync(server.Key);
+        Assert.All(fetch.Requests.Where(r => r.Url == "https://auth.example.com/token"), r => Assert.Contains("client_secret=s3cret-9", r.Body));
+        Assert.All(fetch.Requests.Where(r => r.Url != "https://auth.example.com/token"), r => Assert.DoesNotContain("s3cret", r.Body, StringComparison.Ordinal));
+
+        // Taken back: the secret goes; removed: everything goes.
+        signIn.SetOwnApp(server.Key, "own-client", "");
+        Assert.False(signIn.HasOwnAppSecret(server.Key));
+        signIn.SetOwnApp(server.Key, "own-client", "again");
+        signIn.Forget(server.Key);
+        Assert.Empty(secrets.Values);
+    }
+
     sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
     {
         public readonly List<string?> Authorizations = [];
