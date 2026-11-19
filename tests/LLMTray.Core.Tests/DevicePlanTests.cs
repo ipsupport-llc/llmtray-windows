@@ -101,6 +101,36 @@ public class DevicePlanTests
         Assert.Equal(["cpu"], Order(DevicePlan.Build(DeviceChoice.Automatic, Both, [])));
     }
 
+    [Fact]
+    public void AChosenCardThatCantRunGoesToTheOthersOneByOne()
+    {
+        // Not to a split of the rest: each other card, most free memory first.
+        var gone = DeviceChoice.Card(new GpuDevice("Vulkan3", "NVIDIA GeForce RTX 5090", 32000, 31000), []);
+        Assert.Equal(["Vulkan2", "Vulkan1", "Vulkan0", "cpu"], Order(DevicePlan.Build(gone, Both, [Uhd, Rtx, Rx])));
+    }
+
+    [Fact]
+    public void AChosenCardWithNoCardsListedIsLookedForAgain()
+    {
+        var chain = DevicePlan.Build(DeviceChoice.Card(Rtx, [Rtx]), Both, []);
+        Assert.Equal(["cpu"], Order(chain));
+        Assert.True(chain.ChosenMissing);
+    }
+
+    [Fact]
+    public void ProcessorOnlyWithoutTheCpuBuildNeverFallsToAGpu()
+    {
+        var chain = DevicePlan.Build(DeviceChoice.Cpu, [Vulkan], [Rtx]);
+        Assert.Empty(chain.Attempts);
+        Assert.NotNull(chain.Note);
+    }
+
+    [Fact]
+    public void AnAttemptIsTheSameAcrossMovedIndexes()
+    {
+        Assert.Equal(new LoadAttempt(Vulkan, [Rtx]).Key, new LoadAttempt(Vulkan, [Rtx with { Id = "Vulkan0" }]).Key);
+    }
+
     [Theory]
     [InlineData("Intel(R) UHD Graphics 770", true)]
     [InlineData("Intel(R) Iris(R) Xe Graphics", true)]

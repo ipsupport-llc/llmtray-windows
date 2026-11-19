@@ -41,7 +41,8 @@ public static class DeviceChoice
 /// <summary>One try at loading a model: a backend and, on a GPU backend, the cards it gets (none: llama.cpp's own pick).</summary>
 public sealed record LoadAttempt(LlamaBackend Backend, IReadOnlyList<GpuDevice> Devices)
 {
-    public string Key => Backend.Name + ":" + string.Join(",", Devices.Select(d => d.Id + "=" + d.Description));
+    /// <summary>The same try across a fresh listing: by the cards' names, not their indexes, which move.</summary>
+    public string Key => Backend.Name + ":" + string.Join(",", Devices.Select(d => d.Description));
 
     /// <summary>The cards by name ("A + B"); null on the CPU or with llama.cpp's own pick.</summary>
     public string? Label => Devices.Count == 0 ? null : string.Join(" + ", Devices.Select(d => d.Description));
@@ -74,7 +75,11 @@ public static partial class DevicePlan
         var missing = false;
         choice ??= DeviceChoice.Automatic;
 
-        if (choice == DeviceChoice.Cpu && cpu is not null) return new([new LoadAttempt(cpu, [])], null);
+        if (choice == DeviceChoice.Cpu)
+        {
+            // The CPU only, as chosen: never a GPU instead.
+            return cpu is not null ? new([new LoadAttempt(cpu, [])], null) : new([], "the CPU build is missing");
+        }
         if (gpu is not null)
         {
             if (devices is null)
@@ -85,7 +90,12 @@ public static partial class DevicePlan
             }
             else if (devices.Count == 0)
             {
-                if (choice != DeviceChoice.Automatic) note = "no graphics card was found";
+                if (DeviceChoice.ParseCard(choice) is { } gone)
+                {
+                    note = $"{gone.Description} isn't connected";
+                    missing = true;
+                }
+                else if (choice != DeviceChoice.Automatic) note = "no graphics card was found";
             }
             else
             {
@@ -111,7 +121,9 @@ public static partial class DevicePlan
                 {
                     note = "only one graphics card can take it";
                 }
-                if (first is null && singles.Count > 0)
+                // Automatic's pick also for "all" with one card; a chosen card that can't run goes
+                // straight to the other cards one by one, never to a split.
+                if (first is null && singles.Count > 0 && DeviceChoice.ParseCard(choice) is null)
                 {
                     // Automatic: every dedicated card (never split onto an integrated one), or the best integrated one.
                     var dedicated = usable.Where(d => !IsIntegrated(d.Description)).ToList();

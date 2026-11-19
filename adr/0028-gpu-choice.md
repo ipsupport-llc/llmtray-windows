@@ -46,8 +46,9 @@ was just plugged in) or has less than 512 MB free. A card short of room
 for the whole model is still tried: llama.cpp's `--fit` puts what fits on
 it and the rest on the CPU, which is usually faster than the CPU alone. A try that fails (llama-server exits while loading, or doesn't
 answer in time) moves to the next one. When a model loaded further
-down the chain, that device is tried first for that model until the app
-quits, so the next load doesn't fail its way down again; a change of the
+down the chain because the first try failed, that device is tried first
+for that model until the app quits (by the cards' names: a fresh listing
+can move their indexes), so the next load doesn't fail its way down again; a change of the
 setting starts over from the chosen one. A change applies from the next
 load: Settings offers Restart the Model when one is running.
 
@@ -60,8 +61,10 @@ connected."). `llmtray status` gives the device in use, the choice
 reset): llama-server exits; today the model just stops with an error.
 Now it is loaded again through the same chain, once, with the cards
 listed anew; a second loss in a row stops with the error, so a broken
-driver doesn't loop. A Stop or another model's load in between cancels
-the reload.
+driver doesn't loop. A request arriving meanwhile waits for the reload
+(or does it, with the same limit); a Stop, even mid-load, or another
+model's load cancels it; a server lost during a switch isn't reloaded,
+the switch decides what runs.
 
 ## What doesn't change
 

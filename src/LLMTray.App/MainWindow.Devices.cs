@@ -16,8 +16,10 @@ public sealed partial class MainWindow
         var app = App.Current;
         if (!cardsAsked)
         {
+            // After this render, never inside it: the page is being built from this very enumeration.
             cardsAsked = true;
-            _ = LookForCardsAsync(fresh: false);
+            cardsLooking = true;
+            DispatcherQueue.TryEnqueue(() => _ = LookForCardsAsync(fresh: false));
         }
         var choice = app.Settings.RunOn;
         var picker = new ComboBox { MinWidth = 300 };
@@ -37,7 +39,8 @@ public sealed partial class MainWindow
         {
             picker.Items.Insert(1, new ComboBoxItem
             {
-                Content = cards is null && cardsLooking ? saved.Description : L.F("{0} (not connected)", saved.Description),
+                // "Not connected" only when the cards were listed and it isn't among them.
+                Content = cards is null ? saved.Description : L.F("{0} (not connected)", saved.Description),
                 Tag = choice,
             });
         }
@@ -63,6 +66,8 @@ public sealed partial class MainWindow
         yield return Ui.Section(L.T("Graphics card"));
         var rows = new List<UIElement?> { Ui.Row(L.T("Run models on"), help, Ui.Horizontal(picker, look)) };
         var host = app.Host.State;
+        // A load since the change used the new choice: no restart left to offer.
+        if (host.Status == HostStatus.Loading) runOnChangedFrom = null;
         if (host.Note is { } note && host.Status is HostStatus.Running or HostStatus.Loading)
         {
             rows.Add(Ui.Row(L.T("Now"), note, Ui.Value(Status.Device(host) ?? "—")));

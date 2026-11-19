@@ -376,6 +376,31 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SaysWhyWhenTheChosenCardIsGone()
+    {
+        await using var cards = new FakeLauncher();
+        await using var h = new ModelHost(cards,
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs7"),
+            _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([Uhd]), () => DeviceChoice.Card(Rtx, [Rtx]));
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal(Uhd.Description, h.State.Device);
+        Assert.Equal("On Intel(R) UHD Graphics 770: NVIDIA GeForce RTX 4070 isn't connected.", h.State.Note);
+    }
+
+    [Fact]
+    public async Task ARequestDuringAReloadWaitsForIt()
+    {
+        await host.LoadAsync(catalog.Models[0]);
+        launcher.KillAll(exitCode: 3);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (host.State.Status == HostStatus.Running && launcher.Starts == 1 && DateTime.UtcNow < deadline) await Task.Delay(5);
+        // "Whatever model is loaded" during the reload: served by it, not refused as no model.
+        using var lease = await host.AcquireAsync(null, CancellationToken.None);
+        Assert.Equal("alpha-Q4", lease.Model.Name);
+        Assert.Equal(2, launcher.Starts);
+    }
+
+    [Fact]
     public async Task ProcessorOnlyNeverAsksForCards()
     {
         var asked = 0;
