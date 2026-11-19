@@ -183,14 +183,21 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
         return 2;
     }
     string? api = null;
-    await foreach (var reply in AskAsync(new JsonObject { ["cmd"] = "status" }, ct))
+    (string Header, string Token)? own = null;
+    // The app's per-run token too: the request goes as LLMTray's own, so a required API key isn't asked (adr/0027).
+    await foreach (var reply in AskAsync(new JsonObject { ["cmd"] = "status", ["appToken"] = true }, ct))
     {
         if (reply["error"] is { } error)
         {
             Console.Error.WriteLine(OneLine($"llmtray: {error}"));
             return 1;
         }
-        if (reply["done"] is not null) api = ApiOf(reply);
+        if (reply["done"] is null) continue;
+        api = ApiOf(reply);
+        if (reply["appHeader"] is JsonValue h && h.TryGetValue<string>(out var header) && reply["appToken"] is JsonValue v && v.TryGetValue<string>(out var token))
+        {
+            own = (header, token);
+        }
     }
     if (api is null)
     {
@@ -208,6 +215,7 @@ static async Task<int> Chat(CliArguments a, CancellationToken ct)
     {
         Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
     };
+    if (own is { } app) request.Headers.TryAddWithoutValidation(app.Header, app.Token);
     using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
     if (!response.IsSuccessStatusCode)
     {

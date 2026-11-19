@@ -266,7 +266,8 @@ public partial class App : Application
         var mcpStore = new LLMTray.Core.Mcp.McpServerStore(Path.Combine(DataFolder, "mcp-servers.json"));
         // MCP requests and sign-ins follow no redirects (a token must not be carried elsewhere) and keep no cookies.
         var mcpWeb = CreateWebClient(redirects: false);
-        McpSignIn = new LLMTray.Core.Mcp.McpSignIn(mcpStore, new ProtectedSecrets(Path.Combine(DataFolder, "secrets")),
+        Secrets = new ProtectedSecrets(Path.Combine(DataFolder, "secrets"));
+        McpSignIn = new LLMTray.Core.Mcp.McpSignIn(mcpStore, Secrets,
             new LLMTray.Core.Mcp.OAuthHttp(mcpWeb), url => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true })?.Dispose());
         Mcp = new LLMTray.Core.Mcp.McpHub(mcpStore, mcpWeb, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "dev", DataFolder, JobObjectLauncher.Own,
             signIn: McpSignIn);
@@ -321,10 +322,13 @@ public partial class App : Application
             // Kept on this PC only (adr/0026), while the user has them on.
             CountsUsage = () => Settings.KeepRequestStatistics,
             UsageRecorded = (model, stats) => RequestStatistics.Record(stats, model.Name, DateTime.Now),
+            // The API key (adr/0027): read per request, the key from memory.
+            Access = () => Settings.RequireApiKey ? new ApiAccess(true, Settings.ApiKeyOnlyFromOtherDevices, apiKey) : ApiAccess.Open,
         };
+        if (Settings.RequireApiKey) ReadApiKey();
         try
         {
-            await proxy.StartAsync();
+            await proxy.StartAsync(Settings.ListensOnNetwork);
         }
         catch (IOException)
         {
@@ -639,6 +643,90 @@ public partial class App : Application
             _ => L.T("LLMTray: no model loaded"),
         });
         HostChanged?.Invoke(state);
+    }
+
+    ProtectedSecrets Secrets { get; set; } = null!;
+    const string ApiKeyName = "api-key";
+    volatile string? apiKey;
+
+    /// <summary>The API key clients are asked for (adr/0027), DPAPI-protected; null while none was made or it can't be read.</summary>
+    public string? ApiKey => apiKey;
+
+    /// <summary>A key is saved but Windows can't decrypt it now: every outside client the rule asks is refused.</summary>
+    public bool ApiKeyUnreadable { get; private set; }
+
+    /// <summary>Whether the API listens on the network now.</summary>
+    public bool ProxyOnNetwork => proxy?.OnNetwork == true;
+
+    /// <summary>Whether LLMTray's API holds its port now.</summary>
+    public bool ProxyListening => proxy?.Listening == true && ProxyError is null;
+
+    readonly SemaphoreSlim networkChange = new(1, 1);
+
+    /// <summary>The per-run token LLMTray's own requests carry: the CLI gets it over this user's pipe.</summary>
+    internal string AppToken => appToken;
+
+    /// <summary>Reads the key again (Settings opened).</summary>
+    public void ReadApiKey()
+    {
+        apiKey = Secrets.Get(ApiKeyName);
+        ApiKeyUnreadable = apiKey is null && Secrets.Has(ApiKeyName);
+    }
+
+    /// <summary>The key, made and saved first if there's none yet, never over one that's there but can't be read now.</summary>
+    public string? EnsureApiKey()
+    {
+        ReadApiKey();
+        if (apiKey is not null) return apiKey;
+        return ApiKeyUnreadable ? null : NewApiKey();
+    }
+
+    /// <summary>A new key replaces the old one: clients using it get 401. Null when it couldn't be saved.</summary>
+    public string? NewApiKey()
+    {
+        var key = ApiKeyCheck.Generate();
+        try
+        {
+            Secrets.Set(ApiKeyName, key);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        apiKey = key;
+        ApiKeyUnreadable = false;
+        return key;
+    }
+
+    /// <summary>
+    /// The proxy listens as the settings say: on the network or loopback
+    /// only. Requests under way are cut off by the change.
+    /// </summary>
+    public async Task ApplyNetworkAsync()
+    {
+        if (proxy is null) return;
+        // One change at a time, each to the settings as they are when it runs: the last toggle wins.
+        await networkChange.WaitAsync();
+        try
+        {
+            var wanted = Settings.ListensOnNetwork;
+            if (proxy.OnNetwork == wanted && ProxyError is null) return;
+            try
+            {
+                await proxy.RestartAsync(wanted);
+                ProxyError = null;
+            }
+            catch (Exception e)
+            {
+                ProxyError = e is IOException
+                    ? L.F("Port {0} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.", AppInfo.ProxyPort)
+                    : e.Message;
+            }
+        }
+        finally
+        {
+            networkChange.Release();
+        }
     }
 
     internal void UpdateSettings(AppSettings settings)

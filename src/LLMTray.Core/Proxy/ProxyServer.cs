@@ -13,7 +13,8 @@ using Microsoft.Extensions.Logging;
 namespace LLMTray.Core.Proxy;
 
 /// <summary>
-/// The local API on <c>localhost:8765</c> (adr/0001). It lists the models
+/// The local API on <c>localhost:8765</c> (adr/0001), and on the PC's
+/// network addresses too when the user allows it (adr/0027). It lists the models
 /// folder, picks the model a request names, has the host load it, and
 /// streams the request to llama-server and the answer back.
 /// </summary>
@@ -22,7 +23,7 @@ public sealed class ProxyServer : IAsyncDisposable
     static readonly HashSet<string> HopByHop = new(StringComparer.OrdinalIgnoreCase)
     {
         "Connection", "Keep-Alive", "Proxy-Connection", "Transfer-Encoding", "Upgrade", "TE", "Trailer",
-        "Host", "Content-Length", "Authorization", AppHeader,
+        "Host", "Content-Length", "Authorization", "x-api-key", AppHeader,
     };
 
     /// <summary>
@@ -85,26 +86,71 @@ public sealed class ProxyServer : IAsyncDisposable
     public Action<ModelEntry, Usage.RequestStats>? UsageRecorded { get; set; }
     public Func<bool>? CountsUsage { get; set; }
 
+    /// <summary>The API key's settings, read per request (adr/0027); null: no key asked.</summary>
+    public Func<ApiAccess>? Access { get; set; }
+
+    /// <summary>Whether it holds its port now (not between a restart's stop and start).</summary>
+    public bool Listening => app is not null;
+
+    /// <summary>Whether it listens on the PC's network addresses, not loopback only.</summary>
+    public bool OnNetwork { get; private set; }
+
     /// <summary>Background work (memory's reading) that every request here preempts.</summary>
     public Runtime.BackgroundWork? Background { get; set; }
 
     /// <summary>Requests carry images as base64: room for several, not unbounded.</summary>
     public const long MaxBodyBytes = 256L * 1024 * 1024;
 
-    /// <summary>Starts listening. Throws <see cref="IOException"/> when the port is taken.</summary>
-    public async Task StartAsync()
+    /// <summary>
+    /// Starts listening: on loopback only, or on every address with
+    /// <paramref name="onNetwork"/>. Throws <see cref="IOException"/> when the port is taken.
+    /// </summary>
+    public async Task StartAsync(bool onNetwork = false)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        // A restart (the network turned on or off) cuts requests under way off soon, not after their answers.
+        builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
         builder.WebHost.ConfigureKestrel(k =>
         {
-            // Loopback only (127.0.0.1 and ::1).
-            k.ListenLocalhost(Port);
+            // Loopback only (127.0.0.1 and ::1), unless the user allowed the network.
+            if (onNetwork) k.ListenAnyIP(Port);
+            else k.ListenLocalhost(Port);
             k.Limits.MaxRequestBodySize = MaxBodyBytes;
         });
-        app = builder.Build();
-        app.Run(HandleAsync);
-        await app.StartAsync().ConfigureAwait(false);
+        var started = builder.Build();
+        started.Run(HandleAsync);
+        try
+        {
+            await started.StartAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await started.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        app = started;
+        OnNetwork = onNetwork;
+    }
+
+    /// <summary>
+    /// Listens again, on the network or not: requests under way are cut
+    /// off. Throws <see cref="IOException"/> when the port can't be had;
+    /// then nothing listens.
+    /// </summary>
+    public async Task RestartAsync(bool onNetwork)
+    {
+        await StopListeningAsync().ConfigureAwait(false);
+        await StartAsync(onNetwork).ConfigureAwait(false);
+    }
+
+    async Task StopListeningAsync()
+    {
+        if (app is not { } running) return;
+        app = null;
+        OnNetwork = false;
+        await running.StopAsync().ConfigureAwait(false);
+        await running.DisposeAsync().ConfigureAwait(false);
     }
 
     async Task HandleAsync(HttpContext context)
@@ -112,6 +158,20 @@ public sealed class ProxyServer : IAsyncDisposable
         var request = context.Request;
         var path = request.Path.Value ?? "/";
         context.Response.Headers.AccessControlAllowOrigin = "*";
+
+        // LLMTray's own requests (its chat, the CLI) carry the per-run token.
+        var fromApp = AppToken is not null && request.Headers[AppHeader].ToString() == AppToken;
+        var access = Access?.Invoke() ?? ApiAccess.Open;
+        var fromThisPc = ThisPc.Is(context.Connection.RemoteIpAddress);
+        // A preflight is let through only where the request it asks about could be.
+        var preflight = ApiKeyCheck.IsPreflight(request.Method, request.Headers.Origin.ToString(), request.Headers.AccessControlRequestMethod.ToString())
+            && (access.Required || fromThisPc);
+        if (!preflight && !ApiKeyCheck.Allows(access, request.Headers.Authorization.ToString(), request.Headers["x-api-key"].ToString(), fromThisPc, fromApp))
+        {
+            // Refused before anything is read, loaded or counted.
+            await SendJsonAsync(context, StatusCodes.Status401Unauthorized, ApiKeyCheck.Refusal(path)).ConfigureAwait(false);
+            return;
+        }
 
         if (HttpMethods.IsOptions(request.Method))
         {
@@ -195,7 +255,6 @@ public sealed class ProxyServer : IAsyncDisposable
         using (lease)
         {
             // An outside client's request that reached a model: counted (its family only), never looked into.
-            var fromApp = AppToken is not null && request.Headers[AppHeader].ToString() == AppToken;
             if (!fromApp) OutsideRequest?.Invoke(lease.Model);
             // The usage statistics: who asked, named from the User-Agent (adr/0026).
             var client = UsageRecorded is not null && CountsUsage?.Invoke() == true && Usage.UsageMeter.Counts(path)
@@ -402,11 +461,7 @@ public sealed class ProxyServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (app is not null)
-        {
-            await app.StopAsync().ConfigureAwait(false);
-            await app.DisposeAsync().ConfigureAwait(false);
-        }
+        await StopListeningAsync().ConfigureAwait(false);
         upstream.Dispose();
     }
 }

@@ -20,6 +20,9 @@ sealed class ProtectedSecrets(string folder) : IMcpSecrets
         return Path.Combine(folder, safe + ".bin");
     }
 
+    /// <summary>Whether a secret is saved under the name, readable or not.</summary>
+    public bool Has(string name) => File.Exists(FileOf(name));
+
     public string? Get(string name)
     {
         lock (sync)

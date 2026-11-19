@@ -1,0 +1,71 @@
+# 0027. An API key, and the API on the local network
+
+Status: accepted (2026-11-18, the maintainer). It changes adr/0001's
+loopback-only proxy. Mac counterpart: #388
+(`APIKeyCheck`, `Pref.allowLAN`).
+
+## Decision
+
+Two settings in Settings › Server, both off by default:
+
+- **Require an API key.** Every request to the proxy needs it, as
+  `Authorization: Bearer <key>` (OpenAI clients) or `x-api-key: <key>`
+  (Anthropic's), except LLMTray's own (its per-run app token: the chat,
+  the CLI) and, by default, requests from this PC ("Only from other
+  devices", on). The key is generated (`llmtray-` and 32 random letters
+  and digits from a CSPRNG), shown with Copy and Make a New Key, kept
+  DPAPI-protected like the MCP secrets, and compared in constant time. A
+  refusal is 401 in the route's own shape (Anthropic's on `/v1/messages`,
+  OpenAI's elsewhere), naming where the key is. A CORS preflight
+  (`OPTIONS` with `Origin` and `Access-Control-Request-Method`) needs no
+  key. The client's `Authorization` is never passed to llama-server (as
+  now: it gets its own per-run key).
+- **Allow devices on this network.** The proxy also listens on the PC's
+  addresses (Kestrel `ListenAnyIP` on 8765 instead of `ListenLocalhost`).
+  On Windows this differs from the Mac in one way: **it can be turned on
+  only with the API key required** (turning the key off turns it off
+  too). A local network isn't a trusted one on Windows laptops (cafés,
+  hotels), and Windows Firewall asks once, for the app, on the first
+  listen: the prompt says which networks; "Private" only is the advice.
+  Settings shows the addresses to use (`http://<ip>:8765/v1`).
+
+`llmtray status` says whether a key is required, never the key.
+`llmtray chat` goes as the app's own request: it gets the per-run app
+token over this user's pipe (only when it asks, so `status --json` never
+prints it), and sends it only to the API on this PC. The usage statistics
+(adr/0026) name clients as before; a refused request isn't counted, and
+reaches neither a model nor llama-server. Neither `Authorization` nor
+`x-api-key` is passed on to llama-server.
+
+## Limits
+
+- It's plain HTTP: on the network the key and the prompts travel
+  unencrypted, as on the Mac. Settings says so; TLS isn't part of this.
+- Without the key required, a connection from another device is refused
+  whatever the listener does; a link-local address (IPv6 `fe80::/10`,
+  IPv4 `169.254/16`) never counts as this PC, since another device on
+  another link may use the same one.
+- A request is checked when it arrives: a new key, or the key turned on,
+  doesn't stop answers already under way. Turning the network on or off
+  restarts the listener and cuts them off within two seconds.
+- The app token is given over this user's pipe, so any program running as
+  this user can have it (as it can read the DPAPI-protected key). It's
+  not given while another program holds the port.
+
+## Why
+
+The Mac app has both. People run LLMTray on a desktop with a GPU and
+want to use it from a laptop; and an API key keeps other programs on a
+shared PC out when "Only from other devices" is off.
+
+## What it changes
+
+adr/0001 says the proxy is loopback only; this makes that the default,
+not a rule. Nothing changes for anyone who doesn't turn it on.
+
+## Settled
+
+1. On Windows the network setting needs the key (as proposed above), not
+   independent as on the Mac.
+2. Every build offers it, the Store's included: the app is full trust,
+   and the Firewall asks only when someone turns the setting on.

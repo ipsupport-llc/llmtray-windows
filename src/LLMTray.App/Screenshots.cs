@@ -82,6 +82,22 @@ static class Screenshots
                     withUsage.ShowPage("general");
                 }
             }
+            // Settings › Server with the API key required (adr/0027), shown masked; the network stays off (no Firewall prompt on CI).
+            if (app.SettingsWindow is { } withKey && !app.Settings.RequireApiKey && app.EnsureApiKey() is not null)
+            {
+                try
+                {
+                    app.UpdateSettings(app.Settings with { RequireApiKey = true });
+                    withKey.ShowPage("server");
+                    await Task.Delay(1200);
+                    await SaveAsync(withKey, Path.Combine(folder, "settings-server-key.png"));
+                }
+                finally
+                {
+                    app.UpdateSettings(app.Settings with { RequireApiKey = false });
+                    withKey.ShowPage("general");
+                }
+            }
             // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
             await StoreAsync(app, Path.Combine(folder, "store"));
             app.ShowAbout();

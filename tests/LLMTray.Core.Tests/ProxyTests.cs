@@ -217,6 +217,78 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AsksForTheKeyWhenRequired()
+    {
+        const string key = "llmtray-TESTKEY";
+        var access = new ApiAccess(true, OnlyFromOtherDevices: false, key);
+        proxy.Access = () => access;
+        proxy.AppToken = "app-token";
+        await proxy.StartAsync();
+
+        // No key, or a wrong one: 401 in OpenAI's shape, and nothing is loaded.
+        var none = await client.PostAsync("/v1/chat/completions", Chat("alpha-Q4"));
+        Assert.Equal(HttpStatusCode.Unauthorized, none.StatusCode);
+        Assert.Equal("invalid_api_key", (await none.Content.ReadFromJsonAsync<JsonObject>())!["error"]!["code"]!.GetValue<string>());
+        using (var wrong = new HttpRequestMessage(HttpMethod.Get, "/v1/models"))
+        {
+            wrong.Headers.Authorization = new("Bearer", "llmtray-WRONG");
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(wrong)).StatusCode);
+        }
+        // Anthropic's route answers in Anthropic's shape.
+        var messages = await client.PostAsync("/v1/messages", Chat("alpha-Q4"));
+        Assert.Equal("authentication_error", (await messages.Content.ReadFromJsonAsync<JsonObject>())!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal(0, launcher.Starts);
+
+        // The key as a bearer token (it never reaches llama-server, which checks its own), or as x-api-key.
+        using (var bearer = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions") { Content = Chat("alpha-Q4") })
+        {
+            bearer.Headers.Authorization = new("Bearer", key);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(bearer)).StatusCode);
+        }
+        using (var anthropic = new HttpRequestMessage(HttpMethod.Get, "/v1/models"))
+        {
+            anthropic.Headers.Add("x-api-key", key);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(anthropic)).StatusCode);
+        }
+        // The app's own requests and a browser's preflight go without it.
+        using (var own = new HttpRequestMessage(HttpMethod.Get, "/v1/models"))
+        {
+            own.Headers.Add(ProxyServer.AppHeader, "app-token");
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(own)).StatusCode);
+        }
+        using (var preflight = new HttpRequestMessage(HttpMethod.Options, "/v1/chat/completions"))
+        {
+            preflight.Headers.Add("Origin", "http://example.test");
+            preflight.Headers.Add("Access-Control-Request-Method", "POST");
+            Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(preflight)).StatusCode);
+        }
+
+        // "Only from other devices": this PC goes without it.
+        access = access with { OnlyFromOtherDevices = true };
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/v1/models")).StatusCode);
+        // A key that can't be read refuses everyone the rule asks.
+        access = new ApiAccess(true, false, null);
+        using (var unreadable = new HttpRequestMessage(HttpMethod.Get, "/v1/models"))
+        {
+            unreadable.Headers.Authorization = new("Bearer", key);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(unreadable)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task ListensOnTheNetworkAndBack()
+    {
+        await proxy.StartAsync();
+        Assert.False(proxy.OnNetwork);
+        await proxy.RestartAsync(onNetwork: true);
+        Assert.True(proxy.OnNetwork);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/v1/models")).StatusCode);
+        await proxy.RestartAsync(onNetwork: false);
+        Assert.False(proxy.OnNetwork);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/v1/models")).StatusCode);
+    }
+
+    [Fact]
     public async Task FallsBackToTheNextBackend()
     {
         await using var fallback = new FakeLauncher { FailBackend = "vk" };
