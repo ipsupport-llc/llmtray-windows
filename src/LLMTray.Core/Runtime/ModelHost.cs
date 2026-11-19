@@ -57,6 +57,8 @@ public sealed class ModelHost : IAsyncDisposable
     string? message;
     /// <summary>A model to load again after its server died (adr/0028); cleared by a stop or another load.</summary>
     ModelEntry? reloadAfterLoss;
+    /// <summary>Counts Stops: a reload handed back by a request that gave up isn't re-armed after one.</summary>
+    int stops;
     bool disposed;
     /// <summary>The last kill in progress: a new server starts only after it.</summary>
     Task lastKill = Task.CompletedTask;
@@ -169,6 +171,9 @@ public sealed class ModelHost : IAsyncDisposable
                 var afterLoss = false;
                 var started = false;
                 ModelEntry? load = wanted;
+                // A pending reload this request cleared, and the Stops then: handed back if it gives up before loading.
+                ModelEntry? cleared;
+                int stopsThen;
                 lock (sync)
                 {
                     if (running is { } r && Matches(r, wanted)) return Take(r);
@@ -179,6 +184,8 @@ public sealed class ModelHost : IAsyncDisposable
                         load = lost;
                         afterLoss = true;
                     }
+                    cleared = reloadAfterLoss;
+                    stopsThen = stops;
                     reloadAfterLoss = null;
                     if (load is null) throw new NoModelLoadedException();
                     switching = true;
@@ -200,17 +207,35 @@ public sealed class ModelHost : IAsyncDisposable
                     {
                         switching = false;
                         if (running is { } loaded && Matches(loaded, load)) return Take(loaded);
+                        // The reload's server died at once: its one try is spent, not renewed by looping.
+                        if (afterLoss) throw new ModelLoadException(message ?? "llama-server stopped again.");
                     }
                 }
                 finally
                 {
+                    ModelEntry? handBack = null;
                     lock (sync)
                     {
                         switching = false;
-                        // A reload this request took over but gave up before it began: pending again.
-                        if (afterLoss && !started && reloadAfterLoss is null && running is null) reloadAfterLoss = load;
+                        // Gave up (the client cancelled) before loading: a reload it cleared is pending again,
+                        // unless a Stop came meanwhile or something else runs or is pending.
+                        if (!started && cleared is not null && stops == stopsThen && reloadAfterLoss is null && running is null)
+                        {
+                            reloadAfterLoss = handBack = cleared;
+                        }
+                        else if (!started && running is null && reloadAfterLoss is null && status == HostStatus.Loading)
+                        {
+                            // The lost server's reload was cleared (a Stop came meanwhile): nothing is loading now.
+                            status = HostStatus.Stopped;
+                            statusModel = null;
+                            statusBackend = null;
+                            statusDevice = null;
+                            statusNote = null;
+                            message = null;
+                        }
                     }
-                    if (afterLoss && !started) ResumeReload(load!);
+                    if (handBack is not null) ResumeReload(handBack);
+                    else if (!started) Changed();
                 }
             }
             finally
@@ -246,7 +271,11 @@ public sealed class ModelHost : IAsyncDisposable
     public async Task StopAsync()
     {
         // A reload after a loss not begun yet is dropped; one under way is a load like any other.
-        lock (sync) reloadAfterLoss = null;
+        lock (sync)
+        {
+            reloadAfterLoss = null;
+            stops++;
+        }
         await StopRunningAsync().ConfigureAwait(false);
         lock (sync)
         {
