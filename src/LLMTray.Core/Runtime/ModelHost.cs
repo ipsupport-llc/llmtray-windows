@@ -189,7 +189,9 @@ public sealed class ModelHost : IAsyncDisposable
                 }
                 try
                 {
-                    await drained.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    // A reload taken over isn't dropped by this client giving up: the leases left
+                    // are on a dead server and return at once.
+                    await drained.WaitAsync(afterLoss ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
                     await StopRunningAsync().ConfigureAwait(false);
                     // Not the client's token: a load once begun finishes, so
                     // the next request for this model finds it ready.
@@ -239,11 +241,15 @@ public sealed class ModelHost : IAsyncDisposable
     /// </summary>
     public async Task StopAsync()
     {
+        lock (sync)
+        {
+            // First: a reload after a loss that publishes from now on gives up; one already published is killed below.
+            reloadAfterLoss = null;
+            stops++;
+        }
         await StopRunningAsync().ConfigureAwait(false);
         lock (sync)
         {
-            reloadAfterLoss = null;
-            stops++;
             if (running is null && !switching)
             {
                 status = HostStatus.Stopped;
@@ -274,7 +280,16 @@ public sealed class ModelHost : IAsyncDisposable
         {
             if (!fresh && probed.TryGetValue(backend.Name, out var known)) return known;
         }
-        var devices = await probeDevices(backend).ConfigureAwait(false);
+        IReadOnlyList<GpuDevice>? devices;
+        try
+        {
+            devices = await probeDevices(backend).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // An answer it couldn't read: unknown, so llama.cpp picks the cards itself.
+            devices = null;
+        }
         lock (sync) probed[backend.Name] = devices;
         return devices;
     }
@@ -371,19 +386,30 @@ public sealed class ModelHost : IAsyncDisposable
             {
                 var (context, hears) = await PropsAsync(baseUri, key).ConfigureAwait(false);
                 var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context, hears, note, afterLoss);
+                var abandoned = false;
                 lock (sync)
                 {
-                    if (disposed || (afterLoss && stops != stopsBefore))
+                    if (disposed)
                     {
                         process.Kill();
                         process.Dispose();
-                        throw disposed ? new ModelLoadException("LLMTray is quitting.") : Abandoned();
+                        throw new ModelLoadException("LLMTray is quitting.");
                     }
-                    running = r;
-                    status = HostStatus.Running;
-                    message = null;
-                    if (attempt.Key == chain.Attempts[0].Key) workedFor.Remove((model.FullPath, choice));
-                    else workedFor[(model.FullPath, choice)] = attempt.Key;
+                    abandoned = afterLoss && stops != stopsBefore;
+                    if (!abandoned)
+                    {
+                        running = r;
+                        status = HostStatus.Running;
+                        message = null;
+                        if (attempt.Key == chain.Attempts[0].Key) workedFor.Remove((model.FullPath, choice));
+                        else workedFor[(model.FullPath, choice)] = attempt.Key;
+                    }
+                }
+                if (abandoned)
+                {
+                    // Gone before the next load may start: it holds the card's memory.
+                    await KillAsync(process).ConfigureAwait(false);
+                    throw Abandoned();
                 }
                 _ = process.Exited.ContinueWith(t => OnExited(r, t.Result), TaskScheduler.Default);
                 Changed();
@@ -392,7 +418,8 @@ public sealed class ModelHost : IAsyncDisposable
             await KillAsync(process).ConfigureAwait(false);
             lastError = error;
         }
-        if (ordered.Count == 0) lastError = "Nothing to run the model on: no graphics card and no CPU build.";
+        if (afterLoss && StoppedSince(stopsBefore)) throw Abandoned();
+        if (ordered.Count == 0) lastError = chain.Note is { } why ? $"Nothing to run the model on: {why}." : "Nothing to run the model on.";
         Fail(model, null, lastError ?? "llama-server didn't start.");
         throw new ModelLoadException(lastError ?? "llama-server didn't start.");
     }
@@ -488,7 +515,6 @@ public sealed class ModelHost : IAsyncDisposable
         {
             return;
         }
-        var gaveUp = false;
         try
         {
             int stopsBefore;
@@ -507,24 +533,16 @@ public sealed class ModelHost : IAsyncDisposable
             }
             catch (ModelLoadException)
             {
-                // Fail() said why; a Stop meanwhile leaves the host stopped.
-                lock (sync) gaveUp = stops != stopsBefore;
+                // Fail() or Abandoned() left the state saying why.
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                // Nobody awaits this task: whatever went wrong is shown, never left at Loading.
+                Fail(model, null, $"llama-server stopped and couldn't be loaded again: {e.Message}");
             }
             finally
             {
-                lock (sync)
-                {
-                    switching = false;
-                    if (gaveUp && running is null)
-                    {
-                        status = HostStatus.Stopped;
-                        statusModel = null;
-                        statusBackend = null;
-                        statusDevice = null;
-                        statusNote = null;
-                        message = null;
-                    }
-                }
+                lock (sync) switching = false;
                 Changed();
             }
         }

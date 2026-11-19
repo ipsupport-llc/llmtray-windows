@@ -128,7 +128,16 @@ public class DevicePlanTests
     [Fact]
     public void AnAttemptIsTheSameAcrossMovedIndexes()
     {
-        Assert.Equal(new LoadAttempt(Vulkan, [Rtx]).Key, new LoadAttempt(Vulkan, [Rtx with { Id = "Vulkan0" }]).Key);
+        var before = DevicePlan.Build(DeviceChoice.Automatic, Both, [Uhd, Rtx]).Attempts[0].Key;
+        var moved = DevicePlan.Build(DeviceChoice.Automatic, Both, [Rtx with { Id = "Vulkan0" }, Uhd with { Id = "Vulkan1" }]).Attempts[0].Key;
+        Assert.Equal(before, moved);
+    }
+
+    [Fact]
+    public void TwoIdenticalCardsAreBothInTheChain()
+    {
+        GpuDevice a = new("Vulkan0", "NVIDIA GeForce RTX 3090", 24000, 23000), b = new("Vulkan1", "NVIDIA GeForce RTX 3090", 24000, 20000);
+        Assert.Equal(["Vulkan1", "Vulkan0", "cpu"], Order(DevicePlan.Build(DeviceChoice.Card(b, [a, b]), Both, [a, b])));
     }
 
     [Theory]

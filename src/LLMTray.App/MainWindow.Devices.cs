@@ -10,6 +10,8 @@ public sealed partial class MainWindow
     IReadOnlyList<GpuDevice>? cards;
     bool cardsAsked, cardsLooking;
     string? runOnChangedFrom;
+    /// <summary>The choice changed while a load was under way: that load still used the old one.</summary>
+    bool changedDuringLoad;
 
     IEnumerable<UIElement> DevicesPart()
     {
@@ -50,6 +52,7 @@ public sealed partial class MainWindow
             if (picker.SelectedItem is ComboBoxItem { Tag: string picked } && picked != App.Current.Settings.RunOn)
             {
                 runOnChangedFrom ??= App.Current.Settings.RunOn;
+                changedDuringLoad = App.Current.Host.State.Status == HostStatus.Loading;
                 App.Current.SetRunOn(picked);
                 DispatcherQueue.TryEnqueue(RenderModels);
             }
@@ -66,8 +69,9 @@ public sealed partial class MainWindow
         yield return Ui.Section(L.T("Graphics card"));
         var rows = new List<UIElement?> { Ui.Row(L.T("Run models on"), help, Ui.Horizontal(picker, look)) };
         var host = app.Host.State;
-        // A load since the change used the new choice: no restart left to offer.
-        if (host.Status == HostStatus.Loading) runOnChangedFrom = null;
+        // A load begun since the change uses the new choice: no restart left to offer.
+        if (host.Status == HostStatus.Loading && !changedDuringLoad) runOnChangedFrom = null;
+        if (host.Status != HostStatus.Loading) changedDuringLoad = false;
         if (host.Note is { } note && host.Status is HostStatus.Running or HostStatus.Loading)
         {
             rows.Add(Ui.Row(L.T("Now"), note, Ui.Value(Status.Device(host) ?? "—")));

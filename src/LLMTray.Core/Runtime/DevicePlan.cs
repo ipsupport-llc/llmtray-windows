@@ -39,10 +39,14 @@ public static class DeviceChoice
 }
 
 /// <summary>One try at loading a model: a backend and, on a GPU backend, the cards it gets (none: llama.cpp's own pick).</summary>
-public sealed record LoadAttempt(LlamaBackend Backend, IReadOnlyList<GpuDevice> Devices)
+/// <param name="Key">The same try across a fresh listing: the cards as <see cref="DeviceChoice.Card"/> names them (name and place among
+/// same-named cards), never their indexes, which move.</param>
+public sealed record LoadAttempt(LlamaBackend Backend, IReadOnlyList<GpuDevice> Devices, string Key)
 {
-    /// <summary>The same try across a fresh listing: by the cards' names, not their indexes, which move.</summary>
-    public string Key => Backend.Name + ":" + string.Join(",", Devices.Select(d => d.Description));
+    public LoadAttempt(LlamaBackend backend, IReadOnlyList<GpuDevice> devices, IReadOnlyList<GpuDevice> all)
+        : this(backend, devices, backend.Name + ":" + string.Join(",", devices.Select(d => DeviceChoice.Card(d, all))))
+    {
+    }
 
     /// <summary>The cards by name ("A + B"); null on the CPU or with llama.cpp's own pick.</summary>
     public string? Label => Devices.Count == 0 ? null : string.Join(" + ", Devices.Select(d => d.Description));
@@ -78,14 +82,14 @@ public static partial class DevicePlan
         if (choice == DeviceChoice.Cpu)
         {
             // The CPU only, as chosen: never a GPU instead.
-            return cpu is not null ? new([new LoadAttempt(cpu, [])], null) : new([], "the CPU build is missing");
+            return cpu is not null ? new([new LoadAttempt(cpu, [], [])], null) : new([], "the CPU build is missing");
         }
         if (gpu is not null)
         {
             if (devices is null)
             {
                 // The cards couldn't be listed: the GPU build picks its own, then the CPU.
-                attempts.Add(new LoadAttempt(gpu, []));
+                attempts.Add(new LoadAttempt(gpu, [], []));
                 if (choice != DeviceChoice.Automatic) note = "the graphics cards couldn't be listed";
             }
             else if (devices.Count == 0)
@@ -129,12 +133,12 @@ public static partial class DevicePlan
                     var dedicated = usable.Where(d => !IsIntegrated(d.Description)).ToList();
                     first = dedicated.Count > 0 ? dedicated : [singles[0]];
                 }
-                if (first is not null) attempts.Add(new LoadAttempt(gpu, first));
-                attempts.AddRange(singles.Select(d => new LoadAttempt(gpu, [d])));
+                if (first is not null) attempts.Add(new LoadAttempt(gpu, first, devices));
+                attempts.AddRange(singles.Select(d => new LoadAttempt(gpu, [d], devices)));
                 if (usable.Count == 0 && note is null && choice != DeviceChoice.Automatic) note = "no graphics card has enough free memory";
             }
         }
-        if (cpu is not null) attempts.Add(new LoadAttempt(cpu, []));
+        if (cpu is not null) attempts.Add(new LoadAttempt(cpu, [], []));
         var distinct = attempts.DistinctBy(a => a.Key).ToList();
         return new(distinct, note, missing);
     }
