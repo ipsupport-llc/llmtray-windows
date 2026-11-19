@@ -183,6 +183,7 @@ static class Screenshots
         var bitmap = new RenderTargetBitmap();
         await bitmap.RenderAsync(content);
         var pixels = (await bitmap.GetPixelsAsync()).ToArray();
+        Flatten(pixels, content is FrameworkElement { ActualTheme: ElementTheme.Dark });
         using var stream = new InMemoryRandomAccessStream();
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
         encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, 96, 96, pixels);
@@ -191,5 +192,23 @@ static class Screenshots
         stream.Seek(0);
         await stream.ReadAsync(bytes.AsBuffer(), (uint)stream.Size, InputStreamOptions.None);
         await File.WriteAllBytesAsync(path, bytes);
+    }
+
+    /// <summary>
+    /// The window's backdrop (Mica) isn't in the rendered content, so most of a
+    /// capture is transparent: on a dark page (GitHub's dark theme, the Store's)
+    /// the text vanished. Composited over the backdrop's solid fallback colour
+    /// for the theme, every pixel is opaque.
+    /// </summary>
+    static void Flatten(byte[] bgra, bool dark)
+    {
+        byte back = dark ? (byte)0x20 : (byte)0xF3;
+        for (var i = 0; i < bgra.Length; i += 4)
+        {
+            var rest = 255 - bgra[i + 3];
+            // Premultiplied: colour + background × (1 − alpha).
+            for (var c = 0; c < 3; c++) bgra[i + c] = (byte)Math.Min(255, bgra[i + c] + (back * rest + 127) / 255);
+            bgra[i + 3] = 255;
+        }
     }
 }
