@@ -11,9 +11,9 @@ public sealed partial class ChatWindow
 
     void ShareText(string text)
     {
-        var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
         try
         {
+            var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
             if (shareManager is null)
             {
                 shareManager = DataTransferManagerInterop.GetForWindow(window);
@@ -27,10 +27,17 @@ public sealed partial class ChatWindow
             shareText = text;
             DataTransferManagerInterop.ShowShareUIForWindow(window);
         }
-        catch (COMException)
+        catch (Exception e) when (e is COMException or TypeInitializationException or NotImplementedException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // No share sheet here (a stripped-down Windows): the text goes to the clipboard instead.
-            Copy(text);
+            // No share sheet here (a stripped-down Windows; CsWinRT maps its HRESULTs to these): the text goes to the clipboard instead.
+            try
+            {
+                Copy(text);
+            }
+            catch (COMException)
+            {
+                // The clipboard is busy: nothing to do but leave it.
+            }
         }
     }
 }
