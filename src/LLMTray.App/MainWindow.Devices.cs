@@ -9,9 +9,6 @@ public sealed partial class MainWindow
 {
     IReadOnlyList<GpuDevice>? cards;
     bool cardsAsked, cardsLooking;
-    string? runOnChangedFrom;
-    /// <summary>The choice changed while a load was under way: that load still used the old one.</summary>
-    bool changedDuringLoad;
 
     IEnumerable<UIElement> DevicesPart()
     {
@@ -51,8 +48,6 @@ public sealed partial class MainWindow
         {
             if (picker.SelectedItem is ComboBoxItem { Tag: string picked } && picked != App.Current.Settings.RunOn)
             {
-                runOnChangedFrom ??= App.Current.Settings.RunOn;
-                changedDuringLoad = App.Current.Host.State.Status == HostStatus.Loading;
                 App.Current.SetRunOn(picked);
                 DispatcherQueue.TryEnqueue(RenderModels);
             }
@@ -69,21 +64,15 @@ public sealed partial class MainWindow
         yield return Ui.Section(L.T("Graphics card"));
         var rows = new List<UIElement?> { Ui.Row(L.T("Run models on"), help, Ui.Horizontal(picker, look)) };
         var host = app.Host.State;
-        // A load begun since the change uses the new choice: no restart left to offer.
-        if (host.Status == HostStatus.Loading && !changedDuringLoad) runOnChangedFrom = null;
-        if (host.Status != HostStatus.Loading) changedDuringLoad = false;
         if (host.Note is { } note && host.Status is HostStatus.Running or HostStatus.Loading)
         {
             rows.Add(Ui.Row(L.T("Now"), note, Ui.Value(Status.Device(host) ?? "—")));
         }
-        if (runOnChangedFrom is { } was && was != choice && host is { Status: HostStatus.Running, Model: { } model })
+        // Started with another choice than the one now: the change applies from the next load.
+        if (host is { Status: HostStatus.Running, RunOn: { } startedWith } && startedWith != choice)
         {
             rows.Add(Ui.Row(L.T("Takes effect the next time a model loads"), null,
-                Ui.Button(L.T("Restart the Model"), () =>
-                {
-                    runOnChangedFrom = null;
-                    _ = App.Current.RestartAsync();
-                })));
+                Ui.Button(L.T("Restart the Model"), () => _ = App.Current.RestartAsync())));
         }
         yield return Ui.Card(rows.ToArray());
     }

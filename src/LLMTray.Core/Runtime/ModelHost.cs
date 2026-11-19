@@ -10,8 +10,9 @@ public enum HostStatus { Stopped, Loading, Running, Failed }
 /// <summary>What the host is doing, for the window and the tray icon.</summary>
 /// <param name="Device">The GPU it runs on ("A + B" for several), when the backend is a GPU one and the probe named it.</param>
 /// <param name="Note">Why it runs somewhere else than chosen in Settings (adr/0028), or null.</param>
+/// <param name="RunOn">The "Run models on" choice the running server was started with: Settings offers a restart when it's changed.</param>
 public sealed record HostState(HostStatus Status, ModelEntry? Model, string? Backend, string? Message, int ActiveRequests, string? Device = null,
-    string? Note = null)
+    string? Note = null, string? RunOn = null)
 {
     public static readonly HostState Stopped = new(HostStatus.Stopped, null, null, null, 0);
     public bool IsBusy => Status == HostStatus.Loading || ActiveRequests > 0;
@@ -56,8 +57,6 @@ public sealed class ModelHost : IAsyncDisposable
     string? message;
     /// <summary>A model to load again after its server died (adr/0028); cleared by a stop or another load.</summary>
     ModelEntry? reloadAfterLoss;
-    /// <summary>Counts Stops: a reload after a loss that sees it change gives up, even mid-load.</summary>
-    int stops;
     bool disposed;
     /// <summary>The last kill in progress: a new server starts only after it.</summary>
     Task lastKill = Task.CompletedTask;
@@ -67,7 +66,8 @@ public sealed class ModelHost : IAsyncDisposable
     /// <param name="Hears">The server takes audio (its /props modalities), null when it didn't say.</param>
     /// <param name="AfterLoss">Loaded again after a server died: dying again stops it for good.</param>
     sealed record Running(ModelEntry Model, LlamaBackend Backend, string? Device, IChildProcess Process, Uri BaseUri, string ApiKey,
-        CancellationTokenSource Lifetime, ServerOptions Options, int ContextTokens = 0, bool? Hears = null, string? Note = null, bool AfterLoss = false);
+        CancellationTokenSource Lifetime, ServerOptions Options, int ContextTokens = 0, bool? Hears = null, string? Note = null, bool AfterLoss = false,
+        string? RunOn = null);
 
     /// <param name="probeDevices">Lists a backend's GPUs; <see cref="LlamaDevices.ProbeAsync"/> by default.</param>
     /// <param name="deviceChoice">Settings' "Run models on" (<see cref="DeviceChoice"/>); Automatic by default.</param>
@@ -167,7 +167,7 @@ public sealed class ModelHost : IAsyncDisposable
             {
                 Task drained;
                 var afterLoss = false;
-                var stopsBefore = 0;
+                var started = false;
                 ModelEntry? load = wanted;
                 lock (sync)
                 {
@@ -180,7 +180,6 @@ public sealed class ModelHost : IAsyncDisposable
                         afterLoss = true;
                     }
                     reloadAfterLoss = null;
-                    stopsBefore = stops;
                     if (load is null) throw new NoModelLoadedException();
                     switching = true;
                     drained = active == 0 ? Task.CompletedTask : (idle ??= NewSignal()).Task;
@@ -189,13 +188,12 @@ public sealed class ModelHost : IAsyncDisposable
                 }
                 try
                 {
-                    // A reload taken over isn't dropped by this client giving up: the leases left
-                    // are on a dead server and return at once.
-                    await drained.WaitAsync(afterLoss ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
+                    await drained.WaitAsync(cancellationToken).ConfigureAwait(false);
                     await StopRunningAsync().ConfigureAwait(false);
                     // Not the client's token: a load once begun finishes, so
                     // the next request for this model finds it ready.
-                    await StartAsync(load, afterLoss, stopsBefore).ConfigureAwait(false);
+                    started = true;
+                    await StartAsync(load, afterLoss).ConfigureAwait(false);
                     // The request that waited for the load is served first,
                     // before another switch can take the model away.
                     lock (sync)
@@ -206,7 +204,13 @@ public sealed class ModelHost : IAsyncDisposable
                 }
                 finally
                 {
-                    lock (sync) switching = false;
+                    lock (sync)
+                    {
+                        switching = false;
+                        // A reload this request took over but gave up before it began: pending again.
+                        if (afterLoss && !started && reloadAfterLoss is null && running is null) reloadAfterLoss = load;
+                    }
+                    if (afterLoss && !started) ResumeReload(load!);
                 }
             }
             finally
@@ -241,12 +245,8 @@ public sealed class ModelHost : IAsyncDisposable
     /// </summary>
     public async Task StopAsync()
     {
-        lock (sync)
-        {
-            // First: a reload after a loss that publishes from now on gives up; one already published is killed below.
-            reloadAfterLoss = null;
-            stops++;
-        }
+        // A reload after a loss not begun yet is dropped; one under way is a load like any other.
+        lock (sync) reloadAfterLoss = null;
         await StopRunningAsync().ConfigureAwait(false);
         lock (sync)
         {
@@ -301,8 +301,7 @@ public sealed class ModelHost : IAsyncDisposable
     }
 
     /// <param name="afterLoss">Loading again after the server died: the cards are listed anew, and dying again stops it.</param>
-    /// <param name="stopsBefore">With <paramref name="afterLoss"/>: <see cref="stops"/> when it began; a Stop since gives the reload up.</param>
-    async Task StartAsync(ModelEntry model, bool afterLoss = false, int stopsBefore = 0)
+    async Task StartAsync(ModelEntry model, bool afterLoss = false)
     {
         var available = backends();
         if (available.Count == 0)
@@ -338,7 +337,6 @@ public sealed class ModelHost : IAsyncDisposable
         foreach (var attempt in ordered)
         {
             if (Volatile.Read(ref disposed)) throw new ModelLoadException("LLMTray is quitting.");
-            if (afterLoss && StoppedSince(stopsBefore)) throw Abandoned();
             var backend = attempt.Backend;
             var device = backend.Name == "cpu" ? null : attempt.Label;
             // Not where it was asked to run: why (the plan's reason, or the first try that failed).
@@ -385,8 +383,7 @@ public sealed class ModelHost : IAsyncDisposable
             if (error is null)
             {
                 var (context, hears) = await PropsAsync(baseUri, key).ConfigureAwait(false);
-                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context, hears, note, afterLoss);
-                var abandoned = false;
+                var r = new Running(model, backend, device, process, baseUri, key, new CancellationTokenSource(), launched, context, hears, note, afterLoss, choice);
                 lock (sync)
                 {
                     if (disposed)
@@ -395,21 +392,11 @@ public sealed class ModelHost : IAsyncDisposable
                         process.Dispose();
                         throw new ModelLoadException("LLMTray is quitting.");
                     }
-                    abandoned = afterLoss && stops != stopsBefore;
-                    if (!abandoned)
-                    {
-                        running = r;
-                        status = HostStatus.Running;
-                        message = null;
-                        if (attempt.Key == chain.Attempts[0].Key) workedFor.Remove((model.FullPath, choice));
-                        else workedFor[(model.FullPath, choice)] = attempt.Key;
-                    }
-                }
-                if (abandoned)
-                {
-                    // Gone before the next load may start: it holds the card's memory.
-                    await KillAsync(process).ConfigureAwait(false);
-                    throw Abandoned();
+                    running = r;
+                    status = HostStatus.Running;
+                    message = null;
+                    if (attempt.Key == chain.Attempts[0].Key) workedFor.Remove((model.FullPath, choice));
+                    else workedFor[(model.FullPath, choice)] = attempt.Key;
                 }
                 _ = process.Exited.ContinueWith(t => OnExited(r, t.Result), TaskScheduler.Default);
                 Changed();
@@ -418,7 +405,6 @@ public sealed class ModelHost : IAsyncDisposable
             await KillAsync(process).ConfigureAwait(false);
             lastError = error;
         }
-        if (afterLoss && StoppedSince(stopsBefore)) throw Abandoned();
         if (ordered.Count == 0) lastError = chain.Note is { } why ? $"Nothing to run the model on: {why}." : "Nothing to run the model on.";
         Fail(model, null, lastError ?? "llama-server didn't start.");
         throw new ModelLoadException(lastError ?? "llama-server didn't start.");
@@ -517,23 +503,21 @@ public sealed class ModelHost : IAsyncDisposable
         }
         try
         {
-            int stopsBefore;
             lock (sync)
             {
                 // Stopped, another model loaded, or a request did the reload first: nothing to bring back.
                 if (!ReferenceEquals(reloadAfterLoss, model) || running is not null || disposed) return;
                 reloadAfterLoss = null;
                 switching = true;
-                stopsBefore = stops;
             }
             try
             {
                 await StopRunningAsync().ConfigureAwait(false);
-                await StartAsync(model, afterLoss: true, stopsBefore).ConfigureAwait(false);
+                await StartAsync(model, afterLoss: true).ConfigureAwait(false);
             }
             catch (ModelLoadException)
             {
-                // Fail() or Abandoned() left the state saying why.
+                // Fail() left the state saying why.
             }
             catch (Exception e) when (e is not OutOfMemoryException)
             {
@@ -552,29 +536,8 @@ public sealed class ModelHost : IAsyncDisposable
         }
     }
 
-    /// <summary>A reload after a loss given up for a Stop: the host is left stopped, as the Stop said.</summary>
-    ModelLoadException Abandoned()
-    {
-        lock (sync)
-        {
-            if (running is null)
-            {
-                status = HostStatus.Stopped;
-                statusModel = null;
-                statusBackend = null;
-                statusDevice = null;
-                statusNote = null;
-                message = null;
-            }
-        }
-        ThreadPool.QueueUserWorkItem(_ => Changed());
-        return new ModelLoadException("Stopped.");
-    }
-
-    bool StoppedSince(int stopsBefore)
-    {
-        lock (sync) return stops != stopsBefore;
-    }
+    /// <summary>A reload handed back by a request that gave up on it: done in the background after all.</summary>
+    void ResumeReload(ModelEntry model) => _ = ReloadAfterLossAsync(model);
 
     static bool SameModel(ModelEntry a, ModelEntry b) => string.Equals(a.FullPath, b.FullPath, StringComparison.OrdinalIgnoreCase);
 
@@ -670,7 +633,7 @@ public sealed class ModelHost : IAsyncDisposable
     static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     HostState Snapshot() => running is { } r
-        ? new(status, r.Model, r.Backend.Name, message, active, r.Device, r.Note)
+        ? new(status, r.Model, r.Backend.Name, message, active, r.Device, r.Note, r.RunOn)
         : new(status, statusModel, statusBackend, message, active, statusDevice, statusNote);
 
     void Changed()

@@ -50,7 +50,8 @@ down the chain because the first try failed, that device is tried first
 for that model until the app quits (by the cards' names: a fresh listing
 can move their indexes), so the next load doesn't fail its way down again; a change of the
 setting starts over from the chosen one. A change applies from the next
-load: Settings offers Restart the Model when one is running.
+load: Settings offers Restart the Model while a model runs that was
+started with another choice.
 
 When the model runs somewhere else than chosen, the chat's status line
 and Settings say where and why ("On the CPU: the RTX 4070 isn't
@@ -62,9 +63,9 @@ reset): llama-server exits; today the model just stops with an error.
 Now it is loaded again through the same chain, once, with the cards
 listed anew; a second loss in a row stops with the error, so a broken
 driver doesn't loop. A request arriving meanwhile waits for the reload
-(or does it, with the same limit); a Stop, even mid-load, or another
-model's load cancels it; a server lost during a switch isn't reloaded,
-the switch decides what runs.
+(or does it, with the same limit). A Stop or another model's load before
+the reload begins cancels it; once begun it is a load like any other. A
+server lost during a switch isn't reloaded: the switch decides what runs.
 
 ## What doesn't change
 
