@@ -862,6 +862,9 @@ sealed partial class ChatWindow : Window
             var copyItem = new MenuFlyoutItem { Text = L.T("Copy") };
             copyItem.Click += (_, _) => Copy(message.Content);
             copyMenu.Items.Add(copyItem);
+            var shareItem = new MenuFlyoutItem { Text = L.T("Share…") };
+            shareItem.Click += (_, _) => ShareText(message.Content);
+            copyMenu.Items.Add(shareItem);
             bubble.ContextFlyout = copyMenu;
             var you = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Right };
             you.Children.Add(new TextBlock { Text = L.T("You"), FontSize = 12, Foreground = Ui.Secondary, HorizontalAlignment = HorizontalAlignment.Right });
@@ -997,7 +1000,10 @@ sealed partial class ChatWindow : Window
             var copy = new Button { Content = Ui.Horizontal(new FontIcon { Glyph = "", FontSize = 12 }, new TextBlock { Text = L.T("Copy"), FontSize = 12 }) };
             copy.Style = Ui.Resource<Style>("SubtleButtonStyle", copy.Style);
             copy.Click += (_, _) => Copy(message.Content);
-            var actions = Ui.Horizontal(copy);
+            var share = new Button { Content = Ui.Horizontal(new FontIcon { Glyph = "\uE72D", FontSize = 12 }, new TextBlock { Text = L.T("Share…"), FontSize = 12 }) };
+            share.Style = copy.Style;
+            share.Click += (_, _) => ShareText(message.Content);
+            var actions = Ui.Horizontal(copy, share);
             if (message.Stats is { } s && s.Summary() is { Length: > 0 } summary)
             {
                 var info = Ui.Caption(summary);
