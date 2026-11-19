@@ -21,7 +21,10 @@ public sealed class ApiKeyCheckTests
     public void AllowsByTheRules()
     {
         var on = new ApiAccess(true, false, Key);
-        Assert.True(ApiKeyCheck.Allows(ApiAccess.Open, null, null, fromThisPc: false, fromApp: false));
+        Assert.True(ApiKeyCheck.Allows(ApiAccess.Open, null, null, fromThisPc: true, fromApp: false));
+        // Without a key required, another device never gets in (the network needs the key).
+        Assert.False(ApiKeyCheck.Allows(ApiAccess.Open, null, null, fromThisPc: false, fromApp: false));
+        Assert.False(ApiKeyCheck.Allows(ApiAccess.Open, null, null, fromThisPc: false, fromApp: true));
         Assert.False(ApiKeyCheck.Allows(on, null, null, false, false));
         Assert.False(ApiKeyCheck.Allows(on, "Bearer llmtray-abd", null, false, false));
         Assert.False(ApiKeyCheck.Allows(on, "Bearer llmtray-ab", null, false, false));
@@ -71,5 +74,8 @@ public sealed class ApiKeyCheckTests
         Assert.True(ThisPc.Is(IPAddress.Loopback.MapToIPv6()));
         Assert.False(ThisPc.Is(IPAddress.Parse("203.0.113.7")));
         Assert.False(ThisPc.Is(null));
+        // Link-local: the same address may be another device on another link.
+        Assert.False(ThisPc.Is(IPAddress.Parse("fe80::1%3")));
+        Assert.False(ThisPc.Is(IPAddress.Parse("169.254.10.20")));
     }
 }

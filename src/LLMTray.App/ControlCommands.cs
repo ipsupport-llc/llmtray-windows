@@ -88,7 +88,8 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
                 : "\nClients need the API key (Settings › Server)."),
         });
         // Only for `llmtray chat` (this user's pipe): its requests go as the app's own, never shown by `status --json`.
-        if (withAppToken)
+        // Not while the port isn't LLMTray's: whoever holds it would get the token.
+        if (withAppToken && app.ProxyListening)
         {
             reply["appHeader"] = LLMTray.Core.Proxy.ProxyServer.AppHeader;
             reply["appToken"] = app.AppToken;

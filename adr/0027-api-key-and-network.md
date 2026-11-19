@@ -37,6 +37,21 @@ prints it), and sends it only to the API on this PC. The usage statistics
 reaches neither a model nor llama-server. Neither `Authorization` nor
 `x-api-key` is passed on to llama-server.
 
+## Limits
+
+- It's plain HTTP: on the network the key and the prompts travel
+  unencrypted, as on the Mac. Settings says so; TLS isn't part of this.
+- Without the key required, a connection from another device is refused
+  whatever the listener does; a link-local address (IPv6 `fe80::/10`,
+  IPv4 `169.254/16`) never counts as this PC, since another device on
+  another link may use the same one.
+- A request is checked when it arrives: a new key, or the key turned on,
+  doesn't stop answers already under way. Turning the network on or off
+  restarts the listener and cuts them off within two seconds.
+- The app token is given over this user's pipe, so any program running as
+  this user can have it (as it can read the DPAPI-protected key). It's
+  not given while another program holds the port.
+
 ## Why
 
 The Mac app has both. People run LLMTray on a desktop with a GPU and

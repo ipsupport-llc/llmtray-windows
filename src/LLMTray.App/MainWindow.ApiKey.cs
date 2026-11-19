@@ -55,7 +55,7 @@ public sealed partial class MainWindow
         network.IsEnabled = settings.RequireApiKey;
         rows.Add(Ui.Row(L.T("Allow devices on this network"),
             settings.RequireApiKey
-                ? L.T("Other devices on your network can use the API with the key. Windows Firewall asks once: allow private networks only.")
+                ? L.T("Other devices on your network can use the API with the key. Plain HTTP: the key and the chats cross the network unencrypted, so only on networks you trust. Windows Firewall asks once: allow private networks only.")
                 : L.T("Needs the API key: turn it on first. A network isn't always one you trust (a café, a hotel)."),
             network));
         if (app.ProxyOnNetwork)
@@ -82,16 +82,24 @@ public sealed partial class MainWindow
         keyError = null;
         if (on && app.EnsureApiKey() is null)
         {
-            keyError = app.ApiKeyUnreadable
-                ? L.T("The saved key can't be read now. Try again, or make a new key.")
-                : L.T("The key couldn't be saved.");
-            RenderPage();
-            return;
+            // A saved key Windows can't read: replaced only when the user says so.
+            if (!app.ApiKeyUnreadable || !await ConfirmNewKeyAsync(L.T("The saved key can't be read now. Make a new key?")) || app.NewApiKey() is null)
+            {
+                keyError = app.ApiKeyUnreadable ? L.T("The saved key can't be read now. Try again, or make a new key.") : L.T("The key couldn't be saved.");
+                RenderServer();
+                return;
+            }
         }
         // Without the key the network goes too (adr/0027).
         app.UpdateSettings(app.Settings with { RequireApiKey = on, AllowNetwork = on && app.Settings.AllowNetwork });
         await app.ApplyNetworkAsync();
-        RenderPage();
+        RenderServer();
+    }
+
+    /// <summary>The Server page again, if it's still the one shown after a change that took a while.</summary>
+    void RenderServer()
+    {
+        if (page == "server") RenderPage();
     }
 
     async Task SetNetworkAsync(bool on)
@@ -99,22 +107,27 @@ public sealed partial class MainWindow
         var app = App.Current;
         app.UpdateSettings(app.Settings with { AllowNetwork = on });
         await app.ApplyNetworkAsync();
-        RenderPage();
+        RenderServer();
     }
 
     async Task NewKeyAsync()
+    {
+        if (!await ConfirmNewKeyAsync(L.T("Clients using the current key get 401 until they're given the new one."))) return;
+        keyError = App.Current.NewApiKey() is null ? L.T("The key couldn't be saved.") : null;
+        RenderServer();
+    }
+
+    async Task<bool> ConfirmNewKeyAsync(string text)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = Content.XamlRoot,
             Title = L.T("Make a new key?"),
-            Content = new TextBlock { Text = L.T("Clients using the current key get 401 until they're given the new one."), TextWrapping = TextWrapping.Wrap },
+            Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap },
             PrimaryButtonText = L.T("New Key"),
             CloseButtonText = L.T("Cancel"),
             DefaultButton = ContentDialogButton.Close,
         };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-        keyError = App.Current.NewApiKey() is null ? L.T("The key couldn't be saved.") : null;
-        RenderPage();
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }

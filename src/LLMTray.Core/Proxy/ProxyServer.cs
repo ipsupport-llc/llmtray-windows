@@ -106,6 +106,8 @@ public sealed class ProxyServer : IAsyncDisposable
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        // A restart (the network turned on or off) cuts requests under way off soon, not after their answers.
+        builder.WebHost.UseShutdownTimeout(TimeSpan.FromSeconds(2));
         builder.WebHost.ConfigureKestrel(k =>
         {
             // Loopback only (127.0.0.1 and ::1), unless the user allowed the network.
@@ -156,10 +158,12 @@ public sealed class ProxyServer : IAsyncDisposable
 
         // LLMTray's own requests (its chat, the CLI) carry the per-run token.
         var fromApp = AppToken is not null && request.Headers[AppHeader].ToString() == AppToken;
-        if (Access?.Invoke() is { Required: true } access
-            && !ApiKeyCheck.IsPreflight(request.Method, request.Headers.Origin.ToString(), request.Headers.AccessControlRequestMethod.ToString())
-            && !ApiKeyCheck.Allows(access, request.Headers.Authorization.ToString(), request.Headers["x-api-key"].ToString(),
-                ThisPc.Is(context.Connection.RemoteIpAddress), fromApp))
+        var access = Access?.Invoke() ?? ApiAccess.Open;
+        var fromThisPc = ThisPc.Is(context.Connection.RemoteIpAddress);
+        // A preflight is let through only where the request it asks about could be.
+        var preflight = ApiKeyCheck.IsPreflight(request.Method, request.Headers.Origin.ToString(), request.Headers.AccessControlRequestMethod.ToString())
+            && (access.Required || fromThisPc);
+        if (!preflight && !ApiKeyCheck.Allows(access, request.Headers.Authorization.ToString(), request.Headers["x-api-key"].ToString(), fromThisPc, fromApp))
         {
             // Refused before anything is read, loaded or counted.
             await SendJsonAsync(context, StatusCodes.Status401Unauthorized, ApiKeyCheck.Refusal(path)).ConfigureAwait(false);

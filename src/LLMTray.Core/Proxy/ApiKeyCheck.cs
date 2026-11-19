@@ -40,10 +40,14 @@ public static class ApiKeyCheck
     public static bool IsPreflight(string method, string? origin, string? requestMethod) =>
         method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(origin) && !string.IsNullOrEmpty(requestMethod);
 
-    /// <summary>Whether a request may go on.</summary>
+    /// <summary>
+    /// Whether a request may go on. Another device never gets in without the
+    /// key, whatever the listener: the network is allowed only with it.
+    /// </summary>
     public static bool Allows(ApiAccess access, string? authorization, string? xApiKey, bool fromThisPc, bool fromApp)
     {
-        if (!access.Required || fromApp || (access.OnlyFromOtherDevices && fromThisPc)) return true;
+        if (!access.Required) return fromThisPc;
+        if (fromApp || (access.OnlyFromOtherDevices && fromThisPc)) return true;
         return access.Key is { Length: > 0 } key && Presented(authorization, xApiKey) is { } given && Same(given, key);
     }
 
@@ -77,14 +81,16 @@ public static class ThisPc
         if (remote is null) return false;
         if (remote.IsIPv4MappedToIPv6) remote = remote.MapToIPv4();
         if (IPAddress.IsLoopback(remote)) return true;
-        // A link-local IPv6 address carries its interface's scope: compared without it.
-        return Addresses().Contains(Unscoped(remote));
+        // A link-local address is unique only on its own link: another device on another link may
+        // use the same one (RFC 4007 §12), so it never counts as this PC.
+        if (remote.IsIPv6LinkLocal || IsIPv4LinkLocal(remote)) return false;
+        return Addresses().Contains(remote);
     }
 
     /// <summary>The PC's unicast addresses that other devices may reach, for Settings: IPv4 first, no loopback or link-local.</summary>
     public static IReadOnlyList<IPAddress> NetworkAddresses() =>
         [.. Interfaces()
-            .Where(a => !IPAddress.IsLoopback(a) && !a.IsIPv6LinkLocal && !a.IsIPv6Multicast)
+            .Where(a => !IPAddress.IsLoopback(a) && !a.IsIPv6LinkLocal && !a.IsIPv6Multicast && !IsIPv4LinkLocal(a))
             .OrderBy(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1)];
 
     /// <summary>Read again at most every few seconds: a network change brings new ones.</summary>
@@ -93,15 +99,14 @@ public static class ThisPc
         lock (Sync)
         {
             if (cache is { } c && DateTime.UtcNow - c.At < TimeSpan.FromSeconds(5)) return c.Addresses;
-            var set = new HashSet<IPAddress>(Interfaces().Select(Unscoped));
+            var set = new HashSet<IPAddress>(Interfaces().Where(a => !a.IsIPv6LinkLocal && !IsIPv4LinkLocal(a)));
             cache = (DateTime.UtcNow, set);
             return set;
         }
     }
 
-    /// <summary>An IPv6 address without its scope (ScopeId throws on IPv4).</summary>
-    static IPAddress Unscoped(IPAddress a) =>
-        a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && a.ScopeId != 0 ? new IPAddress(a.GetAddressBytes()) : a;
+    static bool IsIPv4LinkLocal(IPAddress a) =>
+        a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && a.GetAddressBytes() is [169, 254, _, _];
 
     static IEnumerable<IPAddress> Interfaces()
     {

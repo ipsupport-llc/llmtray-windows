@@ -658,6 +658,11 @@ public partial class App : Application
     /// <summary>Whether the API listens on the network now.</summary>
     public bool ProxyOnNetwork => proxy?.OnNetwork == true;
 
+    /// <summary>Whether LLMTray's API holds its port now.</summary>
+    public bool ProxyListening => proxy is not null && ProxyError is null;
+
+    readonly SemaphoreSlim networkChange = new(1, 1);
+
     /// <summary>The per-run token LLMTray's own requests carry: the CLI gets it over this user's pipe.</summary>
     internal string AppToken => appToken;
 
@@ -700,16 +705,27 @@ public partial class App : Application
     public async Task ApplyNetworkAsync()
     {
         if (proxy is null) return;
-        var wanted = Settings.ListensOnNetwork;
-        if (proxy.OnNetwork == wanted && ProxyError is null) return;
+        // One change at a time, each to the settings as they are when it runs: the last toggle wins.
+        await networkChange.WaitAsync();
         try
         {
-            await proxy.RestartAsync(wanted);
-            ProxyError = null;
+            var wanted = Settings.ListensOnNetwork;
+            if (proxy.OnNetwork == wanted && ProxyError is null) return;
+            try
+            {
+                await proxy.RestartAsync(wanted);
+                ProxyError = null;
+            }
+            catch (Exception e)
+            {
+                ProxyError = e is IOException
+                    ? L.F("Port {0} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.", AppInfo.ProxyPort)
+                    : e.Message;
+            }
         }
-        catch (IOException)
+        finally
         {
-            ProxyError = L.F("Port {0} is in use by another program, so LLMTray's API is off. Close that program and restart LLMTray.", AppInfo.ProxyPort);
+            networkChange.Release();
         }
     }
 
