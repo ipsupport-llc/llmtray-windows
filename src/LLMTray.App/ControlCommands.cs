@@ -76,6 +76,9 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
             ["model"] = s.Model?.Name,
             ["backend"] = s.Backend,
             ["device"] = s.Device,
+            // adr/0028: Settings' "Run models on", and why the model runs elsewhere when it does.
+            ["runOn"] = app.Settings.RunOn,
+            ["note"] = s.Note,
             ["message"] = s.Message,
             ["api"] = AppInfo.ApiBaseUrl,
             ["port"] = AppInfo.ProxyPort,
@@ -83,7 +86,7 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
             // adr/0027: whether clients must send the key ("network": only other devices), never the key itself.
             ["apiKey"] = !app.Settings.RequireApiKey ? "off" : app.Settings.ApiKeyOnlyFromOtherDevices ? "network" : "required",
             ["network"] = app.ProxyOnNetwork,
-            ["text"] = text + (!app.Settings.RequireApiKey ? "" : app.Settings.ApiKeyOnlyFromOtherDevices
+            ["text"] = text + (s.Note is { } note ? "\n" + note : "") + (!app.Settings.RequireApiKey ? "" : app.Settings.ApiKeyOnlyFromOtherDevices
                 ? (app.ProxyOnNetwork ? "\nDevices on the network need the API key (Settings › Server); this PC doesn't." : "")
                 : "\nClients need the API key (Settings › Server)."),
         });

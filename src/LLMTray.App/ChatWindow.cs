@@ -1315,7 +1315,9 @@ sealed partial class ChatWindow : Window
         var running = host.Status is HostStatus.Running or HostStatus.Loading ? host.Model : null;
         var line = new List<string>();
         if (running is not null) line.Add(Ui.Size(running.SizeBytes));
-        if (Status.Device(host) is { } device) line.Add(device);
+        // Somewhere else than chosen (adr/0028): where, and why.
+        if (host.Note is { } note && running is not null) line.Add(note);
+        else if (Status.Device(host) is { } device) line.Add(device);
         if (line.Count == 0) line.Add(L.F("API at {0}", Core.AppInfo.ApiBaseUrl));
         facts.Text = problem ?? string.Join(" · ", line);
         facts.Foreground = problem is null ? Ui.Secondary : Ui.Red;

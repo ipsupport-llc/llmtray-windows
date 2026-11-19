@@ -16,7 +16,9 @@ public static class LlamaServerLaunch
     /// <summary>The environment variable llama-server reads its API key from.</summary>
     public const string ApiKeyVariable = "LLAMA_API_KEY";
 
-    public static LaunchPlan Build(string serverExecutable, ModelEntry model, int port, string apiKey, string? logFile, ServerOptions options)
+    /// <param name="devices">The cards to run on (llama.cpp's names, "Vulkan0"); none: llama.cpp's own pick (adr/0028).</param>
+    public static LaunchPlan Build(string serverExecutable, ModelEntry model, int port, string apiKey, string? logFile, ServerOptions options,
+        IReadOnlyList<string>? devices = null)
     {
         var args = new List<string>
         {
@@ -43,6 +45,10 @@ public static class LlamaServerLaunch
         if (options.Parallel > 0)
         {
             args.AddRange(["--parallel", options.Parallel.ToString(CultureInfo.InvariantCulture)]);
+        }
+        if (devices is { Count: > 0 })
+        {
+            args.AddRange(["--device", string.Join(",", devices)]);
         }
         if (logFile is not null)
         {
