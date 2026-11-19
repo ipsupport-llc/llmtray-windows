@@ -64,6 +64,19 @@ public sealed record AppSettings
 
     /// <summary>0: llama-server picks (the model's own context, cut to fit memory).</summary>
     public int ContextSize { get; init; }
+
+    /// <summary>Clients must send the API key (adr/0027): off until turned on. The key itself is kept DPAPI-protected, not here.</summary>
+    public bool RequireApiKey { get; init; }
+
+    /// <summary>Apps on this PC go without the key; only other devices need it.</summary>
+    public bool ApiKeyOnlyFromOtherDevices { get; init; } = true;
+
+    /// <summary>The user's choice to let devices on the network in; it takes effect only with the key required.</summary>
+    public bool AllowNetwork { get; init; }
+
+    /// <summary>Whether the API listens on the network: on Windows only with the key required (adr/0027).</summary>
+    [JsonIgnore]
+    public bool ListensOnNetwork => AllowNetwork && RequireApiKey;
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

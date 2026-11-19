@@ -299,7 +299,9 @@ public sealed partial class MainWindow : Window
         yield return Ui.Card(
             Ui.Row(L.T("Address"), L.T("Point your apps and coding agents here: it speaks the OpenAI and Anthropic APIs."),
                 Ui.Horizontal(Ui.Value(AppInfo.ApiBaseUrl, mono: true), Ui.Button(L.T("Copy"), () => Copy(AppInfo.ApiBaseUrl)))),
-            Ui.Row(L.T("Port"), app.ProxyError ?? L.T("Only this PC can connect."), Ui.Value(AppInfo.ProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+            Ui.Row(L.T("Port"), app.ProxyError ?? (app.ProxyOnNetwork ? L.T("This PC and devices on your network can connect.") : L.T("Only this PC can connect.")),
+                Ui.Value(AppInfo.ProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        foreach (var part in ApiKeyPart()) yield return part;
 
         yield return Ui.Section(L.T("Model"));
         yield return Ui.Card(

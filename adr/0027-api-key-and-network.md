@@ -1,10 +1,10 @@
 # 0027. An API key, and the API on the local network
 
-Status: **proposed** (2026-11-18), for the maintainer's decision: it
-changes adr/0001's loopback-only proxy. Mac counterpart: #388
+Status: accepted (2026-11-18, the maintainer). It changes adr/0001's
+loopback-only proxy. Mac counterpart: #388
 (`APIKeyCheck`, `Pref.allowLAN`).
 
-## Proposal
+## Decision
 
 Two settings in Settings › Server, both off by default:
 
@@ -29,10 +29,13 @@ Two settings in Settings › Server, both off by default:
   listen: the prompt says which networks; "Private" only is the advice.
   Settings shows the addresses to use (`http://<ip>:8765/v1`).
 
-`llmtray status` and the Server tab say whether a key is required; the
-CLI's `export OPENAI_API_KEY=…` hint names the real key only when one is
-required, never prints it otherwise. The usage statistics (adr/0026)
-name clients as before; a refused request isn't counted.
+`llmtray status` says whether a key is required, never the key.
+`llmtray chat` goes as the app's own request: it gets the per-run app
+token over this user's pipe (only when it asks, so `status --json` never
+prints it), and sends it only to the API on this PC. The usage statistics
+(adr/0026) name clients as before; a refused request isn't counted, and
+reaches neither a model nor llama-server. Neither `Authorization` nor
+`x-api-key` is passed on to llama-server.
 
 ## Why
 
@@ -45,9 +48,9 @@ shared PC out when "Only from other devices" is off.
 adr/0001 says the proxy is loopback only; this makes that the default,
 not a rule. Nothing changes for anyone who doesn't turn it on.
 
-## Open questions for the maintainer
+## Settled
 
-1. LAN only with the key required (proposed), or as on the Mac
-   (independent)?
-2. Should the Store build offer LAN listening at all (a Firewall prompt
-   from a Store app reads as alarming)?
+1. On Windows the network setting needs the key (as proposed above), not
+   independent as on the Mac.
+2. Every build offers it, the Store's included: the app is full trust,
+   and the Firewall asks only when someone turns the setting on.

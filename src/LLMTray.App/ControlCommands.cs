@@ -21,7 +21,7 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
         var model = request["model"]?.ToString();
         return request["cmd"]?.ToString() switch
         {
-            "status" => Status(),
+            "status" => Status(request["appToken"] is JsonValue v && v.TryGetValue<bool>(out var withToken) && withToken),
             "models" => Models(),
             "start" => await StartAsync(model, emit, ct),
             "stop" => await StopAsync(),
@@ -60,7 +60,7 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
         _ => "stopped",
     };
 
-    JsonObject Status()
+    JsonObject Status(bool withAppToken = false)
     {
         var s = app.Host.State;
         var text = s.Status switch
@@ -70,7 +70,7 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
             HostStatus.Failed => $"{s.Model?.Name} isn't running: {s.Message}",
             _ => $"No model loaded. The API is at {AppInfo.ApiBaseUrl}",
         };
-        return ControlProtocol.Done(new JsonObject
+        var reply = ControlProtocol.Done(new JsonObject
         {
             ["state"] = Word(s.Status),
             ["model"] = s.Model?.Name,
@@ -80,8 +80,20 @@ sealed class ControlCommands(App app, Microsoft.UI.Dispatching.DispatcherQueue u
             ["api"] = AppInfo.ApiBaseUrl,
             ["port"] = AppInfo.ProxyPort,
             ["version"] = typeof(App).Assembly.GetName().Version?.ToString(3),
-            ["text"] = text,
+            // adr/0027: whether clients must send the key ("network": only other devices), never the key itself.
+            ["apiKey"] = !app.Settings.RequireApiKey ? "off" : app.Settings.ApiKeyOnlyFromOtherDevices ? "network" : "required",
+            ["network"] = app.ProxyOnNetwork,
+            ["text"] = text + (!app.Settings.RequireApiKey ? "" : app.Settings.ApiKeyOnlyFromOtherDevices
+                ? (app.ProxyOnNetwork ? "\nDevices on the network need the API key (Settings › Server); this PC doesn't." : "")
+                : "\nClients need the API key (Settings › Server)."),
         });
+        // Only for `llmtray chat` (this user's pipe): its requests go as the app's own, never shown by `status --json`.
+        if (withAppToken)
+        {
+            reply["appHeader"] = LLMTray.Core.Proxy.ProxyServer.AppHeader;
+            reply["appToken"] = app.AppToken;
+        }
+        return reply;
     }
 
     JsonObject Models()
