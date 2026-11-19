@@ -8,6 +8,8 @@ OpenAI-compatible API. Connect your coding agents and apps.
 </p>
 
 <p align="center">
+  <a href="https://apps.microsoft.com/detail/9NPT1456KS29"><img src="https://img.shields.io/badge/Microsoft_Store-Get_LLMTray-0078D4?style=for-the-badge" alt="Get LLMTray from the Microsoft Store"></a>
+  &nbsp;
   <a href="https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-x64-setup.exe"><img src="https://img.shields.io/badge/Download-LLMTray--x64--setup.exe-0078D4?style=for-the-badge" alt="Download LLMTray-x64-setup.exe"></a>
   &nbsp;
   <a href="https://github.com/ipsupport-llc/llmtray-windows/releases/latest/download/LLMTray-ARM64-setup.exe"><img src="https://img.shields.io/badge/Download-LLMTray--ARM64--setup.exe-0078D4?style=for-the-badge" alt="Download LLMTray-ARM64-setup.exe"></a>
@@ -60,7 +62,11 @@ dotnet build src/LLMTray.App -c Release -r win-x64 -p:Platform=x64
 
 ## Installing
 
-Each [release](https://github.com/ipsupport-llc/llmtray-windows/releases) has
+The easiest way is the
+[Microsoft Store](https://apps.microsoft.com/detail/9NPT1456KS29): the Store
+installs and updates it, stable releases only (adr/0025).
+
+Outside the Store, each [release](https://github.com/ipsupport-llc/llmtray-windows/releases) has
 three formats, for `x64` and `ARM64`:
 
 - **`-setup.exe`**: installs for your user only, without administrator
