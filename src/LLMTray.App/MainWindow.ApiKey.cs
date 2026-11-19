@@ -83,9 +83,10 @@ public sealed partial class MainWindow
         if (on && app.EnsureApiKey() is null)
         {
             // A saved key Windows can't read: replaced only when the user says so.
-            if (!app.ApiKeyUnreadable || !await ConfirmNewKeyAsync(L.T("The saved key can't be read now. Make a new key?")) || app.NewApiKey() is null)
+            var replaced = app.ApiKeyUnreadable && await ConfirmNewKeyAsync(L.T("The saved key can't be read now. Make a new key?"));
+            if (!replaced || app.NewApiKey() is null)
             {
-                keyError = app.ApiKeyUnreadable ? L.T("The saved key can't be read now. Try again, or make a new key.") : L.T("The key couldn't be saved.");
+                keyError = app.ApiKeyUnreadable && !replaced ? L.T("The saved key can't be read now. Try again, or make a new key.") : L.T("The key couldn't be saved.");
                 RenderServer();
                 return;
             }

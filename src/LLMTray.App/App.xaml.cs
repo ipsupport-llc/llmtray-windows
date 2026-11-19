@@ -659,7 +659,7 @@ public partial class App : Application
     public bool ProxyOnNetwork => proxy?.OnNetwork == true;
 
     /// <summary>Whether LLMTray's API holds its port now.</summary>
-    public bool ProxyListening => proxy is not null && ProxyError is null;
+    public bool ProxyListening => proxy?.Listening == true && ProxyError is null;
 
     readonly SemaphoreSlim networkChange = new(1, 1);
 

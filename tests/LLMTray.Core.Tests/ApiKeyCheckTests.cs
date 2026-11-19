@@ -30,7 +30,8 @@ public sealed class ApiKeyCheckTests
         Assert.False(ApiKeyCheck.Allows(on, "Bearer llmtray-ab", null, false, false));
         Assert.True(ApiKeyCheck.Allows(on, $"Bearer {Key}", null, false, false));
         Assert.True(ApiKeyCheck.Allows(on, null, Key, false, false));
-        Assert.True(ApiKeyCheck.Allows(on, null, null, false, fromApp: true));
+        Assert.True(ApiKeyCheck.Allows(on, null, null, fromThisPc: true, fromApp: true));
+        Assert.False(ApiKeyCheck.Allows(on, null, null, fromThisPc: false, fromApp: true));
         // This PC needs it unless only other devices are asked.
         Assert.False(ApiKeyCheck.Allows(on, null, null, fromThisPc: true, false));
         Assert.True(ApiKeyCheck.Allows(on with { OnlyFromOtherDevices = true }, null, null, fromThisPc: true, false));

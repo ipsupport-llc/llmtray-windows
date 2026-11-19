@@ -89,6 +89,9 @@ public sealed class ProxyServer : IAsyncDisposable
     /// <summary>The API key's settings, read per request (adr/0027); null: no key asked.</summary>
     public Func<ApiAccess>? Access { get; set; }
 
+    /// <summary>Whether it holds its port now (not between a restart's stop and start).</summary>
+    public bool Listening => app is not null;
+
     /// <summary>Whether it listens on the PC's network addresses, not loopback only.</summary>
     public bool OnNetwork { get; private set; }
 

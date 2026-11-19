@@ -47,7 +47,8 @@ public static class ApiKeyCheck
     public static bool Allows(ApiAccess access, string? authorization, string? xApiKey, bool fromThisPc, bool fromApp)
     {
         if (!access.Required) return fromThisPc;
-        if (fromApp || (access.OnlyFromOtherDevices && fromThisPc)) return true;
+        // The app's token counts only from this PC: it never leaves it.
+        if (fromThisPc && (fromApp || access.OnlyFromOtherDevices)) return true;
         return access.Key is { Length: > 0 } key && Presented(authorization, xApiKey) is { } given && Same(given, key);
     }
 
