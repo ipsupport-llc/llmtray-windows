@@ -276,7 +276,7 @@ public partial class App : Application
         mcpStore.Changed += () => dispatcher.TryEnqueue(() => McpChanged?.Invoke());
         var runtimeRoot = RuntimeRoot;
         Host = new ModelHost(launcher, () => LlamaRuntime.Find(runtimeRoot), m => Profiles.ResolvedFor(m.FullPath).ServerOptions,
-            Path.Combine(DataFolder, "logs"));
+            Path.Combine(DataFolder, "logs"), deviceChoice: () => Settings.RunOn);
         // The state is read again when the UI thread gets to it: events from
         // different threads can arrive out of order.
         Host.StateChanged += _ => dispatcher.TryEnqueue(() => OnHostChanged(Host.State));
@@ -549,6 +549,14 @@ public partial class App : Application
         {
             // The host's state carries the message; the window shows it.
         }
+    }
+
+    /// <summary>Settings › Models › "Run models on" (adr/0028): used from the next load; the next load starts over from the chosen device.</summary>
+    public void SetRunOn(string choice)
+    {
+        if (Settings.RunOn == choice) return;
+        UpdateSettings(Settings with { RunOn = choice });
+        Host.ForgetWhatWorked();
     }
 
     public void SetDownloadSource(DownloadSource source)

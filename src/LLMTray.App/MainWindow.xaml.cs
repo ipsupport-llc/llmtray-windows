@@ -168,7 +168,7 @@ public sealed partial class MainWindow : Window
     string? renderedHostKey, renderedToolsKey, renderedUpdatesKey;
     Action? liveUpdates;
 
-    static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Message}";
+    static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Note}|{s.Message}";
 
     /// <summary>What the Tools tab shows of the servers (an open log follows its lines).</summary>
     string ToolsKey() => FoldersKey() + "\n" + ProjectFilesKey() + "\n" + string.Join("\n", App.Current.Mcp.Store.Load().Select(c =>
@@ -228,6 +228,7 @@ public sealed partial class MainWindow : Window
             Ui.ButtonRow(
                 [useLmStudio, Ui.Button(L.T("Rescan"), () => app.Library.Rescan())],
                 [Ui.Button(L.T("Get models…"), () => _ = GetModelsAsync(), accent: true)]));
+        foreach (var part in DevicesPart()) yield return part;
 
         yield return Ui.Section(L.T("Models"));
         if (modelsError is { } problem) yield return Ui.Caption(problem, Ui.Red);
@@ -307,7 +308,7 @@ public sealed partial class MainWindow : Window
         yield return Ui.Card(
             Ui.Row(L.T("Launch settings"), L.T("Context size, KV cache and concurrent requests are part of each model's profile."),
                 Ui.Button(L.T("Profiles"), () => ShowPage("profiles"))),
-            Ui.Row(L.T("Runs on"), L.T("Vulkan when this PC has a GPU it can use, otherwise the CPU."),
+            Ui.Row(L.T("Runs on"), state.Note ?? L.T("Chosen in Settings › Models › Graphics card."),
                 Ui.Value(Status.Device(state) ?? "—")));
 
         foreach (var part in StatisticsPart()) yield return part;

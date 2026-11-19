@@ -25,7 +25,7 @@ and why.
 | [0025](0025-microsoft-store.md) | Microsoft Store releases from CI: the release's unsigned packages restamped with the Partner Center identity into one `.msixupload`; submitted on stable tags through an approved `store` environment; Store copies never self-update (accepted) |
 | [0026](0026-usage-statistics.md) | Usage statistics of the API (Mac Usage tab): requests and tokens per model, client and day, off until turned on, kept on this PC only; read from llama-server's `timings` / the answer's `usage` as the proxy passes it on (accepted) |
 | [0027](0027-api-key-and-network.md) | An API key and the API on the local network (Mac #388): both off by default; on Windows the network only with the key required |
-| [0028](0028-gpu-choice.md) | Which graphics card runs the model: Automatic, one card, all cards, or CPU only, saved by name, with a fallback chain card → other cards → CPU, also after a card is lost while running (proposed) |
+| [0028](0028-gpu-choice.md) | Which graphics card runs the model: Automatic, one card, all cards, or CPU only, saved by name, with a fallback chain card → other cards → CPU, also after a card is lost while running (accepted) |
 | [0016](0016-folder-tools.md) | Folder tools (Mac adr/0014): granted folders only, every change approved item by item, Recycle Bin, journal and Undo (accepted) |
 
 New ADR: next number, one topic, the decision first, then why.

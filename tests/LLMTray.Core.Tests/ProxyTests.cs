@@ -324,14 +324,69 @@ public sealed class ProxyTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task ReportsAServerThatDies()
+    public async Task LoadsAgainOnceAfterTheServerDies()
     {
         await host.LoadAsync(catalog.Models[0]);
         launcher.KillAll(exitCode: 3);
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        // Once: loaded again (adr/0028: a card lost, a driver reset).
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!(launcher.Starts == 2 && host.State.Status == HostStatus.Running) && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.Equal(HostStatus.Running, host.State.Status);
+        Assert.Contains("Loaded again", host.State.Note);
+        // Twice in a row: stopped with the error.
+        launcher.KillAll(exitCode: 3);
+        deadline = DateTime.UtcNow.AddSeconds(10);
         while (host.State.Status != HostStatus.Failed && DateTime.UtcNow < deadline) await Task.Delay(20);
         Assert.Equal(HostStatus.Failed, host.State.Status);
         Assert.Contains("exit code 3", host.State.Message);
+        Assert.Equal(2, launcher.Starts);
+    }
+
+    [Fact]
+    public async Task AStopAfterTheServerDiesIsntUndone()
+    {
+        await host.LoadAsync(catalog.Models[0]);
+        launcher.KillAll(exitCode: 3);
+        await host.StopAsync();
+        await Task.Delay(300);
+        Assert.Equal(HostStatus.Stopped, host.State.Status);
+        Assert.Equal(0, launcher.Running);
+    }
+
+    static readonly GpuDevice Rtx = new("Vulkan1", "NVIDIA GeForce RTX 4070", 12282, 11000);
+    static readonly GpuDevice Uhd = new("Vulkan0", "Intel(R) UHD Graphics 770", 16000, 15000);
+
+    [Fact]
+    public async Task RunsOnTheChosenCardThenFallsBack()
+    {
+        // The chosen card fails to load it: the next card, with a note saying why.
+        await using var cards = new FakeLauncher { Fails = p => p.Arguments.Contains("Vulkan1") };
+        await using var h = new ModelHost(cards,
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs5"),
+            _ => Task.FromResult<IReadOnlyList<GpuDevice>?>([Uhd, Rtx]), () => DeviceChoice.Card(Rtx, [Uhd, Rtx]));
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal(["Vulkan1", "Vulkan0"], cards.Plans.Select(p => p.Arguments[p.Arguments.ToList().IndexOf("--device") + 1]));
+        Assert.Equal(Uhd.Description, h.State.Device);
+        Assert.Equal("On Intel(R) UHD Graphics 770: NVIDIA GeForce RTX 4070 didn't load it.", h.State.Note);
+        // What worked goes first next time: no failing through again.
+        await h.StopAsync();
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal(3, cards.Starts);
+        Assert.Equal(Uhd.Description, h.State.Device);
+    }
+
+    [Fact]
+    public async Task ProcessorOnlyNeverAsksForCards()
+    {
+        var asked = 0;
+        await using var cpuOnly = new FakeLauncher();
+        await using var h = new ModelHost(cpuOnly,
+            () => [new LlamaBackend("vulkan", "vk"), new LlamaBackend("cpu", "cpu")], _ => new ServerOptions(), Path.Combine(root, "logs6"),
+            _ => { asked++; return Task.FromResult<IReadOnlyList<GpuDevice>?>([Rtx]); }, () => DeviceChoice.Cpu);
+        await h.LoadAsync(catalog.Models[0]);
+        Assert.Equal("cpu", h.State.Backend);
+        Assert.Null(h.State.Note);
+        Assert.Equal(0, asked);
     }
 
     [Fact]
@@ -355,17 +410,21 @@ public sealed class ProxyTests : IAsyncDisposable
     {
         readonly List<FakeServer> servers = [];
         public string? FailBackend { get; init; }
+        /// <summary>Launches that fail as they load, as a card short of memory does.</summary>
+        public Func<LaunchPlan, bool>? Fails { get; init; }
+        public List<LaunchPlan> Plans { get; } = [];
         public int Starts { get; private set; }
         public int Running => servers.Count(s => !s.Exited.IsCompleted);
 
         public IChildProcess Start(LaunchPlan plan)
         {
             Starts++;
+            Plans.Add(plan);
             var exe = plan.Executable;
             var args = plan.Arguments.ToList();
             var port = int.Parse(args[args.IndexOf("--port") + 1]);
             var alias = args[args.IndexOf("--alias") + 1];
-            var server = new FakeServer(port, alias, plan.Environment[LlamaServerLaunch.ApiKeyVariable], fail: exe == FailBackend);
+            var server = new FakeServer(port, alias, plan.Environment[LlamaServerLaunch.ApiKeyVariable], fail: exe == FailBackend || Fails?.Invoke(plan) == true);
             servers.Add(server);
             return server;
         }

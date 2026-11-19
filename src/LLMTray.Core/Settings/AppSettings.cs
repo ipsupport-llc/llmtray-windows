@@ -77,6 +77,9 @@ public sealed record AppSettings
     /// <summary>Whether the API listens on the network: on Windows only with the key required (adr/0027).</summary>
     [JsonIgnore]
     public bool ListensOnNetwork => AllowNetwork && RequireApiKey;
+
+    /// <summary>Settings › Models › "Run models on" (adr/0028): <see cref="Runtime.DeviceChoice"/>'s auto, all, cpu or card:&lt;name&gt;.</summary>
+    public string RunOn { get; init; } = Runtime.DeviceChoice.Automatic;
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
