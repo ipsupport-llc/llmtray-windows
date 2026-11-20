@@ -322,7 +322,13 @@ sealed class SetupWindow : Window
                 UIElement action;
                 if (busy)
                 {
-                    action = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
+                    action = Ui.Horizontal(
+                        Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading")),
+                        Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
+                }
+                else if (requested.Contains(p.Model.Title) && app.Downloads.IsQueued(p.Model.Title))
+                {
+                    action = Ui.Horizontal(Ui.Value(L.T("Waiting")), Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
                 }
                 else
                 {
@@ -338,6 +344,22 @@ sealed class SetupWindow : Window
             if (downloads.LastError is { } error) body.Children.Add(Ui.Caption(error, Ui.Red));
             if (downloads.IsActive) body.Children.Add(Ui.Caption(L.T("It goes on in the background: you can continue.")));
         }
+    }
+
+    /// <summary>A download asked for here stopped (its partial file stays for a resume) or taken out of the queue.</summary>
+    void CancelDownload(FeaturedModel model)
+    {
+        var app = App.Current;
+        if (app.Downloads.State.Current?.Title == model.Title) app.Downloads.CancelCurrent();
+        else app.Downloads.Remove(model.Title);
+        requested.Remove(model.Title);
+        if (pickedTitle == model.Title)
+        {
+            // Nothing loads by itself any more: the pick is undone.
+            app.LoadWhenDownloaded(null, null);
+            pickedTitle = null;
+        }
+        Render();
     }
 
     async Task DownloadAsync(FeaturedModel model)

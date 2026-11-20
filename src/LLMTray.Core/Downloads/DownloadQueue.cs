@@ -71,6 +71,39 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         lock (sync) cancel?.Cancel();
     }
 
+    /// <summary>Whether a job of this title waits behind the current one.</summary>
+    public bool IsQueued(string title)
+    {
+        lock (sync) return pending.Any(j => j.Title == title);
+    }
+
+    /// <summary>Takes the waiting jobs of this title out of the queue (not the current one: <see cref="CancelCurrent"/>); each ends as cancelled.</summary>
+    public bool Remove(string title)
+    {
+        List<DownloadJob> removed;
+        lock (sync)
+        {
+            removed = [.. pending.Where(j => j.Title == title)];
+            if (removed.Count == 0) return false;
+            var kept = pending.Where(j => j.Title != title).ToList();
+            pending.Clear();
+            foreach (var j in kept) pending.Enqueue(j);
+        }
+        foreach (var job in removed)
+        {
+            // Whoever waits on it (llmtray pull, a load when it's here) hears it won't come.
+            try
+            {
+                Ended?.Invoke(job, $"{job.Title}: cancelled before it started");
+            }
+            catch (Exception)
+            {
+            }
+        }
+        Raise();
+        return true;
+    }
+
     async Task RunAsync()
     {
         while (true)
