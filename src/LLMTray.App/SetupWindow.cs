@@ -331,17 +331,18 @@ sealed class SetupWindow : Window
                 var busy = downloads.Current?.Title == p.Model.Title;
                 var ours = jobs.GetValueOrDefault(p.Model.Title);
                 UIElement action;
-                if (busy)
+                // Ours waiting comes first: another download of the same model (llmtray pull) may be the one running.
+                if (ours is not null && app.Downloads.IsQueued(ours))
+                {
+                    action = Ui.Horizontal(Ui.Value(L.T("Waiting")), Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
+                }
+                else if (busy)
                 {
                     var shown = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
-                    // Cancel only for the download started here, not another of the same model (llmtray pull).
+                    // Cancel only for the download started here, not another of the same model.
                     action = ours is not null && ReferenceEquals(downloads.Current, ours)
                         ? Ui.Horizontal(shown, Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)))
                         : shown;
-                }
-                else if (ours is not null && app.Downloads.IsQueued(ours))
-                {
-                    action = Ui.Horizontal(Ui.Value(L.T("Waiting")), Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
                 }
                 else
                 {
