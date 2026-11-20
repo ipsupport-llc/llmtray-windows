@@ -309,7 +309,8 @@ try {
                     $pattern.Toggle()
                     Start-Sleep -Seconds 1
                 }
-                if (($pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) { throw 'usage sharing was not put back' }
+                # Found again: the page is drawn anew after a toggle.
+                if (((& $usageToggle).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) { throw 'usage sharing was not put back' }
             }
             catch {
                 throw "usage sharing not put back as it was: $_"
