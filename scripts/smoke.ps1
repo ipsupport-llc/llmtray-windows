@@ -265,22 +265,30 @@ try {
         Write-Host "tabs not photographed: $_"
     }
 
-    # General › Usage statistics: sharing on for a moment, the report preview
-    # opened and photographed, then off again. A fresh install has no finished
-    # day, so nothing is sent.
+    # General › Usage statistics: the report preview opened and photographed.
+    # Sharing is turned on only if it's off, and put back as it was however
+    # this ends. Turning it on starts from nothing, so no finished day is sent.
+    $usageToggle = $null
+    $usageWasOn = $null
     try {
+        if (-not $win) { throw 'Settings is not open' }
         $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'General')),
             (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))))
         $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Start-Sleep -Seconds 2
-        $findToggle = { $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
-            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Share anonymous usage statistics')),
-            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty, $true))))) }
-        $toggle = & $findToggle
-        if (-not $toggle) { throw 'no usage statistics switch' }
-        $toggle.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-        Start-Sleep -Seconds 2
+        $usageToggle = {
+            $found = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Share anonymous usage statistics')),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty, $true)))))
+            if (-not $found) { throw 'no usage statistics switch' }
+            $found.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+        }
+        $usageWasOn = (& $usageToggle).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+        if (-not $usageWasOn) {
+            (& $usageToggle).Toggle()
+            Start-Sleep -Seconds 2
+        }
         $expander = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
             (New-Object System.Windows.Automation.PropertyCondition($nameProp, "What's sent (today's report so far)")),
             (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty, $true)))))
@@ -289,11 +297,24 @@ try {
         $expander.SetFocus()
         Start-Sleep -Seconds 2
         Save-Screenshot 'usage-preview'
-        (& $findToggle).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-        Start-Sleep -Seconds 1
     }
     catch {
         Write-Host "usage preview not photographed: $_"
+    }
+    finally {
+        if ($null -ne $usageWasOn) {
+            try {
+                $pattern = & $usageToggle
+                if (($pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) {
+                    $pattern.Toggle()
+                    Start-Sleep -Seconds 1
+                }
+                if (($pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) { throw 'usage sharing was not put back' }
+            }
+            catch {
+                throw "usage sharing not put back as it was: $_"
+            }
+        }
     }
 
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
