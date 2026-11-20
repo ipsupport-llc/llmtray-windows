@@ -375,7 +375,8 @@ sealed class SetupWindow : Window
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             var job = await model.JobAsync(app.Sources[app.Settings.DownloadSource], root, timeout.Token);
-            if (finished) return;
+            // Closed, or skipped while its address was looked up: not started after all.
+            if (finished || !requested.Contains(model.Title)) return;
             pickedTitle = model.Title;
             // Loaded as soon as it's here: the one thing needed to chat.
             app.LoadWhenDownloaded(job, FeaturedModel.Inside(root, Path.Combine(model.Folder, model.File.Name)));
