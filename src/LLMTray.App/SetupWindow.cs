@@ -38,6 +38,10 @@ sealed class SetupWindow : Window
     bool checkUpdates = App.Current.Settings.CheckForUpdates;
     /// <summary>Usage statistics, shown as they are (on for a new install); Finish applies a change.</summary>
     bool shareUsage = App.Current.Settings.ShareUsage == true;
+    /// <summary>Bumped when Skip undoes the picks: a download lookup from before it is dropped.</summary>
+    int picks;
+    /// <summary>The downloads started here, by model title: only these get Cancel.</summary>
+    readonly Dictionary<string, Core.Downloads.DownloadJob> jobs = [];
     UpdateChannel channel = App.Current.Updater.Channel;
     string? pickedTitle;
     string? hardware;
@@ -97,8 +101,14 @@ sealed class SetupWindow : Window
                 break;
             case Step.ChatModel:
                 // The pick is undone: its download stops and nothing loads by itself.
-                if (app.Downloads.State.Current is { } job && requested.Contains(job.Title)) app.Downloads.CancelCurrent();
+                // Nothing loads by itself first, so a download ending just now can't load it; then every
+                // download asked for here, running or still waiting, stops (not someone else's of the same model).
                 app.LoadWhenDownloaded(null, null);
+                foreach (var job in jobs.Values) app.Downloads.Cancel(job);
+                jobs.Clear();
+                requested.Clear();
+                // A lookup still running belongs to the skipped picks: it doesn't start when it ends.
+                picks++;
                 pickedTitle = null;
                 break;
             case Step.WebTools:
@@ -319,10 +329,20 @@ sealed class SetupWindow : Window
                     _ => L.T("Lighter than the recommended one: faster and leaves memory to other apps, but its answers are simpler."),
                 };
                 var busy = downloads.Current?.Title == p.Model.Title;
+                var ours = jobs.GetValueOrDefault(p.Model.Title);
                 UIElement action;
-                if (busy)
+                // Ours waiting comes first: another download of the same model (llmtray pull) may be the one running.
+                if (ours is not null && app.Downloads.IsQueued(ours))
                 {
-                    action = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
+                    action = Ui.Horizontal(Ui.Value(L.T("Waiting")), Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
+                }
+                else if (busy)
+                {
+                    var shown = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
+                    // Cancel only for the download started here, not another of the same model.
+                    action = ours is not null && ReferenceEquals(downloads.Current, ours)
+                        ? Ui.Horizontal(shown, Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)))
+                        : shown;
                 }
                 else
                 {
@@ -340,10 +360,27 @@ sealed class SetupWindow : Window
         }
     }
 
+    /// <summary>A download asked for here stopped (its partial file stays for a resume) or taken out of the queue.</summary>
+    void CancelDownload(FeaturedModel model)
+    {
+        var app = App.Current;
+        if (pickedTitle == model.Title)
+        {
+            // Nothing loads by itself any more, before the cancel: a download ending just now doesn't load it.
+            app.LoadWhenDownloaded(null, null);
+            pickedTitle = null;
+        }
+        // One step in the queue: this job, whether it's running or waiting by now.
+        if (jobs.Remove(model.Title, out var job)) app.Downloads.Cancel(job);
+        requested.Remove(model.Title);
+        Render();
+    }
+
     async Task DownloadAsync(FeaturedModel model)
     {
         var app = App.Current;
         if (!requested.Add(model.Title)) return;
+        var mine = picks;
         // One folder for the whole download: where it lands is where it's looked for.
         var root = app.ModelsFolder;
         Render();
@@ -351,14 +388,17 @@ sealed class SetupWindow : Window
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             var job = await model.JobAsync(app.Sources[app.Settings.DownloadSource], root, timeout.Token);
-            if (finished) return;
+            // Closed, or skipped while its address was looked up: not started after all.
+            if (finished || mine != picks || !requested.Contains(model.Title)) return;
             pickedTitle = model.Title;
             // Loaded as soon as it's here: the one thing needed to chat.
             app.LoadWhenDownloaded(job, FeaturedModel.Inside(root, Path.Combine(model.Folder, model.File.Name)));
+            jobs[model.Title] = job;
             app.Downloads.Enqueue(job);
         }
         catch (Exception e)
         {
+            if (mine != picks) return;
             requested.Remove(model.Title);
             if (finished) return;
             Render();

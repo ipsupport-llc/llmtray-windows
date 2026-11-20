@@ -228,11 +228,13 @@ public partial class App : Application
                 Telemetry?.Record(LLMTray.Core.Telemetry.TelemetryFeature.ModelDownload);
             }
             // The wizard's chat model: loaded once it's here.
-            if (loadAfterDownload is { } wanted && wanted.Job == job)
+            if (loadAfterDownload is { } seen && ReferenceEquals(seen.Job, job))
             {
-                loadAfterDownload = null;
                 dispatcher.TryEnqueue(() =>
                 {
+                    // Checked again on the UI thread, where the wizard changes it: a pick undone meanwhile doesn't load.
+                    if (loadAfterDownload is not { } wanted || !ReferenceEquals(wanted.Job, job)) return;
+                    loadAfterDownload = null;
                     if (Library.Current.Models.FirstOrDefault(m => string.Equals(Path.GetFullPath(m.FullPath), Path.GetFullPath(wanted.Path), StringComparison.OrdinalIgnoreCase)) is { } model)
                     {
                         _ = LoadAsync(model);
