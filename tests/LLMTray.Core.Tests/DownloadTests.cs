@@ -289,7 +289,7 @@ public sealed class DownloadTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task AWaitingJobCanBeTakenOut()
+    public async Task AJobIsCancelledByItsTitle()
     {
         var queue = new DownloadQueue(new ModelDownloader(http));
         var ended = new List<(string Title, string? Why)>();
@@ -305,14 +305,15 @@ public sealed class DownloadTests : IAsyncDisposable
         Assert.Equal("slow", queue.State.Current?.Title);
 
         Assert.True(queue.IsQueued("second"));
-        Assert.True(queue.Remove("second"));
-        Assert.False(queue.Remove("second"));
-        Assert.False(queue.Remove("slow"));
+        Assert.True(queue.Cancel("second"));
+        Assert.False(queue.Cancel("second"));
+        Assert.False(queue.Cancel("nothing"));
         Assert.False(queue.IsQueued("second"));
         Assert.Equal(1, queue.State.Queued);
         lock (ended) Assert.Contains(ended, e => e.Title == "second" && e.Why is not null);
 
-        queue.CancelCurrent();
+        // The running one, by its title.
+        Assert.True(queue.Cancel("slow"));
         var job = await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal("third", job.Title);
         Assert.False(File.Exists(Path.Combine(root, "second.gguf")));

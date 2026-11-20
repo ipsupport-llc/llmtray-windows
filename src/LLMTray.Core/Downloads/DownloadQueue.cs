@@ -77,17 +77,29 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         lock (sync) return pending.Any(j => j.Title == title);
     }
 
-    /// <summary>Takes the waiting jobs of this title out of the queue (not the current one: <see cref="CancelCurrent"/>); each ends as cancelled.</summary>
-    public bool Remove(string title)
+    /// <summary>
+    /// Stops the jobs of this title, in one step: the running one is cancelled
+    /// (its partial file stays for a resume), the waiting ones are taken out
+    /// and end as cancelled. False when none had that title.
+    /// </summary>
+    public bool Cancel(string title)
     {
         List<DownloadJob> removed;
+        var running = false;
         lock (sync)
         {
+            if (current?.Title == title && cancel is { } c)
+            {
+                c.Cancel();
+                running = true;
+            }
             removed = [.. pending.Where(j => j.Title == title)];
-            if (removed.Count == 0) return false;
-            var kept = pending.Where(j => j.Title != title).ToList();
-            pending.Clear();
-            foreach (var j in kept) pending.Enqueue(j);
+            if (removed.Count > 0)
+            {
+                var kept = pending.Where(j => j.Title != title).ToList();
+                pending.Clear();
+                foreach (var j in kept) pending.Enqueue(j);
+            }
         }
         foreach (var job in removed)
         {
@@ -100,8 +112,8 @@ public sealed class DownloadQueue(ModelDownloader downloader)
             {
             }
         }
-        Raise();
-        return true;
+        if (removed.Count > 0) Raise();
+        return running || removed.Count > 0;
     }
 
     async Task RunAsync()

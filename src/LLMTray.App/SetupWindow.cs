@@ -350,8 +350,8 @@ sealed class SetupWindow : Window
     void CancelDownload(FeaturedModel model)
     {
         var app = App.Current;
-        if (app.Downloads.State.Current?.Title == model.Title) app.Downloads.CancelCurrent();
-        else app.Downloads.Remove(model.Title);
+        // One step in the queue: the job of this title, whether it's running or waiting by now.
+        app.Downloads.Cancel(model.Title);
         requested.Remove(model.Title);
         if (pickedTitle == model.Title)
         {
