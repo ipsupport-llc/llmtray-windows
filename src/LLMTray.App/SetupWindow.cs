@@ -97,7 +97,9 @@ sealed class SetupWindow : Window
                 break;
             case Step.ChatModel:
                 // The pick is undone: its download stops and nothing loads by itself.
-                if (app.Downloads.State.Current is { } job && requested.Contains(job.Title)) app.Downloads.CancelCurrent();
+                // Every download asked for here, running or still waiting, stops.
+                foreach (var title in requested) app.Downloads.Cancel(title);
+                requested.Clear();
                 app.LoadWhenDownloaded(null, null);
                 pickedTitle = null;
                 break;
