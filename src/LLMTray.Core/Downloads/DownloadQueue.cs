@@ -71,49 +71,47 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         lock (sync) cancel?.Cancel();
     }
 
-    /// <summary>Whether a job of this title waits behind the current one.</summary>
-    public bool IsQueued(string title)
+    /// <summary>Whether this job (this one, not another of its title) waits behind the current one.</summary>
+    public bool IsQueued(DownloadJob job)
     {
-        lock (sync) return pending.Any(j => j.Title == title);
+        lock (sync) return pending.Any(j => ReferenceEquals(j, job));
     }
 
     /// <summary>
-    /// Stops the jobs of this title, in one step: the running one is cancelled
-    /// (its partial file stays for a resume), the waiting ones are taken out
-    /// and end as cancelled. False when none had that title.
+    /// Stops this job, in one step whether it runs or waits by now: running,
+    /// it's cancelled (its partial file stays for a resume); waiting, it's
+    /// taken out and ends as cancelled. Another job of the same title (someone
+    /// else's llmtray pull) is left alone. False when it's gone already.
     /// </summary>
-    public bool Cancel(string title)
+    public bool Cancel(DownloadJob job)
     {
-        List<DownloadJob> removed;
-        var running = false;
+        var removed = false;
         lock (sync)
         {
-            if (current?.Title == title && cancel is { } c)
+            if (ReferenceEquals(current, job) && cancel is { } c)
             {
                 c.Cancel();
-                running = true;
+                return true;
             }
-            removed = [.. pending.Where(j => j.Title == title)];
-            if (removed.Count > 0)
+            if (pending.Any(j => ReferenceEquals(j, job)))
             {
-                var kept = pending.Where(j => j.Title != title).ToList();
+                var kept = pending.Where(j => !ReferenceEquals(j, job)).ToList();
                 pending.Clear();
                 foreach (var j in kept) pending.Enqueue(j);
+                removed = true;
             }
         }
-        foreach (var job in removed)
+        if (!removed) return false;
+        // Whoever waits on it (llmtray pull, a load when it's here) hears it won't come.
+        try
         {
-            // Whoever waits on it (llmtray pull, a load when it's here) hears it won't come.
-            try
-            {
-                Ended?.Invoke(job, $"{job.Title}: cancelled before it started");
-            }
-            catch (Exception)
-            {
-            }
+            Ended?.Invoke(job, $"{job.Title}: cancelled before it started");
         }
-        if (removed.Count > 0) Raise();
-        return running || removed.Count > 0;
+        catch (Exception)
+        {
+        }
+        Raise();
+        return true;
     }
 
     async Task RunAsync()

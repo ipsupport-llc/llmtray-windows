@@ -289,33 +289,37 @@ public sealed class DownloadTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task AJobIsCancelledByItsTitle()
+    public async Task AJobIsCancelledAloneWhereverItIs()
     {
         var queue = new DownloadQueue(new ModelDownloader(http));
-        var ended = new List<(string Title, string? Why)>();
+        var ended = new List<(DownloadJob Job, string? Why)>();
         var done = new TaskCompletionSource<DownloadJob>();
-        queue.Ended += (j, why) => { lock (ended) ended.Add((j.Title, why)); };
+        queue.Ended += (j, why) => { lock (ended) ended.Add((j, why)); };
         queue.Completed += j => done.TrySetResult(j);
         var hang = Item() with { Url = new Uri(baseUri, "blob/hang.gguf"), Destination = Path.Combine(root, "hang.gguf"), Size = null, Sha256 = null };
-        queue.Enqueue(new DownloadJob("slow", [hang]));
-        queue.Enqueue(new DownloadJob("second", [Item() with { Destination = Path.Combine(root, "second.gguf") }]));
-        queue.Enqueue(new DownloadJob("third", [Item() with { Destination = Path.Combine(root, "third.gguf") }]));
+        var slow = new DownloadJob("slow", [hang]);
+        var second = new DownloadJob("second", [Item() with { Destination = Path.Combine(root, "second.gguf") }]);
+        var otherSecond = new DownloadJob("second", [Item() with { Destination = Path.Combine(root, "other.gguf") }]);
+        queue.Enqueue(slow);
+        queue.Enqueue(second);
+        queue.Enqueue(otherSecond);
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (queue.State.Current?.Title != "slow" && DateTime.UtcNow < deadline) await Task.Delay(20);
-        Assert.Equal("slow", queue.State.Current?.Title);
+        while (!ReferenceEquals(queue.State.Current, slow) && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.Same(slow, queue.State.Current);
 
-        Assert.True(queue.IsQueued("second"));
-        Assert.True(queue.Cancel("second"));
-        Assert.False(queue.Cancel("second"));
-        Assert.False(queue.Cancel("nothing"));
-        Assert.False(queue.IsQueued("second"));
+        Assert.True(queue.IsQueued(second));
+        Assert.True(queue.Cancel(second));
+        Assert.False(queue.Cancel(second));
+        Assert.False(queue.IsQueued(second));
+        // Another job of the same title (someone else's) stays.
+        Assert.True(queue.IsQueued(otherSecond));
         Assert.Equal(1, queue.State.Queued);
-        lock (ended) Assert.Contains(ended, e => e.Title == "second" && e.Why is not null);
+        lock (ended) Assert.Contains(ended, e => ReferenceEquals(e.Job, second) && e.Why is not null);
 
-        // The running one, by its title.
-        Assert.True(queue.Cancel("slow"));
+        // The running one.
+        Assert.True(queue.Cancel(slow));
         var job = await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("third", job.Title);
+        Assert.Same(otherSecond, job);
         Assert.False(File.Exists(Path.Combine(root, "second.gguf")));
     }
 
