@@ -294,7 +294,11 @@ try {
             (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty, $true)))))
         if (-not $expander) { throw 'no report preview' }
         $expander.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-        $expander.SetFocus()
+        Start-Sleep -Seconds 1
+        # The page scrolled to its end, where Usage statistics is.
+        $scroller = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'PageScroller')))
+        if ($scroller) { $scroller.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern).SetScrollPercent(-1, 100) }
         Start-Sleep -Seconds 2
         Save-Screenshot 'usage-preview'
     }
