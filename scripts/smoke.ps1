@@ -265,6 +265,63 @@ try {
         Write-Host "tabs not photographed: $_"
     }
 
+    # General › Usage statistics: the report preview opened and photographed.
+    # Sharing is turned on only if it's off, and put back as it was however
+    # this ends. Turning it on starts from nothing, so no finished day is sent.
+    $usageToggle = $null
+    $usageWasOn = $null
+    try {
+        if (-not $win) { throw 'Settings is not open' }
+        $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'General')),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))))
+        $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Start-Sleep -Seconds 2
+        $usageToggle = {
+            $found = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+                (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Share anonymous usage statistics')),
+                (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty, $true)))))
+            if (-not $found) { throw 'no usage statistics switch' }
+            $found.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+        }
+        $usageWasOn = (& $usageToggle).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On
+        if (-not $usageWasOn) {
+            (& $usageToggle).Toggle()
+            Start-Sleep -Seconds 2
+        }
+        $expander = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, "What's sent (today's report so far)")),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty, $true)))))
+        if (-not $expander) { throw 'no report preview' }
+        $expander.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        Start-Sleep -Seconds 1
+        # The page scrolled to its end, where Usage statistics is.
+        $scroller = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'PageScroller')))
+        if ($scroller) { $scroller.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern).SetScrollPercent(-1, 100) }
+        Start-Sleep -Seconds 2
+        Save-Screenshot 'usage-preview'
+    }
+    catch {
+        Write-Host "usage preview not photographed: $_"
+    }
+    finally {
+        if ($null -ne $usageWasOn) {
+            try {
+                $pattern = & $usageToggle
+                if (($pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) {
+                    $pattern.Toggle()
+                    Start-Sleep -Seconds 1
+                }
+                # Found again: the page is drawn anew after a toggle.
+                if (((& $usageToggle).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) -ne $usageWasOn) { throw 'usage sharing was not put back' }
+            }
+            catch {
+                throw "usage sharing not put back as it was: $_"
+            }
+        }
+    }
+
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
     $streamFile = Join-Path $Out 'stream.txt'
     $stream | Set-Content -NoNewline (Join-Path $Out 'stream-request.json')
