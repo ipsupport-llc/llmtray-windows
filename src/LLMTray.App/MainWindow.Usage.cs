@@ -26,9 +26,11 @@ public sealed partial class MainWindow
         if (on)
         {
             var preview = app.Telemetry.Preview() ?? "";
-            var shown = new TextBox
+            // A selectable TextBlock in a ScrollViewer: a read-only TextBox here measured one line and showed only "{".
+            var shown = new ScrollViewer
             {
-                Text = preview, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = Ui.Mono, MaxHeight = 280,
+                Content = new TextBlock { Text = preview, TextWrapping = TextWrapping.Wrap, FontFamily = Ui.Mono, IsTextSelectionEnabled = true },
+                MaxHeight = 280,
                 Margin = new Thickness(16, 0, 16, 12),
             };
             var expander = new Expander

@@ -50,7 +50,8 @@
     "recommendedFor": [],
     "file": { "name": "frognano-4b-jang.gguf", "size": 3059865280, "sha256": "ead000b582ed4ac9c39205f5a44687b1bdad6273189d9d777fef975778f91442" },
     "projector": { "name": "mmproj-frognano-4b-q8.gguf", "size": 363748416, "sha256": "70812e0b0f3cab0df68537be62b487289b269d92e9345340af292e2fe308f439" },
-    "huggingFace": { "repo": "roman220220/FrogNano-4B-2609-GGUF-jang-imatrix", "revision": "ed3622143baabf55ab34410df3308fdb3508642f" }
+    "huggingFace": { "repo": "roman220220/FrogNano-4B-2609-GGUF-jang-imatrix", "revision": "ed3622143baabf55ab34410df3308fdb3508642f" },
+    "kaggle": { "handle": "romanromenskyi/frognano-4b-2609-ipsupport/gguf/jang-imatrix/1" }
   },
   {
     "title": "Gemma 4 26B A4B",

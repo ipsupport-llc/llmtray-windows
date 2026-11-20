@@ -265,6 +265,37 @@ try {
         Write-Host "tabs not photographed: $_"
     }
 
+    # General › Usage statistics: sharing on for a moment, the report preview
+    # opened and photographed, then off again. A fresh install has no finished
+    # day, so nothing is sent.
+    try {
+        $item = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'General')),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))))
+        $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Start-Sleep -Seconds 2
+        $findToggle = { $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, 'Share anonymous usage statistics')),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty, $true))))) }
+        $toggle = & $findToggle
+        if (-not $toggle) { throw 'no usage statistics switch' }
+        $toggle.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Start-Sleep -Seconds 2
+        $expander = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+            (New-Object System.Windows.Automation.PropertyCondition($nameProp, "What's sent (today's report so far)")),
+            (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty, $true)))))
+        if (-not $expander) { throw 'no report preview' }
+        $expander.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        $expander.SetFocus()
+        Start-Sleep -Seconds 2
+        Save-Screenshot 'usage-preview'
+        (& $findToggle).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Start-Sleep -Seconds 1
+    }
+    catch {
+        Write-Host "usage preview not photographed: $_"
+    }
+
     $stream = @{ model = $Model; max_tokens = 24; stream = $true; messages = @(@{ role = 'user'; content = 'Count to five.' }) } | ConvertTo-Json -Depth 5
     $streamFile = Join-Path $Out 'stream.txt'
     $stream | Set-Content -NoNewline (Join-Path $Out 'stream-request.json')
