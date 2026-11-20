@@ -38,6 +38,8 @@ sealed class SetupWindow : Window
     bool checkUpdates = App.Current.Settings.CheckForUpdates;
     /// <summary>Usage statistics, shown as they are (on for a new install); Finish applies a change.</summary>
     bool shareUsage = App.Current.Settings.ShareUsage == true;
+    /// <summary>Bumped when Skip undoes the picks: a download lookup from before it is dropped.</summary>
+    int picks;
     UpdateChannel channel = App.Current.Updater.Channel;
     string? pickedTitle;
     string? hardware;
@@ -100,6 +102,8 @@ sealed class SetupWindow : Window
                 // Every download asked for here, running or still waiting, stops.
                 foreach (var title in requested) app.Downloads.Cancel(title);
                 requested.Clear();
+                // A lookup still running belongs to the skipped picks: it doesn't start when it ends.
+                picks++;
                 app.LoadWhenDownloaded(null, null);
                 pickedTitle = null;
                 break;
@@ -368,6 +372,7 @@ sealed class SetupWindow : Window
     {
         var app = App.Current;
         if (!requested.Add(model.Title)) return;
+        var mine = picks;
         // One folder for the whole download: where it lands is where it's looked for.
         var root = app.ModelsFolder;
         Render();
@@ -376,7 +381,7 @@ sealed class SetupWindow : Window
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             var job = await model.JobAsync(app.Sources[app.Settings.DownloadSource], root, timeout.Token);
             // Closed, or skipped while its address was looked up: not started after all.
-            if (finished || !requested.Contains(model.Title)) return;
+            if (finished || mine != picks || !requested.Contains(model.Title)) return;
             pickedTitle = model.Title;
             // Loaded as soon as it's here: the one thing needed to chat.
             app.LoadWhenDownloaded(job, FeaturedModel.Inside(root, Path.Combine(model.Folder, model.File.Name)));
@@ -384,6 +389,7 @@ sealed class SetupWindow : Window
         }
         catch (Exception e)
         {
+            if (mine != picks) return;
             requested.Remove(model.Title);
             if (finished) return;
             Render();
