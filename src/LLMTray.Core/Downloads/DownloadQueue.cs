@@ -71,6 +71,49 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         lock (sync) cancel?.Cancel();
     }
 
+    /// <summary>Whether this job (this one, not another of its title) waits behind the current one.</summary>
+    public bool IsQueued(DownloadJob job)
+    {
+        lock (sync) return pending.Any(j => ReferenceEquals(j, job));
+    }
+
+    /// <summary>
+    /// Stops this job, in one step whether it runs or waits by now: running,
+    /// it's cancelled (its partial file stays for a resume); waiting, it's
+    /// taken out and ends as cancelled. Another job of the same title (someone
+    /// else's llmtray pull) is left alone. False when it's gone already.
+    /// </summary>
+    public bool Cancel(DownloadJob job)
+    {
+        var removed = false;
+        lock (sync)
+        {
+            if (ReferenceEquals(current, job) && cancel is { } c)
+            {
+                c.Cancel();
+                return true;
+            }
+            if (pending.Any(j => ReferenceEquals(j, job)))
+            {
+                var kept = pending.Where(j => !ReferenceEquals(j, job)).ToList();
+                pending.Clear();
+                foreach (var j in kept) pending.Enqueue(j);
+                removed = true;
+            }
+        }
+        if (!removed) return false;
+        // Whoever waits on it (llmtray pull, a load when it's here) hears it won't come.
+        try
+        {
+            Ended?.Invoke(job, $"{job.Title}: cancelled before it started");
+        }
+        catch (Exception)
+        {
+        }
+        Raise();
+        return true;
+    }
+
     async Task RunAsync()
     {
         while (true)

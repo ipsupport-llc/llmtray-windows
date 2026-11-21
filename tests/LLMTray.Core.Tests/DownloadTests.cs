@@ -93,6 +93,16 @@ public sealed class DownloadTests : IAsyncDisposable
                 case "/blob/m-Q4.gguf":
                     await ServeAsync(context, Payload);
                     return;
+                case "/blob/hang.gguf":
+                    // Never answers: a download that runs until it's cancelled.
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, context.RequestAborted);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                    return;
                 default:
                     context.Response.StatusCode = 404;
                     return;
@@ -276,6 +286,41 @@ public sealed class DownloadTests : IAsyncDisposable
         while (queue.State.IsActive && DateTime.UtcNow < deadline) await Task.Delay(20);
         Assert.Equal("m", queue.State.LastDone);
         Assert.Null(queue.State.LastError);
+    }
+
+    [Fact]
+    public async Task AJobIsCancelledAloneWhereverItIs()
+    {
+        var queue = new DownloadQueue(new ModelDownloader(http));
+        var ended = new List<(DownloadJob Job, string? Why)>();
+        var done = new TaskCompletionSource<DownloadJob>();
+        queue.Ended += (j, why) => { lock (ended) ended.Add((j, why)); };
+        queue.Completed += j => done.TrySetResult(j);
+        var hang = Item() with { Url = new Uri(baseUri, "blob/hang.gguf"), Destination = Path.Combine(root, "hang.gguf"), Size = null, Sha256 = null };
+        var slow = new DownloadJob("slow", [hang]);
+        var second = new DownloadJob("second", [Item() with { Destination = Path.Combine(root, "second.gguf") }]);
+        var otherSecond = new DownloadJob("second", [Item() with { Destination = Path.Combine(root, "other.gguf") }]);
+        queue.Enqueue(slow);
+        queue.Enqueue(second);
+        queue.Enqueue(otherSecond);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!ReferenceEquals(queue.State.Current, slow) && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.Same(slow, queue.State.Current);
+
+        Assert.True(queue.IsQueued(second));
+        Assert.True(queue.Cancel(second));
+        Assert.False(queue.Cancel(second));
+        Assert.False(queue.IsQueued(second));
+        // Another job of the same title (someone else's) stays.
+        Assert.True(queue.IsQueued(otherSecond));
+        Assert.Equal(1, queue.State.Queued);
+        lock (ended) Assert.Contains(ended, e => ReferenceEquals(e.Job, second) && e.Why is not null);
+
+        // The running one.
+        Assert.True(queue.Cancel(slow));
+        var job = await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Same(otherSecond, job);
+        Assert.False(File.Exists(Path.Combine(root, "second.gguf")));
     }
 
     [Fact]
