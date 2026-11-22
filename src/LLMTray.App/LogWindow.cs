@@ -41,6 +41,8 @@ sealed class LogWindow : Window
     readonly List<string> rowKeys = [];
     long lastLength = -1;
     DateTime lastWrite;
+    /// <summary>Clear Log: what the file held then isn't shown (the file itself is the server's, still being written).</summary>
+    long clearedAt;
 
     public LogWindow()
     {
@@ -60,9 +62,15 @@ sealed class LogWindow : Window
 
         var more = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 } };
         ToolTipService.SetToolTip(more, L.T("Copy, save or open"));
+        // Glyphs say nothing to a screen reader: their tooltips are their names.
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(more, L.T("Copy, save or open"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(follow, L.T("Follow: keep the newest in view"));
         var menu = new MenuFlyout();
         menu.Items.Add(Item(L.T("Copy shown"), () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
         menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll())));
+        menu.Items.Add(Item(L.T("Save Log…"), () => _ = SaveAsync()));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(Item(L.T("Clear Log"), ClearLog));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item(L.T("Open logs folder"), () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
         menu.Items.Add(Item(L.T("Open the previous run's log"), () => Ui.Open(Path.Combine(App.Current.DataFolder, "logs", "llama-server.previous.log"))));
@@ -153,9 +161,11 @@ sealed class LogWindow : Window
             return;
         }
         if (info.Length == lastLength && info.LastWriteTimeUtc == lastWrite) return;
+        // A new run's file starts over: what was cleared was the old one's.
+        if (info.Length < clearedAt) clearedAt = 0;
         lastLength = info.Length;
         lastWrite = info.LastWriteTimeUtc;
-        var parsed = LlamaLog.Parse(ReadTail().Split('\n'));
+        var parsed = LlamaLog.Parse(ReadTail(clearedAt).Split('\n'));
         entries = parsed.Count > MaxEntries ? parsed.Skip(parsed.Count - MaxEntries).ToList() : parsed;
         Render();
     }
@@ -174,18 +184,53 @@ sealed class LogWindow : Window
         }
     }
 
-    static string ReadTail()
+    /// <summary>The log's last few megabytes, from <paramref name="from"/> on at the earliest.</summary>
+    static string ReadTail(long from)
     {
         try
         {
             using var stream = new FileStream(App.Current.Host.LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > TailBytes) stream.Seek(-TailBytes, SeekOrigin.End);
+            stream.Seek(Math.Min(stream.Length, Math.Max(from, stream.Length - TailBytes)), SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return "";
+        }
+    }
+
+    /// <summary>Clear Log (Mac): the list starts empty from here; the file, which the server writes, is left alone.</summary>
+    void ClearLog()
+    {
+        try
+        {
+            clearedAt = new FileInfo(App.Current.Host.LogFile).Length;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+        expanded.Clear();
+        lastLength = -1;
+        Refresh();
+    }
+
+    /// <summary>Save Log… (Mac): the whole log, into a file the user picks.</summary>
+    async Task SaveAsync()
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = $"LLMTray-server-{DateTime.Now:yyyy-MM-ddTHH-mm-ss}" };
+            picker.FileTypeChoices.Add(L.T("Log"), [".log"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            if (await picker.PickSaveFileAsync() is not { } file) return;
+            await File.WriteAllTextAsync(file.Path, ReadAll());
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        {
+            shown.Text = L.T("The log couldn't be saved");
+            shown.Foreground = Ui.Red;
         }
     }
 

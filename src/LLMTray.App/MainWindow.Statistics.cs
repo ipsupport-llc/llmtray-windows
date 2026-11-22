@@ -66,13 +66,16 @@ public sealed partial class MainWindow
         yield return Ui.Section(L.T("Usage"));
         if (!app.Settings.KeepRequestStatistics)
         {
+            var turnOn = Ui.Button(L.T("Turn On"), () =>
+            {
+                app.UpdateSettings(app.Settings with { KeepRequestStatistics = true });
+                RenderPage();
+            });
+            // What was kept before they were turned off can still be cleared (Mac: the same).
+            var kept = app.RequestStatistics.Read(l => l.Rows.Count) > 0;
             yield return Ui.Card(Ui.Row(L.T("Usage statistics are off"),
                 L.T("Count requests and tokens per model, client and day, and how fast they ran. Kept only on this PC, never sent anywhere."),
-                Ui.Button(L.T("Turn On"), () =>
-                {
-                    app.UpdateSettings(app.Settings with { KeepRequestStatistics = true });
-                    RenderPage();
-                })));
+                kept ? Ui.Horizontal(Ui.Button(L.T("Clear Statistics…"), () => _ = ClearStatisticsAsync()), turnOn) : turnOn));
             yield break;
         }
 
