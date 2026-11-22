@@ -30,6 +30,13 @@ var groups = new List<LicenseGroup>
             "miniaudio by David Reid, in llama.cpp's vendor/miniaudio. Public domain (Unlicense) or MIT No Attribution; the license is at the end of miniaudio.h."),
         new LicenseEntry("subprocess.h", null, "Unlicense", "https://github.com/sheredom/subprocess.h",
             "subprocess.h by Neil Henning, in llama.cpp's vendor/sheredom. Released into the public domain (Unlicense)."),
+        new LicenseEntry("LLVM OpenMP runtime (libomp)", null, "Apache-2.0 WITH LLVM-exception", "https://github.com/llvm/llvm-project",
+            Need(Path.Combine(llamaLicenses, "LICENSE-LLVM-OpenMP"))),
+        new LicenseEntry("Microsoft Visual C++ runtime", null, "Microsoft Visual Studio license (distributable code)",
+            "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files",
+            "vcruntime140.dll, msvcp140.dll and, on x64, vcruntime140_1.dll, beside llama-server so it starts without the Visual C++ "
+            + "Redistributable installed. Copyright (c) Microsoft Corporation. Redistributed as Distributable Code under the "
+            + "Microsoft Visual Studio license terms (https://visualstudio.microsoft.com/license-terms/), as app-local deployment allows."),
     ]),
 };
 
