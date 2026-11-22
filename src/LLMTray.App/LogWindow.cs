@@ -35,6 +35,10 @@ sealed class LogWindow : Window
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly HashSet<string> expanded = [];
     IReadOnlyList<LogEntry> entries = [];
+    /// <summary>The rows shown, kept: a refresh adds the new ones and changes the last, and the rest stay where they are.</summary>
+    readonly System.Collections.ObjectModel.ObservableCollection<UIElement> rows = [];
+    /// <summary>What each shown row was drawn from (its key), in the same order.</summary>
+    readonly List<string> rowKeys = [];
     long lastLength = -1;
     DateTime lastWrite;
 
@@ -48,6 +52,7 @@ sealed class LogWindow : Window
         scopes.Items.Add(requests);
         scopes.Items.Add(problems);
         scopes.SelectedItem = all;
+        list.ItemsSource = rows;
         scopes.SelectionChanged += (_, _) => Render();
         search.TextChanged += (_, _) => Render();
         ToolTipService.SetToolTip(follow, L.T("Follow: keep the newest in view"));
@@ -194,23 +199,51 @@ sealed class LogWindow : Window
             && e.Matches(query));
     }
 
+    /// <summary>
+    /// The rows brought in line with the entries shown, changing as little as
+    /// it can: rows that scrolled out of the log's tail go from the top, the
+    /// ones that are the same stay, the rest are made from where they differ.
+    /// The whole list was made again every second the log grew, so rows
+    /// blinked and a place scrolled back to was lost.
+    /// </summary>
     void Render()
     {
         var visible = ShownEntries().ToList();
         var problemCount = entries.Count(e => e.IsProblem);
-        problems.Text = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
-        var rows = new List<UIElement>(visible.Count);
-        foreach (var entry in visible) rows.Add(Row(entry));
-        if (rows.Count == 0)
+        var problemsText = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
+        if (problems.Text != problemsText) problems.Text = problemsText;
+        var keys = visible.Select(RowKey).ToList();
+        if (keys.Count == 0)
         {
-            rows.Add(new TextBlock
-            {
-                Text = entries.Count == 0 ? L.T("No server log yet. It starts when a model loads.") : L.T("Nothing matches."),
-                Foreground = Ui.Secondary,
-                Margin = new Thickness(12),
-            });
+            keys.Add(entries.Count == 0 ? "empty" : "no match");
         }
-        list.ItemsSource = rows;
+        // The tail of the log moved on: what's gone from its top goes from the list's top.
+        var start = keys.Count > 0 && rowKeys.Count > 0 ? rowKeys.IndexOf(keys[0]) : -1;
+        if (start > 0)
+        {
+            for (var i = 0; i < start; i++) rows.RemoveAt(0);
+            rowKeys.RemoveRange(0, start);
+        }
+        var same = 0;
+        while (same < keys.Count && same < rowKeys.Count && keys[same] == rowKeys[same]) same++;
+        while (rows.Count > same)
+        {
+            rows.RemoveAt(rows.Count - 1);
+            rowKeys.RemoveAt(rowKeys.Count - 1);
+        }
+        var added = keys.Count > same;
+        for (var i = same; i < keys.Count; i++)
+        {
+            rows.Add(visible.Count == 0
+                ? new TextBlock
+                {
+                    Text = entries.Count == 0 ? L.T("No server log yet. It starts when a model loads.") : L.T("Nothing matches."),
+                    Foreground = Ui.Secondary,
+                    Margin = new Thickness(12),
+                }
+                : Row(visible[i]));
+            rowKeys.Add(keys[i]);
+        }
 
         var errors = entries.Count(e => e.IsError);
         var warnings = problemCount - errors;
@@ -221,7 +254,15 @@ sealed class LogWindow : Window
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"⚠ {warnings}", Foreground = warnings > 0 ? Ui.Orange : Ui.Secondary });
         shown.Text = visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "";
         shown.Foreground = Ui.Secondary;
-        if (follow.IsChecked == true) ScrollToEnd();
+        if (added && follow.IsChecked == true) ScrollToEnd();
+    }
+
+    /// <summary>What a row shows of its entry: a request's summary grows as it runs; an opened one shows its lines.</summary>
+    string RowKey(LogEntry entry)
+    {
+        var id = entry.Kind == LogKind.Request ? entry.Lines[0].Time + "|" + entry.Lines[0].Message : "";
+        var last = entry.Lines[^1];
+        return $"{entry.Kind}|{entry.Head.Time}|{entry.Head.Message}|{entry.Lines.Count}|{last.Time}|{last.Message}|{entry.Metrics}|{entry.IsProblem}|{(id.Length > 0 && expanded.Contains(id))}";
     }
 
     void RenderStatus()
@@ -233,7 +274,7 @@ sealed class LogWindow : Window
 
     void ScrollToEnd()
     {
-        if (list.ItemsSource is List<UIElement> { Count: > 0 } rows) list.ScrollIntoView(rows[^1]);
+        if (rows.Count > 0) list.ScrollIntoView(rows[^1]);
     }
 
     /// <summary>One entry: time, a level mark, the message, a request's numbers; its lines when opened.</summary>
