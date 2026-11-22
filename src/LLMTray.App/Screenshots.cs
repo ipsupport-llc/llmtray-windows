@@ -11,6 +11,8 @@ namespace LLMTray.App;
 /// itself, for a look at the layout in CI (adr/0014): the chat, each tab of
 /// Settings (the window, and the whole page as <c>-full</c>), the setup
 /// wizard's steps, About. The windows' own pixels, whatever covers them.
+/// And <c>steady.txt</c>: the checks that what only changes a value makes
+/// nothing again (no flicker), which no photograph can show.
 /// </summary>
 static class Screenshots
 {
@@ -117,11 +119,18 @@ static class Screenshots
                 try
                 {
                     await setup.ScreenshotsAsync(folder, SaveElementAsync);
+                    File.AppendAllLines(Path.Combine(folder, "steady.txt"), [setup.SteadyCheck()]);
                 }
                 finally
                 {
                     if (!setupWasOpen) setup.CloseAfterScreenshots();
                 }
+            });
+            // The chat's header under reports of the host and the models folder that change nothing.
+            await ExtraAsync(folder, () =>
+            {
+                if (app.Chat is { } header) File.AppendAllLines(Path.Combine(folder, "steady.txt"), [header.SteadyCheck()]);
+                return Task.CompletedTask;
             });
             // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
             await StoreAsync(app, Path.Combine(folder, "store"));

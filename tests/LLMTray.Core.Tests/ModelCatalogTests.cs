@@ -100,4 +100,39 @@ public sealed class ModelCatalogTests : IDisposable
     {
         Assert.Empty(ModelCatalog.Scan(Path.Combine(root, "nope")).Models);
     }
+
+    [Fact]
+    public void ARescanThatFindsTheSameIsNoChange()
+    {
+        var folder = root;
+        var library = new ModelLibrary(() => folder);
+        var changes = 0;
+        library.Changed += _ => changes++;
+
+        // Nothing there, as before the first look: no change.
+        library.Rescan();
+        Assert.Equal(0, changes);
+
+        var model = Touch("org/a-GGUF/a-Q4.gguf");
+        var first = library.Rescan();
+        Assert.Equal(1, changes);
+        // The same again (the tray menu, the command line): the catalog stays the one it was.
+        Assert.Same(first, library.Rescan());
+        Assert.Same(first, library.Current);
+        Assert.Equal(1, changes);
+
+        // Another size, a projector beside it, another model, another folder: each is a change.
+        File.WriteAllBytes(model, new byte[20]);
+        library.Rescan();
+        Assert.Equal(2, changes);
+        Touch("org/a-GGUF/mmproj-a.gguf");
+        library.Rescan();
+        Assert.Equal(3, changes);
+        Touch("org/b-GGUF/b-Q4.gguf");
+        library.Rescan();
+        Assert.Equal(4, changes);
+        folder = Path.Combine(root, "elsewhere");
+        Assert.Empty(library.Rescan().Models);
+        Assert.Equal(5, changes);
+    }
 }

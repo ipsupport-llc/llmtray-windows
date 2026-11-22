@@ -23,7 +23,9 @@ sealed class SetupWindow : Window
     enum Step { Welcome, YourPc, ModelsFolder, ChatModel, WebTools, Apps, Updates, Done }
 
     Step step = Step.Welcome;
-    readonly StackPanel body = new() { Spacing = 10, MaxWidth = 640 };
+    // As wide as the window's content, like the heading above it and the buttons below (Mac: the same).
+    // No MaxWidth: with one, WinUI places the column by its content's width, so it moved from step to step.
+    readonly StackPanel body = new() { Spacing = 10 };
     readonly TextBlock heading = new() { FontSize = 24, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
     readonly TextBlock counter = new() { FontSize = 12 };
     readonly Button back = new() { Content = L.T("Back") };
@@ -56,6 +58,17 @@ sealed class SetupWindow : Window
     readonly UpdateChannel openedChannel = App.Current.Updater.Channel;
     bool? openedSignIn;
     readonly Action<DownloadState> downloadsChanged;
+    readonly Action<DownloadJob, string?> downloadEnded;
+    /// <summary>The download state the step is drawn from: the queue's, as of the last drawing.</summary>
+    DownloadState downloads = DownloadState.Idle;
+    /// <summary>What the model and last steps showed of the downloads: drawn again only when it changes, not for each progress report.</summary>
+    string? renderedDownloads;
+    /// <summary>The running download's percent on the model step, changed in place.</summary>
+    TextBlock? percent;
+    /// <summary>Why the last download couldn't start: shown under the suggestions until the next try or step.</summary>
+    string? startError;
+    /// <summary>The model already on this PC picked here with Use (its row says Selected at once, before it has loaded).</summary>
+    string? usedLocal;
 
     public SetupWindow()
     {
@@ -63,7 +76,9 @@ sealed class SetupWindow : Window
         SystemBackdrop = new MicaBackdrop();
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         Content = Layout();
-        Resize(780, 640);
+        Ui.Center(this, 780, 640, 620, 480);
+        // A wizard: its page is laid out for this size, not for a whole screen.
+        if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.IsMaximizable = false;
         back.Click += (_, _) => Go(step - 1);
         skip.Click += (_, _) =>
         {
@@ -76,9 +91,12 @@ sealed class SetupWindow : Window
             else Go(step + 1);
         };
         AppWindow.Closing += (_, _) => Close(applyChoices: false);
-        downloadsChanged = _ => { if (!finished && step is Step.ChatModel or Step.Done) Render(); };
+        downloadsChanged = OnDownloads;
         App.Current.DownloadsChanged += downloadsChanged;
-        Closed += (_, _) => App.Current.DownloadsChanged -= downloadsChanged;
+        // The queue raises Ended on its own thread, or inside Cancel on the caller's: always handled later, here.
+        downloadEnded = (job, why) => DispatcherQueue.TryEnqueue(() => OnDownloadEnded(job, why));
+        App.Current.Downloads.Ended += downloadEnded;
+        Closed += (_, _) => Unsubscribe();
         _ = LoadHardwareAsync();
         _ = LoadSignInAsync();
         foreach (var on in App.Current.Profiles.ResolvedFor(null).EnabledTools)
@@ -110,6 +128,8 @@ sealed class SetupWindow : Window
                 // A lookup still running belongs to the skipped picks: it doesn't start when it ends.
                 picks++;
                 pickedTitle = null;
+                usedLocal = null;
+                startError = null;
                 break;
             case Step.WebTools:
                 webTools.Clear();
@@ -122,12 +142,6 @@ sealed class SetupWindow : Window
                 channel = openedChannel;
                 break;
         }
-    }
-
-    void Resize(int width, int height)
-    {
-        var scale = (Content as FrameworkElement)?.XamlRoot?.RasterizationScale ?? 1.0;
-        AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(width * scale), (int)(height * scale)));
     }
 
     UIElement Layout()
@@ -180,6 +194,44 @@ sealed class SetupWindow : Window
     }
 
     /// <summary>
+    /// The check behind "the wizard doesn't flicker while a model downloads"
+    /// (Screenshots.cs, CI): on the model step a made-up download of the first
+    /// suggestion reports progress five times; every element of the step must
+    /// stay the same object, with only the percent's text changing. A line for
+    /// steady.txt, starting with FAIL when not. The step it was on comes back.
+    /// </summary>
+    internal string SteadyCheck()
+    {
+        var app = App.Current;
+        var pick = SetupWizard.Picks(FeaturedModels.All, MemoryForModels(), app.Settings.DownloadSource)
+            .FirstOrDefault(p => !SetupWizard.IsDownloaded(p.Model, app.ModelsFolder));
+        if (pick is null) return "skipped: wizard model step: no suggestion to check with";
+        var title = pick.Model.Title;
+        if (app.Downloads.State.IsActive || requested.Count > 0) return "skipped: wizard model step: a real download is running";
+        var was = step;
+        var job = new DownloadJob(title, []);
+        try
+        {
+            Go(Step.ChatModel);
+            jobs[title] = job;
+            requested.Add(title);
+            OnDownloads(new DownloadState(job, 0, 1000, 0, null, null));
+            var before = new HashSet<object>(Ui.Elements(body), ReferenceEqualityComparer.Instance);
+            for (var i = 1; i <= 5; i++) OnDownloads(new DownloadState(job, i * 100, 1000, 0, null, null));
+            var after = Ui.Elements(body);
+            var again = after.Count(e => !before.Contains(e));
+            var ok = again == 0 && after.Count == before.Count && percent?.Text == "50%";
+            return $"{(ok ? "ok" : "FAIL")}: wizard model step: {again} of {after.Count} elements made again over 5 progress reports; the percent shows \"{percent?.Text}\"";
+        }
+        finally
+        {
+            jobs.Remove(title);
+            requested.Remove(title);
+            Go(was);
+        }
+    }
+
+    /// <summary>
     /// Closed after the photographs that opened it, leaving no trace: setup
     /// isn't marked as done (the X would mark it) and no window opens after it.
     /// </summary>
@@ -187,20 +239,79 @@ sealed class SetupWindow : Window
     {
         if (finished) return;
         finished = true;
-        App.Current.DownloadsChanged -= downloadsChanged;
+        Unsubscribe();
         App.Current.SetupClosed(this, showWindow: false);
         base.Close();
     }
 
     void Go(Step to)
     {
-        step = (Step)Math.Clamp((int)to, 0, (int)Step.Done);
+        var target = (Step)Math.Clamp((int)to, 0, (int)Step.Done);
+        if (target != step) startError = null;
+        step = target;
         Render();
         scroller.ChangeView(null, 0, null, disableAnimation: true);
     }
 
-    void Render()
+    /// <summary>
+    /// A report of the download queue. Progress alone changes the percent in
+    /// place; the step is drawn again only when its rows change (a download
+    /// began or ended, or its turn came). Drawn again for each report, four a
+    /// second, the whole step flickered for as long as a model downloaded.
+    /// </summary>
+    void OnDownloads(DownloadState reported)
     {
+        if (finished || step is not (Step.ChatModel or Step.Done)) return;
+        if (DownloadsKey(reported) != renderedDownloads) Render(reported);
+        else if (percent is not null) percent.Text = Percent(reported);
+    }
+
+    /// <summary>
+    /// What the steps show, but for how far the running download is: the
+    /// downloads, and the models here and the last one loaded, which may change
+    /// meanwhile from the window or the tray (the catalog is a new object only
+    /// when the folder's content changed).
+    /// </summary>
+    static string DownloadsKey(DownloadState d)
+    {
+        var app = App.Current;
+        return $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(d.Current)}|{d.Current?.Title}|{d.Total is > 0}|{d.Queued}|{d.LastError}|{d.LastDone}"
+            + $"|{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(app.Library.Current)}|{app.Settings.LastModel}|{app.ModelsFolder}";
+    }
+
+    /// <summary>The last model loaded, by the name the lists show (the setting holds its path in the models folder).</summary>
+    static string? LastModelName() => App.Current.Library.Current.Resolve(App.Current.Settings.LastModel)?.Name;
+
+    static string Percent(DownloadState d) => d.Total is long total && total > 0 ? $"{100 * d.Received / total}%" : "";
+
+    /// <summary>
+    /// One of this wizard's downloads ended. Finished or not, it's no longer
+    /// asked for: a failed one, or one cancelled from the window's notice,
+    /// offers Download again instead of a greyed "Selected" for good.
+    /// </summary>
+    void OnDownloadEnded(DownloadJob job, string? why)
+    {
+        if (finished) return;
+        // Ours by the job itself, not its title; none when Cancel or Skip let go of it already.
+        var title = jobs.FirstOrDefault(j => ReferenceEquals(j.Value, job)).Key;
+        if (title is null) return;
+        jobs.Remove(title);
+        requested.Remove(title);
+        if (why is not null && pickedTitle == title)
+        {
+            // It won't come: nothing waits to load it.
+            App.Current.LoadWhenDownloaded(null, null);
+            pickedTitle = null;
+        }
+        if (step is Step.ChatModel or Step.Done) Render();
+    }
+
+    /// <param name="reported">The download state a report brought; the queue's own otherwise.</param>
+    void Render(DownloadState? reported = null)
+    {
+        downloads = reported ?? App.Current.Downloads.State;
+        renderedDownloads = DownloadsKey(downloads);
+        percent = null;
         body.Children.Clear();
         counter.Text = step is Step.Welcome or Step.Done ? "" : L.F("Step {0} of {1}", (int)step, (int)Step.Done - 1);
         back.Visibility = step == Step.Welcome ? Visibility.Collapsed : Visibility.Visible;
@@ -327,7 +438,8 @@ sealed class SetupWindow : Window
         source.SelectionChanged += (_, _) =>
         {
             if (source.SelectedItem is ComboBoxItem { Tag: DownloadSource s }) app.SetDownloadSource(s);
-            Render();
+            // Once the list has closed: it is part of what is drawn again.
+            DispatcherQueue.TryEnqueue(() => { if (!finished && step == Step.ChatModel) Render(); });
         };
         body.Children.Add(Ui.Card(Ui.Row(L.T("Download from"), L.T("Some networks reach only one of them."), source)));
 
@@ -336,12 +448,13 @@ sealed class SetupWindow : Window
         {
             body.Children.Add(Ui.Section(L.T("Already on this PC")));
             body.Children.Add(Ui.Card(local.Take(8).Select(m => (UIElement)Ui.Row(m.Name, Ui.Size(m.SizeBytes),
-                Ui.Button(app.Settings.LastModel == m.Name ? L.T("Selected") : L.T("Use"), () =>
+                Ui.Button((usedLocal ?? LastModelName()) == m.Name ? L.T("Selected") : L.T("Use"), () =>
                 {
                     // The latest pick wins: a download picked before doesn't load over it.
                     app.LoadWhenDownloaded(null, null);
                     _ = app.LoadAsync(m);
                     pickedTitle = m.Name;
+                    usedLocal = m.Name;
                     Render();
                 }))).ToArray()));
         }
@@ -357,7 +470,6 @@ sealed class SetupWindow : Window
         }
         else
         {
-            var downloads = app.Downloads.State;
             body.Children.Add(Ui.Card(picks.Select(p =>
             {
                 var fit = p.Fit switch
@@ -376,11 +488,13 @@ sealed class SetupWindow : Window
                 }
                 else if (busy)
                 {
-                    var shown = Ui.Value(downloads.Total is long t && t > 0 ? $"{L.T("Downloading")} {100 * downloads.Received / t}%" : L.T("Downloading"));
+                    // The percent has a cell of its own, wide enough for "100%": it changes in place
+                    // (OnDownloads) and never moves the button beside it.
+                    percent = new TextBlock { Text = Percent(downloads), Foreground = Ui.Secondary, MinWidth = 40, TextAlignment = TextAlignment.Right };
+                    var shown = Ui.Horizontal(Ui.Value(L.T("Downloading")), percent);
                     // Cancel only for the download started here, not another of the same model.
-                    action = ours is not null && ReferenceEquals(downloads.Current, ours)
-                        ? Ui.Horizontal(shown, Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)))
-                        : shown;
+                    if (ours is not null && ReferenceEquals(downloads.Current, ours)) shown.Children.Add(Ui.Button(L.T("Cancel"), () => CancelDownload(p.Model)));
+                    action = shown;
                 }
                 else
                 {
@@ -394,6 +508,7 @@ sealed class SetupWindow : Window
                 return (UIElement)row;
             }).ToArray()));
             if (downloads.LastError is { } error) body.Children.Add(Ui.Caption(error, Ui.Red));
+            if (startError is { } failed) body.Children.Add(Ui.Caption(failed, Ui.Red));
             if (downloads.IsActive) body.Children.Add(Ui.Caption(L.T("It goes on in the background: you can continue.")));
         }
     }
@@ -419,6 +534,7 @@ sealed class SetupWindow : Window
         var app = App.Current;
         if (!requested.Add(model.Title)) return;
         var mine = picks;
+        startError = null;
         // One folder for the whole download: where it lands is where it's looked for.
         var root = app.ModelsFolder;
         Render();
@@ -429,6 +545,7 @@ sealed class SetupWindow : Window
             // Closed, or skipped while its address was looked up: not started after all.
             if (finished || mine != picks || !requested.Contains(model.Title)) return;
             pickedTitle = model.Title;
+            usedLocal = null;
             // Loaded as soon as it's here: the one thing needed to chat.
             app.LoadWhenDownloaded(job, FeaturedModel.Inside(root, Path.Combine(model.Folder, model.File.Name)));
             jobs[model.Title] = job;
@@ -439,8 +556,9 @@ sealed class SetupWindow : Window
             if (mine != picks) return;
             requested.Remove(model.Title);
             if (finished) return;
+            // Kept and drawn with the step: added under it, the next drawing wiped it.
+            startError = L.F("The download couldn't start: {0}", e.Message);
             Render();
-            body.Children.Add(Ui.Caption(L.F("The download couldn't start: {0}", e.Message), Ui.Red));
             return;
         }
         Render();
@@ -511,8 +629,8 @@ sealed class SetupWindow : Window
         heading.Text = L.T("Almost done");
         body.Children.Add(Line(L.T("Finish applies what you chose. You can change all of it later in Settings."), secondary: true));
         var rows = new List<UIElement>();
-        rows.Add(Ui.Row(L.T("Chat model"), null, Ui.Value(pickedTitle ?? App.Current.Settings.LastModel ?? "—")));
-        if (App.Current.Downloads.State.Current is { } job)
+        rows.Add(Ui.Row(L.T("Chat model"), null, Ui.Value(pickedTitle ?? LastModelName() ?? "—")));
+        if (downloads.Current is { } job)
         {
             rows.Add(Ui.Row(L.T("Downloads"), L.T("They run one at a time, shown in the window. You can close this window meanwhile."), Ui.Value(job.Title)));
         }
@@ -545,12 +663,18 @@ sealed class SetupWindow : Window
     {
         if (finished) return;
         finished = true;
-        App.Current.DownloadsChanged -= downloadsChanged;
+        Unsubscribe();
         // Done either way: it doesn't open by itself again.
         var app = App.Current;
         app.UpdateSettings(app.Settings with { SetupCompleted = SetupWizard.Version });
         // On a first run the main window comes next; opened again later, closing just closes.
         app.SetupClosed(this, showWindow: firstRun || applyChoices);
+    }
+
+    void Unsubscribe()
+    {
+        App.Current.DownloadsChanged -= downloadsChanged;
+        App.Current.Downloads.Ended -= downloadEnded;
     }
 
     async Task LoadSignInAsync()

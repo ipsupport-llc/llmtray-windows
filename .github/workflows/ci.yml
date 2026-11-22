@@ -361,6 +361,18 @@ jobs:
           Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
           if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }
           if (Test-Path (Join-Path $shots 'screenshots-skipped.txt')) { Write-Host 'extra screenshots skipped:'; Get-Content (Join-Path $shots 'screenshots-skipped.txt') }
+          # Nothing made again while only a value changes (adr/0014): the app checks itself, a FAIL line fails the build.
+          $steady = Join-Path $shots 'steady.txt'
+          if (Test-Path $steady) {
+            Get-Content $steady | ForEach-Object { Write-Host "steady: $_" }
+            if (Select-String -Path $steady -Pattern '^FAIL' -Quiet) { throw 'the UI makes elements again where only a value changed (steady.txt)' }
+          }
+          # On x64 both checks must have run and passed: a check that threw or was skipped proves nothing.
+          if ('${{ matrix.platform }}' -eq 'x64') {
+            foreach ($check in 'wizard model step', 'chat header') {
+              if (-not ((Test-Path $steady) -and (Select-String -Path $steady -Pattern "^ok: $check" -Quiet))) { throw "the steady check of the $check didn't pass (steady.txt)" }
+            }
+          }
           # Project files (adr/0021): what the reader process made of the demo files.
           if (Test-Path (Join-Path $shots 'project-files.txt')) { Get-Content (Join-Path $shots 'project-files.txt') }
           if (Test-Path (Join-Path $shots 'voice.txt')) { Get-Content (Join-Path $shots 'voice.txt') }

@@ -49,10 +49,17 @@ their own.
   LLMTray…, Report a Bug…, LLMTray on GitHub); About LLMTray; Quit.
 - **The popover window goes.** What it showed lives in the chat header.
 - **Steady drawing**: a window changes what changed in place; it's made
-  again only when its rows change (started in PR #25). With
-  `--screenshots <folder>` every window photographs itself (the chat,
-  each Settings tab, About); CI keeps them, and they're looked at before
-  a beta.
+  again only when its rows change (started in PR #25). A report that
+  changes nothing shown draws nothing: the host reports every request's
+  start and end, a download reports four times a second, and a rescan of
+  the models folder raises a change only when the folder's content
+  differs. With `--screenshots <folder>` every window photographs itself
+  (the chat, each Settings tab whole, the wizard's steps, About); CI keeps
+  them, and they're looked at before a beta. No photograph shows a
+  flicker, so the same run also checks it: it feeds a window the reports
+  that change no row (download progress to the wizard's model step, the
+  host's and the folder's to the chat header) and counts the elements
+  made again, into `steady.txt`; any is a `FAIL` line, which fails CI.
 
 ## Consequences
 

@@ -63,9 +63,12 @@ reset): llama-server exits; today the model just stops with an error.
 Now it is loaded again through the same chain, once, with the cards
 listed anew; a second loss in a row stops with the error, so a broken
 driver doesn't loop. A request arriving meanwhile waits for the reload
-(or does it, with the same limit). A Stop or another model's load before
-the reload begins cancels it; once begun it is a load like any other. A
-server lost during a switch isn't reloaded: the switch decides what runs.
+(or does it, with the same limit). Another model's load before the
+reload begins cancels it; once begun it is a load like any other. A Stop
+always wins: before the reload begins it cancels it, and during it the
+reloaded server is stopped again as soon as it is up (a server that dies
+while a Stop is under way isn't reloaded at all). A server lost during a
+switch isn't reloaded: the switch decides what runs.
 
 ## What doesn't change
 

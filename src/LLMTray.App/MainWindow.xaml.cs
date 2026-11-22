@@ -229,7 +229,8 @@ public sealed partial class MainWindow : Window
                 Ui.Horizontal(Ui.Button(L.T("Choose…"), ChooseFolder), Ui.Button(L.T("Open"), () => Ui.OpenFolder(app.ModelsFolder)))),
             Ui.Row(L.T("Disk usage"), null, Ui.Value(DiskUsage(catalog, app.ModelsFolder))),
             Ui.ButtonRow(
-                [useLmStudio, Ui.Button(L.T("Rescan"), () => app.Library.Rescan())],
+                // Drawn again here: a rescan that finds the same models raises nothing, and the free space may have changed.
+                [useLmStudio, Ui.Button(L.T("Rescan"), () => { app.Library.Rescan(); RenderPageSoon(); })],
                 [Ui.Button(L.T("Get models…"), () => _ = GetModelsAsync(), accent: true)]));
         foreach (var part in DevicesPart()) yield return part;
 

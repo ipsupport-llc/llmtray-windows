@@ -178,6 +178,38 @@ static class Ui
         return toggle;
     }
 
+    /// <summary>
+    /// Every element under <paramref name="root"/> that the app's code put there: a panel's
+    /// children, a border's or a button's content, a list's items. For the checks that nothing
+    /// is made again while only a value changes (Screenshots.cs).
+    /// </summary>
+    public static List<object> Elements(object root)
+    {
+        var found = new List<object>();
+        void Walk(object? node)
+        {
+            if (node is null or string) return;
+            found.Add(node);
+            switch (node)
+            {
+                case Panel panel:
+                    foreach (var child in panel.Children) Walk(child);
+                    break;
+                case Border border:
+                    Walk(border.Child);
+                    break;
+                case ItemsControl list:
+                    foreach (var item in list.Items) Walk(item);
+                    break;
+                case ContentControl control:
+                    Walk(control.Content);
+                    break;
+            }
+        }
+        Walk(root);
+        return found;
+    }
+
     public static Ellipse Dot(Brush brush, double size = 9) => new() { Width = size, Height = size, Fill = brush, VerticalAlignment = VerticalAlignment.Center };
 
     public static void Open(string target)

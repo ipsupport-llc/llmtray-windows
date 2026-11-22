@@ -345,10 +345,50 @@ public sealed class ProxyTests : IAsyncDisposable
     [Fact]
     public async Task AStopAfterTheServerDiesIsntUndone()
     {
+        // Stop as the server dies, whether its exit is seen before Stop, during it or after.
         await host.LoadAsync(catalog.Models[0]);
         launcher.KillAll(exitCode: 3);
         await host.StopAsync();
+        await StaysStopped();
+    }
+
+    [Fact]
+    public async Task AStopDuringTheReloadAfterADeathWins()
+    {
+        // The reload has started its server, which isn't ready yet (its /health held): Stop now,
+        // then the server comes up, and still nothing runs at the end.
+        await host.LoadAsync(catalog.Models[0]);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.Health = ready.Task;
+        try
+        {
+            launcher.KillAll(exitCode: 3);
+            // Generous: a slow runner takes its time to start the fake server.
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (launcher.Starts < 2 && DateTime.UtcNow < deadline) await Task.Delay(5);
+            Assert.Equal(2, launcher.Starts);
+            Assert.Equal(HostStatus.Loading, host.State.Status);
+            await host.StopAsync();
+        }
+        finally
+        {
+            // Released whatever happened: no health request is left waiting through the cleanup.
+            ready.TrySetResult();
+        }
+        await StaysStopped();
+        Assert.Equal(2, launcher.Starts);
+    }
+
+    /// <summary>
+    /// Stopped with no server left, once the host has nothing more to do: a load
+    /// that may still be under way has finished (the gate is free again).
+    /// </summary>
+    async Task StaysStopped()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while ((host.State.Status != HostStatus.Stopped || launcher.Running > 0 || !host.IsIdleForTests) && DateTime.UtcNow < deadline) await Task.Delay(20);
         await Task.Delay(300);
+        Assert.True(host.IsIdleForTests, "the host is still loading");
         Assert.Equal(HostStatus.Stopped, host.State.Status);
         Assert.Equal(0, launcher.Running);
     }
@@ -433,35 +473,54 @@ public sealed class ProxyTests : IAsyncDisposable
     /// <summary>Starts a fake llama-server per launch; it serves the model named by --alias.</summary>
     sealed class FakeLauncher : IProcessLauncher, IAsyncDisposable
     {
+        // The host starts servers from its own threads (a reload after a death) while a test reads these.
+        readonly object sync = new();
         readonly List<FakeServer> servers = [];
+        int starts;
         public string? FailBackend { get; init; }
         /// <summary>Launches that fail as they load, as a card short of memory does.</summary>
         public Func<LaunchPlan, bool>? Fails { get; init; }
+        /// <summary>When set, servers started from now on answer /health only once it completes: still loading.</summary>
+        public Task? Health { get; set; }
         public List<LaunchPlan> Plans { get; } = [];
-        public int Starts { get; private set; }
-        public int Running => servers.Count(s => !s.Exited.IsCompleted);
+        public int Starts
+        {
+            get { lock (sync) return starts; }
+        }
+        public int Running
+        {
+            get { lock (sync) return servers.Count(s => !s.Exited.IsCompleted); }
+        }
 
         public IChildProcess Start(LaunchPlan plan)
         {
-            Starts++;
-            Plans.Add(plan);
             var exe = plan.Executable;
             var args = plan.Arguments.ToList();
             var port = int.Parse(args[args.IndexOf("--port") + 1]);
             var alias = args[args.IndexOf("--alias") + 1];
-            var server = new FakeServer(port, alias, plan.Environment[LlamaServerLaunch.ApiKeyVariable], fail: exe == FailBackend || Fails?.Invoke(plan) == true);
-            servers.Add(server);
+            var server = new FakeServer(port, alias, plan.Environment[LlamaServerLaunch.ApiKeyVariable], fail: exe == FailBackend || Fails?.Invoke(plan) == true, Health);
+            lock (sync)
+            {
+                Plans.Add(plan);
+                servers.Add(server);
+                starts++;
+            }
             return server;
+        }
+
+        FakeServer[] All()
+        {
+            lock (sync) return [.. servers];
         }
 
         public void KillAll(int exitCode)
         {
-            foreach (var s in servers) s.Die(exitCode);
+            foreach (var s in All()) s.Die(exitCode);
         }
 
         public async ValueTask DisposeAsync()
         {
-            foreach (var s in servers) await s.StopAsync();
+            foreach (var s in All()) await s.StopAsync();
         }
     }
 
@@ -471,7 +530,7 @@ public sealed class ProxyTests : IAsyncDisposable
         readonly TaskCompletionSource<int> exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
         readonly WebApplication? app;
 
-        public FakeServer(int port, string alias, string key, bool fail)
+        public FakeServer(int port, string alias, string key, bool fail, Task? health = null)
         {
             Id = Interlocked.Increment(ref nextId);
             if (fail)
@@ -483,7 +542,11 @@ public sealed class ProxyTests : IAsyncDisposable
             builder.Logging.ClearProviders();
             builder.WebHost.ConfigureKestrel(k => k.Listen(IPAddress.Loopback, port));
             app = builder.Build();
-            app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+            app.MapGet("/health", async () =>
+            {
+                if (health is not null) await health;
+                return Results.Ok(new { status = "ok" });
+            });
             app.MapPost("/v1/chat/completions", async (HttpContext context) =>
             {
                 if (context.Request.Headers.Authorization != $"Bearer {key}") return Results.Unauthorized();
