@@ -228,14 +228,14 @@ sealed class LogWindow : Window
 
     async Task SaveAsync()
     {
-        saveError = null;
-        Render();
         try
         {
             var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = $"LLMTray-server-{DateTime.Now:yyyy-MM-ddTHH-mm-ss}" };
             picker.FileTypeChoices.Add(L.T("Log"), [".log"]);
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
             if (await picker.PickSaveFileAsync() is not { } file) return;
+            // Trying again: a failure said before goes (not when the picker is only cancelled).
+            saveError = null;
             // A log that can't be read isn't saved as an empty file over what's there.
             if (ReadAll() is not { } text) throw new IOException("the server log can't be read");
             await File.WriteAllTextAsync(file.Path, text);
@@ -282,9 +282,12 @@ sealed class LogWindow : Window
         // new list starts among the rows is where the most of it lines up (two alike entries can't fool it).
         var start = -1;
         var longest = 0;
-        for (var s = 0; s < rowKeys.Count && keys.Count > 0; s++)
+        // Bounded: a log of one line repeated would otherwise be compared with itself over and over.
+        var tries = 0;
+        for (var s = 0; s < rowKeys.Count && keys.Count > 0 && tries < 32; s++)
         {
             if (rowKeys[s] != keys[0]) continue;
+            tries++;
             var n = 0;
             while (s + n < rowKeys.Count && n < keys.Count && rowKeys[s + n] == keys[n]) n++;
             if (n > longest)
@@ -292,7 +295,8 @@ sealed class LogWindow : Window
                 longest = n;
                 start = s;
             }
-            if (s + n == rowKeys.Count) break;
+            // Lined up to the end of the rows, or the whole new list: nothing can line up better.
+            if (s + n == rowKeys.Count || n == keys.Count) break;
         }
         if (start > 0)
         {
