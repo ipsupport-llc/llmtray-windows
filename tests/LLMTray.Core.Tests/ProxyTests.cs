@@ -345,10 +345,32 @@ public sealed class ProxyTests : IAsyncDisposable
     [Fact]
     public async Task AStopAfterTheServerDiesIsntUndone()
     {
+        // Stop as the server dies, whether its exit is seen before Stop, during it or after.
         await host.LoadAsync(catalog.Models[0]);
         launcher.KillAll(exitCode: 3);
         await host.StopAsync();
-        await Task.Delay(300);
+        await StaysStopped();
+    }
+
+    [Fact]
+    public async Task AStopDuringTheReloadAfterADeathWins()
+    {
+        // The death is seen and the reload has begun: Stop still ends with nothing running.
+        await host.LoadAsync(catalog.Models[0]);
+        launcher.KillAll(exitCode: 3);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (host.State.Status != HostStatus.Loading && DateTime.UtcNow < deadline) await Task.Delay(5);
+        Assert.Equal(HostStatus.Loading, host.State.Status);
+        await host.StopAsync();
+        await StaysStopped();
+    }
+
+    /// <summary>Stopped within a few seconds, with no server left, and still so a moment later.</summary>
+    async Task StaysStopped()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while ((host.State.Status != HostStatus.Stopped || launcher.Running > 0) && DateTime.UtcNow < deadline) await Task.Delay(20);
+        await Task.Delay(500);
         Assert.Equal(HostStatus.Stopped, host.State.Status);
         Assert.Equal(0, launcher.Running);
     }
