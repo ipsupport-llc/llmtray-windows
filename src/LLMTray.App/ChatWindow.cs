@@ -1379,8 +1379,9 @@ sealed partial class ChatWindow : Window
     string? renderedStatus;
     bool? lastCanChat;
 
-    /// <summary>A model to send to: the picked one, the last one loaded, or the one running (Mac canChat).</summary>
-    bool CanChat => App.Current.Host.State is { Status: HostStatus.Running or HostStatus.Loading } || PickedOrLast() is not null;
+    /// <summary>A model a send goes to (Mac canChat): the one in the picker, which a send names, or the one running.</summary>
+    bool CanChat => App.Current.Host.State is { Status: HostStatus.Running or HostStatus.Loading }
+        || (model.SelectedItem as ComboBoxItem)?.Tag is string picked && App.Current.Library.Current.Resolve(picked) is not null;
     readonly FontIcon startStopIcon = new() { FontSize = 14 };
 
     void RenderStatus()
@@ -1402,11 +1403,11 @@ sealed partial class ChatWindow : Window
         var stop = running is not null;
         var enabled = stop || PickedOrLast() is not null;
         // Everything this shows: nothing is set again while it's the same (the host reports each request).
-        var key = $"{host.Status}|{host.ActiveRequests > 0}|{text}|{problem is null}|{shown}|{stop}|{enabled}";
+        var key = $"{host.Status}|{host.ActiveRequests > 0}|{text}|{problem is null}|{shown}|{stop}|{enabled}|{CanChat}";
         if (key == renderedStatus) return;
         renderedStatus = key;
-        // A model to talk to is the one Load would start (picked, or the last one): the same test as Send's.
-        var canChat = enabled;
+        // The same test as Send's.
+        var canChat = CanChat;
         noModel.Visibility = canChat ? Visibility.Collapsed : Visibility.Visible;
         // Regenerate follows too (not on the first drawing: the window isn't built yet).
         var changed = lastCanChat is not null && canChat != lastCanChat;
@@ -1516,7 +1517,10 @@ sealed partial class ChatWindow : Window
                 {
                     model.Items.Add(new ComboBoxItem { Content = entry.Name, Tag = entry.Name });
                 }
-                var want = picked ?? loaded;
+                // What a send goes to, always shown: the picked one, the loaded one, the last one, or the first.
+                // A list with models and nothing in it read as "no model" while the Load button had one.
+                var last = App.Current.Library.Current.Resolve(App.Current.Settings.LastModel)?.Name;
+                var want = picked ?? loaded ?? last ?? models.FirstOrDefault()?.Name;
                 model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
                 model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
             }
