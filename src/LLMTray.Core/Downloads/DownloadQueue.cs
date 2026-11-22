@@ -6,7 +6,8 @@ public sealed record DownloadJob(string Title, IReadOnlyList<DownloadItem> Items
     public long? TotalSize => Items.All(i => i.Size is not null) ? Items.Sum(i => i.Size!.Value) : null;
 }
 
-public sealed record DownloadState(DownloadJob? Current, long Received, long? Total, int Queued, string? LastError, string? LastDone)
+/// <param name="LastFailed">The download that failed or was cancelled last, while its error shows: <see cref="DownloadQueue.Retry"/> starts it again.</param>
+public sealed record DownloadState(DownloadJob? Current, long Received, long? Total, int Queued, string? LastError, string? LastDone, DownloadJob? LastFailed = null)
 {
     public static readonly DownloadState Idle = new(null, 0, null, 0, null, null);
     public bool IsActive => Current is not null;
@@ -26,6 +27,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
     long? total;
     string? lastError;
     string? lastDone;
+    DownloadJob? lastFailed;
     bool running;
 
     public event Action<DownloadState>? Changed;
@@ -45,6 +47,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         {
             pending.Enqueue(job);
             lastError = null;
+            lastFailed = null;
             if (!running)
             {
                 running = true;
@@ -61,8 +64,26 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         {
             lastError = null;
             lastDone = null;
+            lastFailed = null;
         }
         Raise();
+    }
+
+    /// <summary>
+    /// The last failed or cancelled download, started again: its partial files
+    /// resume where they stopped. False when there's none to retry.
+    /// </summary>
+    public bool Retry()
+    {
+        DownloadJob? job;
+        lock (sync)
+        {
+            job = lastFailed;
+            lastFailed = null;
+        }
+        if (job is null) return false;
+        Enqueue(job);
+        return true;
     }
 
     /// <summary>Cancels the current download; its partial file stays for a resume.</summary>
@@ -156,12 +177,20 @@ public sealed class DownloadQueue(ModelDownloader downloader)
             }
             catch (OperationCanceledException)
             {
-                lock (sync) lastError = $"{job.Title}: cancelled. Download it again to resume.";
+                lock (sync)
+                {
+                    lastError = $"{job.Title}: cancelled. Download it again to resume.";
+                    lastFailed = job;
+                }
             }
             catch (Exception e)
             {
                 // Whatever went wrong is reported; the queue goes on.
-                lock (sync) lastError = $"{job.Title}: {e.Message}";
+                lock (sync)
+                {
+                    lastError = $"{job.Title}: {e.Message}";
+                    lastFailed = job;
+                }
             }
             finally
             {
@@ -174,6 +203,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
                     {
                         lastDone = job.Title;
                         lastError = null;
+                        lastFailed = null;
                     }
                 }
             }
@@ -220,7 +250,7 @@ public sealed class DownloadQueue(ModelDownloader downloader)
         }
     }
 
-    DownloadState Snapshot() => new(current, received, total, pending.Count, lastError, lastDone);
+    DownloadState Snapshot() => new(current, received, total, pending.Count, lastError, lastDone, lastFailed);
 
     void Raise()
     {

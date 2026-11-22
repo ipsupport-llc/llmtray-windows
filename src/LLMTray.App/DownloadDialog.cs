@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using LLMTray.Core.Downloads;
+using LLMTray.Core.Setup;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -60,6 +61,13 @@ sealed partial class DownloadDialog : ContentDialog
 
         repository.TextChanged += (_, _) => ResetCustom();
         list.Click += async (_, _) => await Guard(ListFilesAsync);
+        // Enter in the repository's field lists its files, as the button beside it does (it went to Download).
+        repository.KeyDown += async (_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter) return;
+            e.Handled = true;
+            if (list.IsEnabled) await Guard(ListFilesAsync);
+        };
         var repoRow = new Grid { ColumnSpacing = 8 };
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -163,16 +171,46 @@ sealed partial class DownloadDialog : ContentDialog
     void RenderFeatured()
     {
         featured.Items.Clear();
+        var app = App.Current;
+        var root = app.ModelsFolder;
+        var downloads = app.Downloads.State;
+        var free = FreeAt(root);
         foreach (var model in FeaturedModels.All)
         {
             var on = model.IsOn(Source);
+            // What's already here or on its way says so before Download is pressed (Mac: the same marks).
+            var here = SetupWizard.IsDownloaded(model, root);
+            var coming = downloads.Current?.Title == model.Title;
             var text = new StackPanel { Padding = new Thickness(0, 6, 0, 6) };
-            text.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
+            var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            title.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
+            if (here || coming)
+            {
+                title.Children.Add(new TextBlock { Text = here ? L.T("Downloaded") : L.T("Downloading"), FontSize = 12, Foreground = Ui.Green, VerticalAlignment = VerticalAlignment.Center });
+            }
+            text.Children.Add(title);
             var note = on ? L.F("{0} License: {1}.", L.T(model.Note), model.License) : L.F("Not on {0} yet.", Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face");
             text.Children.Add(new TextBlock { Text = note, FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
-            featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = on, Opacity = on ? 1 : 0.5 });
+            // Too big for the disk: said in the list, not only after Download.
+            var fits = here || free is not long f || model.TotalSize <= f;
+            if (on && !fits) text.Children.Add(Ui.Caption(L.T("Not enough free disk space for this model."), Ui.Red));
+            var usable = on && !here && !coming && fits;
+            featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = usable, Opacity = on ? 1 : 0.5 });
         }
         UpdatePrimary();
+    }
+
+    static long? FreeAt(string folder)
+    {
+        try
+        {
+            var path = Path.GetPathRoot(Path.GetFullPath(folder));
+            return path is null ? null : new DriveInfo(path).AvailableFreeSpace;
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     void ResetCustom()

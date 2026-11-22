@@ -324,6 +324,42 @@ public sealed class DownloadTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task AFailedDownloadCanBeRetried()
+    {
+        var queue = new DownloadQueue(new ModelDownloader(http));
+        var hang = Item() with { Url = new Uri(baseUri, "blob/hang.gguf"), Destination = Path.Combine(root, "retry.gguf"), Size = null, Sha256 = null };
+        var job = new DownloadJob("again", [hang]);
+        async Task Until(Func<DownloadState, bool> done)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!done(queue.State) && DateTime.UtcNow < deadline) await Task.Delay(10);
+            Assert.True(done(queue.State));
+        }
+
+        Assert.False(queue.Retry());
+        queue.Enqueue(job);
+        await Until(s => ReferenceEquals(s.Current, job));
+        queue.Cancel(job);
+        await Until(s => !s.IsActive);
+        // Cancelled (or failed): its error shows, and it can start again.
+        Assert.Same(job, queue.State.LastFailed);
+        Assert.NotNull(queue.State.LastError);
+
+        Assert.True(queue.Retry());
+        Assert.Null(queue.State.LastFailed);
+        Assert.Null(queue.State.LastError);
+        await Until(s => ReferenceEquals(s.Current, job));
+        Assert.False(queue.Retry());
+
+        queue.Cancel(job);
+        await Until(s => !s.IsActive);
+        // Closing the notice forgets it.
+        queue.Dismiss();
+        Assert.Null(queue.State.LastFailed);
+        Assert.False(queue.Retry());
+    }
+
+    [Fact]
     public void FeaturedModelsArePinned()
     {
         Assert.NotEmpty(FeaturedModels.All);
