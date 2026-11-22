@@ -279,6 +279,9 @@ sealed class SetupWindow : Window
             + $"|{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(app.Library.Current)}|{app.Settings.LastModel}|{app.ModelsFolder}";
     }
 
+    /// <summary>The last model loaded, by the name the lists show (the setting holds its path in the models folder).</summary>
+    static string? LastModelName() => App.Current.Library.Current.Resolve(App.Current.Settings.LastModel)?.Name;
+
     static string Percent(DownloadState d) => d.Total is long total && total > 0 ? $"{100 * d.Received / total}%" : "";
 
     /// <summary>
@@ -445,7 +448,7 @@ sealed class SetupWindow : Window
         {
             body.Children.Add(Ui.Section(L.T("Already on this PC")));
             body.Children.Add(Ui.Card(local.Take(8).Select(m => (UIElement)Ui.Row(m.Name, Ui.Size(m.SizeBytes),
-                Ui.Button((usedLocal ?? app.Settings.LastModel) == m.Name ? L.T("Selected") : L.T("Use"), () =>
+                Ui.Button((usedLocal ?? LastModelName()) == m.Name ? L.T("Selected") : L.T("Use"), () =>
                 {
                     // The latest pick wins: a download picked before doesn't load over it.
                     app.LoadWhenDownloaded(null, null);
@@ -626,7 +629,7 @@ sealed class SetupWindow : Window
         heading.Text = L.T("Almost done");
         body.Children.Add(Line(L.T("Finish applies what you chose. You can change all of it later in Settings."), secondary: true));
         var rows = new List<UIElement>();
-        rows.Add(Ui.Row(L.T("Chat model"), null, Ui.Value(pickedTitle ?? App.Current.Settings.LastModel ?? "—")));
+        rows.Add(Ui.Row(L.T("Chat model"), null, Ui.Value(pickedTitle ?? LastModelName() ?? "—")));
         if (downloads.Current is { } job)
         {
             rows.Add(Ui.Row(L.T("Downloads"), L.T("They run one at a time, shown in the window. You can close this window meanwhile."), Ui.Value(job.Title)));
