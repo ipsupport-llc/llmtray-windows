@@ -353,7 +353,8 @@ public sealed partial class MainWindow
     static ComboBox ProfilePicker(string modelPath)
     {
         var profiles = App.Current.Profiles;
-        var picker = new ComboBox { MinWidth = 130 };
+        // One width in every model row (Mac: 140), so the rows' controls form columns.
+        var picker = new ComboBox { Width = 150 };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, L.T("Profile"));
         ToolTipService.SetToolTip(picker, L.T("Profile"));
         foreach (var p in profiles.Profiles) picker.Items.Add(new ComboBoxItem { Content = p.Name, Tag = p.Id });

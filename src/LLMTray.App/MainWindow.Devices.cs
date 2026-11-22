@@ -21,7 +21,7 @@ public sealed partial class MainWindow
             DispatcherQueue.TryEnqueue(() => _ = LookForCardsAsync(fresh: false));
         }
         var choice = app.Settings.RunOn;
-        var picker = new ComboBox { MinWidth = 300 };
+        var picker = new ComboBox { MaxWidth = 520 };
         void Add(string text, string tag) => picker.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
         Add(L.T("Automatic"), DeviceChoice.Automatic);
         var found = cards ?? [];
@@ -62,7 +62,8 @@ public sealed partial class MainWindow
             : L.T("Automatic: every dedicated card, never split onto a built-in one. If the chosen one can't load a model, the next card is tried, then the CPU.");
 
         yield return Ui.Section(L.T("Graphics card"));
-        var rows = new List<UIElement?> { Ui.Row(L.T("Run models on"), help, Ui.Horizontal(picker, look)) };
+        // The list under the help (Mac: the same), wide enough for a card's whole name; the help gets the row's width.
+        var rows = new List<UIElement?> { Ui.StackedRow(L.T("Run models on"), help, picker, look) };
         var host = app.Host.State;
         if (host.Note is { } note && host.Status is HostStatus.Running or HostStatus.Loading)
         {

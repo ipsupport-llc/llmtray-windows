@@ -82,6 +82,13 @@ sealed class SetupWindow : Window
         back.Click += (_, _) => Go(step - 1);
         skip.Click += (_, _) =>
         {
+            // On the first page it's Skip Setup: the window closes, as its X does (Mac: the same).
+            if (step == Step.Welcome)
+            {
+                Close(applyChoices: false);
+                base.Close();
+                return;
+            }
             Revert(step);
             Go(step + 1);
         };
@@ -160,8 +167,8 @@ sealed class SetupWindow : Window
         root.Children.Add(scroller);
         next.Style = Ui.Resource<Style>("AccentButtonStyle", next.Style);
         skip.Style = Ui.Resource<Style>("SubtleButtonStyle", skip.Style);
-        ToolTipService.SetToolTip(skip, L.T("Puts this step back to how it was when setup opened, and goes on."));
-        var buttons = Ui.ButtonRow([back], [skip, next]);
+        // Back and Skip on the left, the way on at the right (Mac: the same).
+        var buttons = Ui.ButtonRow([back, skip], [next]);
         buttons.Padding = new Thickness(0);
         Grid.SetRow(buttons, 2);
         root.Children.Add(buttons);
@@ -303,7 +310,11 @@ sealed class SetupWindow : Window
         body.Children.Clear();
         counter.Text = step is Step.Welcome or Step.Done ? "" : L.F("Step {0} of {1}", (int)step, (int)Step.Done - 1);
         back.Visibility = step == Step.Welcome ? Visibility.Collapsed : Visibility.Visible;
-        skip.Visibility = step is Step.Welcome or Step.Done ? Visibility.Collapsed : Visibility.Visible;
+        skip.Visibility = step == Step.Done ? Visibility.Collapsed : Visibility.Visible;
+        skip.Content = step == Step.Welcome ? L.T("Skip Setup") : L.T("Skip");
+        ToolTipService.SetToolTip(skip, step == Step.Welcome
+            ? L.T("Closes this window. Settings › General › Set Up LLMTray… opens it again.")
+            : L.T("Puts this step back to how it was when setup opened, and goes on."));
         next.Content = step switch
         {
             Step.Welcome => L.T("Get Started"),
@@ -373,12 +384,15 @@ sealed class SetupWindow : Window
         var app = App.Current;
         var found = app.Library.Current.Models.Count;
         var lmStudio = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".lmstudio", "models");
+        var downloading = app.Downloads.State.IsActive || requested.Count > 0;
+        // The folder is the row's title, whole (it was cut at 300 px beside the heading's own words again).
+        var choose = Ui.Button(L.T("Choose Another Folder…"), ChooseFolder);
+        choose.IsEnabled = !downloading;
         var rows = new List<UIElement?>
         {
-            Ui.Row(L.T("Models folder"), found > 0 ? L.F("Models found: {0}", found) : L.T("No models in this folder yet. The next step offers some to download."),
-                Ui.Horizontal(Ui.Value(app.ModelsFolder, mono: true), Ui.Button(L.T("Choose Another Folder…"), ChooseFolder))),
+            Ui.StackedRow(found > 0 ? L.F("Models found: {0}", found) : L.T("No models in this folder yet. The next step offers some to download."), null,
+                Ui.PathText(app.ModelsFolder), choose),
         };
-        var downloading = app.Downloads.State.IsActive || requested.Count > 0;
         if (Directory.Exists(lmStudio) && !string.Equals(app.ModelsFolder, lmStudio, StringComparison.OrdinalIgnoreCase)
             && Directory.EnumerateFiles(lmStudio, "*.gguf", SearchOption.AllDirectories).Any())
         {
@@ -386,11 +400,11 @@ sealed class SetupWindow : Window
             use.IsEnabled = !downloading;
             rows.Add(Ui.Row(L.F("{0} (LM Studio's, shared with it)", lmStudio), null, use));
         }
+        body.Children.Add(Ui.Card(rows.ToArray()));
         if (downloading)
         {
-            rows.Add(Ui.Row(L.T("The chat model is downloading into this folder. Change it in Settings after setup, or pick another chat model first."), null, null));
+            body.Children.Add(Ui.Caption(L.T("The chat model is downloading into this folder. Change it in Settings after setup, or pick another chat model first.")));
         }
-        body.Children.Add(Ui.Card(rows.ToArray()));
     }
 
     async void ChooseFolder()
@@ -614,7 +628,7 @@ sealed class SetupWindow : Window
 
     void Done()
     {
-        heading.Text = L.T("Almost done");
+        heading.Text = L.T("Done");
         body.Children.Add(Line(L.T("Finish applies what you chose. You can change all of it later in Settings."), secondary: true));
         var rows = new List<UIElement>();
         rows.Add(Ui.Row(L.T("Chat model"), null, Ui.Value(pickedTitle ?? App.Current.Settings.LastModel ?? "—")));

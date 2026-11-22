@@ -72,9 +72,15 @@ public sealed partial class MainWindow
             }
             var share = new Slider { Minimum = 10, Maximum = 90, StepFrequency = 5, Value = Math.Round(app.Settings.PinShare * 100), Width = 200 };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(share, L.T("Pinned files may take"));
-            share.ValueChanged += (_, e) => app.UpdateSettings(app.Settings with { PinShare = Math.Clamp(e.NewValue / 100, 0.1, 0.9) });
+            // The share it's set to, beside it (Mac: the same), in a cell of its own so the slider stays put.
+            var shown = new TextBlock { Text = $"{share.Value:0}%", Foreground = Ui.Secondary, MinWidth = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+            share.ValueChanged += (_, e) =>
+            {
+                shown.Text = $"{e.NewValue:0}%";
+                app.UpdateSettings(app.Settings with { PinShare = Math.Clamp(e.NewValue / 100, 0.1, 0.9) });
+            };
             rows.Add(Ui.Row(L.T("Pinned files may take"),
-                L.T("Of a model's context, for a project's pinned files together. The rest is the conversation and the answer."), share));
+                L.T("Of a model's context, for a project's pinned files together. The rest is the conversation and the answer."), Ui.Horizontal(share, shown)));
             rows.Add(Ui.Row(L.T("Where"), L.T("Open a project's menu in the chat's sidebar and choose Files… to add, remove or read files again."), null));
         }
         yield return Ui.Card([.. rows]);

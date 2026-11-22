@@ -257,11 +257,19 @@ public sealed partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var left = new StackPanel { Spacing = 2 };
-        left.Children.Add(new TextBlock { Text = model.Name, TextTrimming = TextTrimming.CharacterEllipsis });
+        var name = new TextBlock { Text = model.Name, TextTrimming = TextTrimming.CharacterEllipsis };
+        // Cut names are whole in the tooltip, with where the file is (Mac: the same).
+        ToolTipService.SetToolTip(name, model.FullPath);
+        left.Children.Add(name);
         var facts = new List<string> { Ui.Size(model.SizeBytes) };
         if (model.ProjectorPath is not null) facts.Add(L.T("sees images"));
         if (model.Folder.Length > 0) facts.Add(model.Folder);
-        left.Children.Add(Ui.Caption(string.Join(" · ", facts)));
+        var caption = Ui.Caption(string.Join(" · ", facts));
+        // One line, cut at its end: a repository name broke in the middle of a word.
+        caption.TextWrapping = TextWrapping.NoWrap;
+        caption.TextTrimming = TextTrimming.CharacterEllipsis;
+        ToolTipService.SetToolTip(caption, caption.Text);
+        left.Children.Add(caption);
         if (mine)
         {
             var (text, brush) = state.Status switch
@@ -279,6 +287,8 @@ public sealed partial class MainWindow : Window
         var action = running
             ? Ui.Button(L.T("Unload"), () => _ = App.Current.StopAsync())
             : Ui.Button(L.T("Load"), () => _ = App.Current.LoadAsync(model));
+        // Load and Unload the same width, so every row's profile list starts at the same place.
+        action.MinWidth = 96;
         var delete = Ui.IconButton("", L.T("Delete the model's files"), () => _ = DeleteAsync(model));
         var right = Ui.Horizontal(ProfilePicker(model.FullPath), action, delete);
         Grid.SetColumn(right, 1);
