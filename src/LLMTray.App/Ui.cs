@@ -79,9 +79,18 @@ static class Ui
             r.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(r, 1);
             grid.Children.Add(r);
+            // Beside a paragraph of help the control stays by the title (Mac: the same), not afloat in the middle of it.
+            left.SizeChanged += (_, e) =>
+            {
+                var beside = e.NewSize.Height > TallText ? VerticalAlignment.Top : VerticalAlignment.Center;
+                if (r.VerticalAlignment != beside) r.VerticalAlignment = beside;
+            };
         }
         return grid;
     }
+
+    /// <summary>A row's text taller than this (a title and three lines of help, or something under them) has its control at the top.</summary>
+    const double TallText = 64;
 
     /// <summary>A path or address in full, selectable, in the code font.</summary>
     public static TextBlock PathText(string text) => new()
@@ -172,7 +181,10 @@ static class Ui
 
     public static ToggleSwitch Toggle(bool on, Action<bool> changed, string name)
     {
-        var toggle = new ToggleSwitch { IsOn = on };
+        // No "On" / "Off" beside the knob: Windows writes them in its own language whatever the app's, and
+        // their room kept the switch from lining up with the buttons and lists at a row's right edge (Mac:
+        // no words either). The template keeps 12 px for them after the knob: the margin takes that back.
+        var toggle = new ToggleSwitch { IsOn = on, OnContent = "", OffContent = "", MinWidth = 0, Margin = new Thickness(0, 0, -12, 0) };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, name);
         toggle.Toggled += (_, _) => changed(toggle.IsOn);
         return toggle;
