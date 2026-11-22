@@ -20,8 +20,17 @@ if (backends.Count == 0)
 }
 foreach (var backend in backends)
 {
-    var missing = PeImports.Missing(backend);
-    Console.WriteLine($"{Path.GetFileName(backend)}: {(missing.Count == 0 ? "every DLL is there" : "missing " + string.Join(", ", missing))}");
-    failed |= missing.Count > 0;
+    try
+    {
+        var missing = PeImports.Missing(backend);
+        Console.WriteLine($"{Path.GetFileName(backend)}: {(missing.Count == 0 ? "every DLL is there" : "missing " + string.Join(", ", missing))}");
+        failed |= missing.Count > 0;
+    }
+    catch (InvalidDataException e)
+    {
+        // What a file that can't be read needs is unknown: not a pass.
+        Console.WriteLine($"{Path.GetFileName(backend)}: can't be checked: {e.Message}");
+        failed = true;
+    }
 }
 return failed ? 1 : 0;

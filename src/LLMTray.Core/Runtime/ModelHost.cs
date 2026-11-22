@@ -490,14 +490,19 @@ public sealed class ModelHost : IAsyncDisposable
         IReadOnlyList<string> missing;
         try
         {
-            missing = PeImports.Missing(Path.GetDirectoryName(backend.ServerPath)!, Environment.SystemDirectory is { Length: > 0 } system ? system : null);
+            missing = PeImports.Missing(Path.GetDirectoryName(backend.ServerPath)!, Environment.SystemDirectory is { Length: > 0 } system ? system : null, vulkanIsThere: false);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             missing = [];
         }
         var which = missing.Count > 0 ? string.Join(", ", missing) : "a DLL it needs";
-        var text = $"llama-server ({backend.Name}) couldn't start: {which} is missing (exit code 0xC0000135). Reinstalling LLMTray, or installing the Microsoft Visual C++ Redistributable, puts it back.";
+        // The Vulkan loader comes with the graphics driver; the rest with LLMTray or the Visual C++ Redistributable.
+        var vulkanOnly = missing.Count == 1 && missing[0].Equals(PeImports.VulkanLoader, StringComparison.OrdinalIgnoreCase);
+        var fix = vulkanOnly
+            ? "It comes with the graphics card's driver: updating the driver puts it back. Meanwhile models run on the CPU."
+            : "Reinstalling LLMTray, or installing the Microsoft Visual C++ Redistributable, puts it back.";
+        var text = $"llama-server ({backend.Name}) couldn't start: {which} is missing (exit code 0xC0000135). {fix}";
         try
         {
             File.AppendAllText(LogFile, $"LLMTray: {text}{Environment.NewLine}");

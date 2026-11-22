@@ -24,6 +24,7 @@ public sealed class PeImportsTests : IDisposable
         U16(pe + 6, 1);
         U16(pe + 20, 240);
         U16(optional, 0x20b);
+        I32(optional + 108, 16);
         I32(section + 8, 0x400);
         I32(section + 12, va);
         I32(section + 16, 0x400);
@@ -66,16 +67,21 @@ public sealed class PeImportsTests : IDisposable
     {
         File.WriteAllBytes(Path.Combine(root, "llama-server.exe"), Pe(["llama.dll", "VCRUNTIME140.dll", "KERNEL32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"], ["libomp.dll"]));
         File.WriteAllBytes(Path.Combine(root, "llama.dll"), Pe(["MSVCP140.dll", "vulkan-1.dll"], []));
-        // Not a PE: skipped, but there.
-        File.WriteAllText(Path.Combine(root, "libomp.dll"), "stand-in");
+        File.WriteAllBytes(Path.Combine(root, "libomp.dll"), Pe(["KERNEL32.dll"], []));
         Assert.Equal(["MSVCP140.dll", "VCRUNTIME140.dll"], PeImports.Missing(root));
+        // On the PC itself the Vulkan loader counts: it comes with a driver, not with Windows.
+        Assert.Equal(["MSVCP140.dll", "VCRUNTIME140.dll", "vulkan-1.dll"], PeImports.Missing(root, vulkanIsThere: false));
 
         // Beside the server (any case), or on this PC: not missing.
-        File.WriteAllText(Path.Combine(root, "vcruntime140.dll"), "stand-in");
+        File.WriteAllBytes(Path.Combine(root, "vcruntime140.dll"), Pe(["KERNEL32.dll"], []));
         var system = Directory.CreateDirectory(Path.Combine(root, "system32")).FullName;
         File.WriteAllText(Path.Combine(system, "MSVCP140.dll"), "stand-in");
         Assert.Equal(["MSVCP140.dll"], PeImports.Missing(root));
         Assert.Empty(PeImports.Missing(root, system));
+
+        // A DLL that can't be read: what it needs is unknown, which isn't a pass.
+        File.WriteAllText(Path.Combine(root, "broken.dll"), "not a program");
+        Assert.Throws<InvalidDataException>(() => PeImports.Missing(root, system));
     }
 
     [Fact]

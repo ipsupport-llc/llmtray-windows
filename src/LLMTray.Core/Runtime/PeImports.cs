@@ -24,8 +24,11 @@ public static class PeImports
         "ole32.dll", "oleaut32.dll", "ws2_32.dll", "crypt32.dll", "psapi.dll", "bcrypt.dll", "dbghelp.dll", "version.dll",
         "setupapi.dll", "cfgmgr32.dll", "dxgi.dll", "d3d12.dll", "winmm.dll", "comctl32.dll", "iphlpapi.dll", "secur32.dll",
         "userenv.dll", "wintrust.dll", "imm32.dll", "rpcrt4.dll", "ucrtbase.dll", "powrprof.dll", "mswsock.dll", "dnsapi.dll",
-        "ncrypt.dll", "normaliz.dll", "wldap32.dll", "vulkan-1.dll",
+        "ncrypt.dll", "normaliz.dll", "wldap32.dll",
     };
+
+    /// <summary>The Vulkan loader: installed with a graphics driver, not with Windows. Without it the Vulkan build can't start and the CPU build is next.</summary>
+    public const string VulkanLoader = "vulkan-1.dll";
 
     /// <summary>The DLLs a program or DLL imports, delay-loaded ones too, as named in the file.</summary>
     /// <exception cref="InvalidDataException">Not a PE file, or one this can't read.</exception>
@@ -41,37 +44,50 @@ public static class PeImports
             var sections = U16(b, pe + 6);
             var optionalSize = U16(b, pe + 20);
             var optional = pe + 24;
-            var directories = optional + (U16(b, optional) == 0x20b ? 112 : 96);
-            var table = new List<(int Va, int Size, int Raw)>();
+            // PE32+ (64-bit) or PE32; the data directories follow the fields up to NumberOfRvaAndSizes.
+            var (countAt, directories) = U16(b, optional) switch
+            {
+                0x20b => (optional + 108, optional + 112),
+                0x10b => (optional + 92, optional + 96),
+                var magic => throw new InvalidDataException($"unknown optional header magic {magic:x}"),
+            };
+            var count = I32(b, countAt);
+            if (directories + count * 8 > optional + optionalSize) throw new InvalidDataException("the data directories run past the optional header");
+            var table = new List<(int Va, int Size, int Raw, int RawSize)>();
             for (var i = 0; i < sections; i++)
             {
                 var s = optional + optionalSize + i * 40;
-                table.Add((I32(b, s + 12), Math.Max(I32(b, s + 8), I32(b, s + 16)), I32(b, s + 20)));
+                table.Add((I32(b, s + 12), Math.Max(I32(b, s + 8), I32(b, s + 16)), I32(b, s + 20), I32(b, s + 16)));
             }
-            int Offset(int rva)
+            // A file offset for an RVA, inside the bytes its section has in the file.
+            int Offset(int rva, int length)
             {
-                foreach (var (va, size, raw) in table)
+                foreach (var (va, size, raw, rawSize) in table)
                 {
-                    if (rva >= va && rva < va + size) return rva - va + raw;
+                    if (rva < va || rva >= va + size) continue;
+                    var at = rva - va;
+                    if (at + length > rawSize || raw + at + length > b.Length) throw new InvalidDataException($"RVA {rva:x} runs past its section");
+                    return raw + at;
                 }
                 throw new InvalidDataException($"RVA {rva:x} is in no section");
             }
             string Name(int rva)
             {
-                var start = Offset(rva);
+                var start = Offset(rva, 1);
                 var end = Array.IndexOf(b, (byte)0, start);
+                if (end < 0 || end - start > 260) throw new InvalidDataException("a DLL name without its end");
                 return System.Text.Encoding.ASCII.GetString(b, start, end - start);
             }
             var names = new List<string>();
-            // The import directory: 20-byte descriptors, the name's RVA at +12, ended by a zero one.
-            if (I32(b, directories + 8) is var imports and > 0)
+            // The import directory (2nd): 20-byte descriptors, the name's RVA at +12, ended by a zero one.
+            if (count > 1 && I32(b, directories + 8) is var imports and > 0)
             {
-                for (var o = Offset(imports); I32(b, o + 12) is var name and > 0; o += 20) names.Add(Name(name));
+                for (var o = Offset(imports, 20); I32(b, o + 12) is var name and > 0; o = Offset(imports += 20, 20)) names.Add(Name(name));
             }
             // The delay-load directory (14th): 32-byte descriptors, the name's RVA at +4.
-            if (I32(b, directories + 13 * 8) is var delayed and > 0)
+            if (count > 13 && I32(b, directories + 13 * 8) is var delayed and > 0)
             {
-                for (var o = Offset(delayed); I32(b, o + 4) is var name and > 0; o += 32) names.Add(Name(name));
+                for (var o = Offset(delayed, 32); I32(b, o + 4) is var name and > 0; o = Offset(delayed += 32, 32)) names.Add(Name(name));
             }
             return names;
         }
@@ -87,7 +103,9 @@ public static class PeImports
     /// stops it from starting on a PC that has nothing else installed.
     /// </summary>
     /// <param name="systemFolder">Also counted as there when found in this folder (the PC's System32); null for a clean Windows.</param>
-    public static IReadOnlyList<string> Missing(string folder, string? systemFolder = null)
+    /// <param name="vulkanIsThere">The Vulkan loader counts as there (a build's check: it comes with the driver); false on the PC itself.</param>
+    /// <exception cref="InvalidDataException">llama-server.exe or a DLL beside it can't be read: nothing can be said of what it needs.</exception>
+    public static IReadOnlyList<string> Missing(string folder, string? systemFolder = null, bool vulkanIsThere = true)
     {
         var here = new HashSet<string>(Directory.EnumerateFiles(folder).Select(Path.GetFileName).OfType<string>(), StringComparer.OrdinalIgnoreCase);
         var files = Directory.EnumerateFiles(folder, "*.dll").Prepend(Path.Combine(folder, "llama-server.exe")).Where(File.Exists);
@@ -99,13 +117,14 @@ public static class PeImports
             {
                 imports = Of(file);
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException e)
             {
-                continue;
+                throw new InvalidDataException($"{Path.GetFileName(file)}: {e.Message}", e);
             }
             foreach (var name in imports)
             {
                 if (here.Contains(name) || IsWindows(name)) continue;
+                if (vulkanIsThere && name.Equals(VulkanLoader, StringComparison.OrdinalIgnoreCase)) continue;
                 if (systemFolder is not null && File.Exists(Path.Combine(systemFolder, name))) continue;
                 missing.Add(name);
             }
