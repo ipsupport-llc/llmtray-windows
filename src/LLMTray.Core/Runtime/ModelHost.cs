@@ -480,6 +480,40 @@ public sealed class ModelHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Windows refused to start the server: a DLL it needs is neither beside it
+    /// nor installed (0xC0000135). Said by name, and written into the server
+    /// log, which the server itself never got to write.
+    /// </summary>
+    string MissingDll(LlamaBackend backend)
+    {
+        IReadOnlyList<string> missing;
+        try
+        {
+            missing = PeImports.Missing(Path.GetDirectoryName(backend.ServerPath)!, Environment.SystemDirectory is { Length: > 0 } system ? system : null, vulkanIsThere: false);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            // Nothing more can be said: the message stays general, and the next attempt still runs.
+            missing = [];
+        }
+        var which = missing.Count > 0 ? string.Join(", ", missing) : "a DLL it needs";
+        // The Vulkan loader comes with the graphics driver; the rest with LLMTray or the Visual C++ Redistributable.
+        var vulkanOnly = missing.Count == 1 && missing[0].Equals(PeImports.VulkanLoader, StringComparison.OrdinalIgnoreCase);
+        var fix = vulkanOnly
+            ? "It comes with the graphics card's driver: updating the driver puts it back. Meanwhile models run on the CPU."
+            : "Reinstalling LLMTray, or installing the Microsoft Visual C++ Redistributable, puts it back.";
+        var text = $"llama-server ({backend.Name}) couldn't start: {which} is missing (exit code 0xC0000135). {fix}";
+        try
+        {
+            File.AppendAllText(LogFile, $"LLMTray: {text}{Environment.NewLine}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+        return text;
+    }
+
     internal static (int Context, bool? Hears) ParseProps(System.Text.Json.Nodes.JsonNode? props)
     {
         var n = props?["default_generation_settings"]?["n_ctx"] ?? props?["n_ctx"];
@@ -496,6 +530,7 @@ public sealed class ModelHost : IAsyncDisposable
             if (Volatile.Read(ref disposed)) return "LLMTray is quitting.";
             if (process.Exited.IsCompleted)
             {
+                if (process.Exited.Result == PeImports.DllNotFound) return MissingDll(backend);
                 return $"llama-server ({backend.Name}) exited with code {process.Exited.Result} while loading. See the server log.";
             }
             try

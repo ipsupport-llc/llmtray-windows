@@ -33,6 +33,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## LLVM OpenMP runtime
+
+`libomp.dll`, shipped with llama.cpp's Windows builds. Apache License 2.0
+with LLVM Exceptions, Copyright (c) LLVM Project contributors. The full text
+is in the About window and beside the runtime (`LICENSE-LLVM-OpenMP`).
+
+## Microsoft Visual C++ runtime
+
+`vcruntime140.dll`, `msvcp140.dll` and, on x64, `vcruntime140_1.dll`, beside
+`llama-server` so it starts on a PC without the Visual C++ Redistributable.
+Copyright (c) Microsoft Corporation. Redistributed as Distributable Code
+under the Microsoft Visual Studio license terms
+(https://visualstudio.microsoft.com/license-terms/), as app-local deployment
+allows (https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files).
+
 ## .NET, ASP.NET Core and the Windows App SDK
 
 Carried inside the package. MIT License, Copyright (c) .NET Foundation and
