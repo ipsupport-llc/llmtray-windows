@@ -80,20 +80,59 @@ public sealed class ChatStore(string folder)
         return ids;
     }
 
+    /// <summary>
+    /// Each file's summary as of its last write: a file read again only when it
+    /// changed. The sidebar lists after every saved answer and every key typed
+    /// in its search; reading every chat in full each time slowed it with the history.
+    /// </summary>
+    readonly Dictionary<string, (DateTime Written, long Length, ChatSummary? Summary)> summaries = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Newest first. A file that doesn't read is left out (and left alone).</summary>
     public IReadOnlyList<ChatSummary> List()
     {
         if (!Directory.Exists(Folder)) return [];
         var list = new List<ChatSummary>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in Directory.EnumerateFiles(Folder, "*.json"))
         {
             if (!Guid.TryParse(Path.GetFileNameWithoutExtension(path), out var id)) continue;
-            if (Load(id) is not { } file) continue;
-            var preview = file.Messages.FirstOrDefault(m => m.Role == "user")?.Content ?? "";
-            list.Add(new ChatSummary(file.Id, file.Title.Length > 0 ? file.Title : "New chat", file.UpdatedAt,
-                preview.Length > 120 ? preview[..120] : preview));
+            seen.Add(path);
+            DateTime written;
+            long length;
+            try
+            {
+                var info = new FileInfo(path);
+                (written, length) = (info.LastWriteTimeUtc, info.Length);
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+            ChatSummary? summary;
+            lock (summaries)
+            {
+                if (summaries.TryGetValue(path, out var known) && known.Written == written && known.Length == length)
+                {
+                    if (known.Summary is { } same) list.Add(same);
+                    continue;
+                }
+            }
+            summary = Load(id) is { } file ? Summarize(file) : null;
+            lock (summaries) summaries[path] = (written, length, summary);
+            if (summary is not null) list.Add(summary);
+        }
+        lock (summaries)
+        {
+            foreach (var gone in summaries.Keys.Where(k => !seen.Contains(k)).ToList()) summaries.Remove(gone);
         }
         return list.OrderByDescending(c => c.UpdatedAt).ToList();
+    }
+
+    static ChatSummary Summarize(ChatSessionFile file)
+    {
+        var preview = file.Messages.FirstOrDefault(m => m.Role == "user")?.Content ?? "";
+        return new ChatSummary(file.Id, file.Title.Length > 0 ? file.Title : "New chat", file.UpdatedAt,
+            preview.Length > 120 ? preview[..120] : preview);
     }
 
     readonly object writing = new();

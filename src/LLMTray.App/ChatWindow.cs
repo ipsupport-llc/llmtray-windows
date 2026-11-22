@@ -209,6 +209,7 @@ sealed partial class ChatWindow : Window
             root.ActualThemeChanged += (_, _) =>
             {
                 renderedEpoch = -1;
+                renderedChats = null;
                 Render();
                 RenderChats();
             };
@@ -1621,6 +1622,9 @@ sealed partial class ChatWindow : Window
     /// The sidebar (Mac adr/0006): pinned chats, then projects with their
     /// chats, then the rest by date. A search lists every match by date.
     /// </summary>
+    /// <summary>What the sidebar shows, as of its last drawing: drawn again only when it differs.</summary>
+    string? renderedChats;
+
     void RenderChats()
     {
         rendering = true;
@@ -1633,6 +1637,20 @@ sealed partial class ChatWindow : Window
             var all = every.Where(c => query.Length == 0
                 || c.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase)
                 || c.Preview.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
+            // An answer saved in the chat already on top, a search that matches the same: nothing to draw again
+            // (the list was emptied and filled after every answer and every key typed).
+            var key = string.Join("\n", [
+                query, $"{library.Unreadable}|{library.SaveFailed}",
+                string.Join(",", projects.Select(p => $"{p.Id}:{p.Name}:{collapsed.Contains(p.Id)}")),
+                string.Join(",", pinned), string.Join(",", map.Select(kv => $"{kv.Key}>{kv.Value}")),
+                .. all.Select(c => $"{c.Id}|{c.Title}|{c.Preview}|{Group(c.UpdatedAt)}"), every.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+            if (key == renderedChats)
+            {
+                rendering = false;
+                RenderChatsSelection();
+                return;
+            }
+            renderedChats = key;
             chats.Items.Clear();
             projectMarks.Clear();
             if (query.Length == 0)
