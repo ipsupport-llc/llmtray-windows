@@ -57,8 +57,10 @@ public sealed partial class MainWindow
         var rename = Ui.IconButton("", isDefault ? L.T("Default can't be renamed: every model falls back to it") : L.T("Rename this profile"),
             () => _ = RenameProfileAsync(selected));
         rename.IsEnabled = !isDefault;
+        // The section is titled "Profile": the row says what the picked one is, not "Profile" again.
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, L.T("Profile"));
         yield return Ui.Card(
-            Ui.Row(L.T("Profile"), subtitle, picker),
+            Ui.Row(subtitle, null, picker),
             isDefault ? null : Ui.Row(L.T("Show only overrides"), L.T("Settings this profile overrides; everything else comes from Default."), only),
             Ui.ButtonRow(
                 [
@@ -351,7 +353,8 @@ public sealed partial class MainWindow
     static ComboBox ProfilePicker(string modelPath)
     {
         var profiles = App.Current.Profiles;
-        var picker = new ComboBox { MinWidth = 130 };
+        // One width in every model row (Mac: 140), so the rows' controls form columns.
+        var picker = new ComboBox { Width = 150 };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, L.T("Profile"));
         ToolTipService.SetToolTip(picker, L.T("Profile"));
         foreach (var p in profiles.Profiles) picker.Items.Add(new ComboBoxItem { Content = p.Name, Tag = p.Id });

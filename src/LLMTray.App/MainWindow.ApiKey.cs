@@ -31,17 +31,22 @@ public sealed partial class MainWindow
             var key = app.ApiKey;
             var copy = Ui.Button(L.T("Copy"), () => Copy(key!));
             copy.IsEnabled = key is not null;
-            rows.Add(Ui.Row(L.T("Key"),
+            // The key under the help at the card's width, whole and selectable, like the models folder;
+            // beside the help it was cut at 300 px and squeezed the help into five lines.
+            var value = Ui.PathText(key is null ? L.T("Can't be read") : showsKey ? key : new string('•', 16));
+            var show = Ui.Button(showsKey ? L.T("Hide") : L.T("Show"), () => { });
+            show.Click += (_, _) =>
+            {
+                // In place: nothing else on the page changes.
+                showsKey = !showsKey;
+                if (key is not null) value.Text = showsKey ? key : new string('•', 16);
+                show.Content = showsKey ? L.T("Hide") : L.T("Show");
+            };
+            show.IsEnabled = key is not null;
+            rows.Add(Ui.StackedRow(L.T("Key"),
                 L.T("Paste it into the client as its API key (OPENAI_API_KEY, ANTHROPIC_API_KEY…). Kept encrypted for your Windows account."),
-                Ui.Horizontal(
-                    Ui.Value(key is null ? L.T("Can't be read") : showsKey ? key : new string('•', 16), mono: true),
-                    Ui.Button(showsKey ? L.T("Hide") : L.T("Show"), () =>
-                    {
-                        showsKey = !showsKey;
-                        RenderPage();
-                    }),
-                    copy,
-                    Ui.Button(L.T("New Key…"), () => _ = NewKeyAsync()))));
+                value,
+                Ui.Horizontal(show, copy, Ui.Button(L.T("New Key…"), () => _ = NewKeyAsync()))));
             rows.Add(Ui.Row(L.T("Only for connections from other devices"),
                 L.T("Apps on this PC go without the key; devices on your network need it. Off: every client of LLMTray's port needs it, this PC's too."),
                 Ui.Toggle(settings.ApiKeyOnlyFromOtherDevices, on =>

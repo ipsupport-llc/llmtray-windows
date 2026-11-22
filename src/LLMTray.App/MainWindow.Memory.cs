@@ -55,7 +55,8 @@ public sealed partial class MainWindow
             }
             var queued = memory.Read(f => f.Queue.Count);
             var status = memory.Status.Length > 0 ? L.T(memory.Status) : queued > 0 ? L.F("{0} parts of chats to read.", queued) : L.T("Up to date.");
-            rows.Add(Ui.Row(L.T("Reading chats"), status, Ui.Button(L.T("Learn from Past Chats Now"), () => _ = LearnFromPastAsync())));
+            // "Learning" (the Mac's title for it): beside "Read chats" below, "Reading chats" read as the same row twice.
+            rows.Add(Ui.Row(L.T("Learning"), status, Ui.Button(L.T("Learn from Past Chats Now"), () => _ = LearnFromPastAsync())));
             // When a chat is read (Mac "Read chats"): seconds after each answer, or once it has been quiet a while.
             var when = new ComboBox { MinWidth = 220 };
             when.Items.Add(L.T("Right after each answer"));
@@ -157,8 +158,9 @@ public sealed partial class MainWindow
         var active = notes.Where(n => n.IsActive).OrderByDescending(n => n.Pinned).ThenBy(n => n.Kind).ThenByDescending(n => n.Confirmed).ToList();
         if (active.Count == 0) list.Add(Ui.Row(L.T("Nothing learned yet"), L.T("Notes appear here as chats are read. You can also write one."), null));
         foreach (var note in active) list.Add(NoteRow(note, settings));
-        list.Add(Ui.ButtonRow([Ui.Button(L.T("Add a Note…"), () => _ = EditNoteAsync(null)), Ui.Button(L.T("Show What Chats Get…"), () => _ = ShowBlockAsync())],
-            [Ui.Button(L.T("Forget What Was Learned…"), () => _ = ForgetAsync(everything: false)), Ui.Button(L.T("Forget Everything…"), () => _ = ForgetAsync(everything: true))]));
+        // Four buttons didn't fit one row at the window's size: adding and showing here, forgetting on a row of its own.
+        list.Add(Ui.ButtonRow([Ui.Button(L.T("Show What Chats Get…"), () => _ = ShowBlockAsync())], [Ui.Button(L.T("Add a Note…"), () => _ = EditNoteAsync(null))]));
+        list.Add(Ui.ButtonRow([], [Ui.Button(L.T("Forget What Was Learned…"), () => _ = ForgetAsync(everything: false)), Ui.Button(L.T("Forget Everything…"), () => _ = ForgetAsync(everything: true))]));
         yield return Ui.Card(list.ToArray());
 
         var expired = notes.Where(n => !n.IsActive).ToList();

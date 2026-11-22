@@ -108,6 +108,10 @@ public sealed partial class MainWindow : Window
             // The status colours are picked per theme: draw again on a switch.
             content.ActualThemeChanged += (_, _) => RenderPage();
         }
+        // The column: at most 900 wide, centred. Its width is set outright: with a MaxWidth WinUI places a
+        // stretched element by its content's width, so the column sat at a different x on every tab.
+        PageScroller.SizeChanged += (_, e) =>
+            PageContent.Width = Math.Max(0, Math.Min(900, e.NewSize.Width - PageScroller.Padding.Left - PageScroller.Padding.Right));
         // A render that waited for the user to leave a field.
         PageContent.LosingFocus += (_, _) => DispatcherQueue.TryEnqueue(() =>
         {
@@ -253,11 +257,19 @@ public sealed partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var left = new StackPanel { Spacing = 2 };
-        left.Children.Add(new TextBlock { Text = model.Name, TextTrimming = TextTrimming.CharacterEllipsis });
+        var name = new TextBlock { Text = model.Name, TextTrimming = TextTrimming.CharacterEllipsis };
+        // Cut names are whole in the tooltip, with where the file is (Mac: the same).
+        ToolTipService.SetToolTip(name, model.FullPath);
+        left.Children.Add(name);
         var facts = new List<string> { Ui.Size(model.SizeBytes) };
         if (model.ProjectorPath is not null) facts.Add(L.T("sees images"));
         if (model.Folder.Length > 0) facts.Add(model.Folder);
-        left.Children.Add(Ui.Caption(string.Join(" · ", facts)));
+        var caption = Ui.Caption(string.Join(" · ", facts));
+        // One line, cut at its end: a repository name broke in the middle of a word.
+        caption.TextWrapping = TextWrapping.NoWrap;
+        caption.TextTrimming = TextTrimming.CharacterEllipsis;
+        ToolTipService.SetToolTip(caption, caption.Text);
+        left.Children.Add(caption);
         if (mine)
         {
             var (text, brush) = state.Status switch
@@ -275,6 +287,8 @@ public sealed partial class MainWindow : Window
         var action = running
             ? Ui.Button(L.T("Unload"), () => _ = App.Current.StopAsync())
             : Ui.Button(L.T("Load"), () => _ = App.Current.LoadAsync(model));
+        // Load and Unload the same width, so every row's profile list starts at the same place.
+        action.MinWidth = 96;
         var delete = Ui.IconButton("", L.T("Delete the model's files"), () => _ = DeleteAsync(model));
         var right = Ui.Horizontal(ProfilePicker(model.FullPath), action, delete);
         Grid.SetColumn(right, 1);
@@ -334,9 +348,9 @@ public sealed partial class MainWindow : Window
         yield return Ui.Card(
             Ui.Row(L.T("Start LLMTray when you sign in"), signInError ?? L.T("It starts in the notification area, without opening this window."), signIn),
             Ui.Row(L.T("Load the last model when LLMTray starts"), L.T("So it's ready before the first request."), loadLast),
-            Ui.Row(L.T("Set Up LLMTray…"), L.T("The first-run steps again: a model for this PC, web tools, apps, updates."), Ui.Button(L.T("Set Up LLMTray…"), app.ShowSetup)));
+            Ui.Row(L.T("Setup assistant"), L.T("The first-run steps again: a model for this PC, web tools, apps, updates."), Ui.Button(L.T("Set Up LLMTray…"), app.ShowSetup)));
 
-        yield return Ui.Section(L.T("Command line"));
+        yield return Ui.Section(L.T("Command-line tool"));
         yield return Ui.Card(CommandLineRow());
 
         yield return Ui.Section(L.T("Language"));
@@ -360,10 +374,12 @@ public sealed partial class MainWindow : Window
 
         foreach (var part in UsagePart()) yield return part;
 
+        // "Version" and its number, as on the Updates tab; the button is the tray menu's "About LLMTray".
         yield return Ui.Section(L.T("About"));
         yield return Ui.Card(
-            Ui.Row(L.T("About LLMTray"), app.Updater.Current is { } current ? L.F("Version {0}", current.DisplayVersion) : L.T("Development build"),
-                Ui.Button(L.T("About LLMTray…"), app.ShowAbout)));
+            Ui.Row(L.T("Version"), null, Ui.Horizontal(
+                Ui.Value(app.Updater.Current is { } current ? current.DisplayVersion : L.T("Development build")),
+                Ui.Button(L.T("About LLMTray"), app.ShowAbout))));
     }
 
     IEnumerable<UIElement> UpdatesPage()
@@ -444,16 +460,17 @@ public sealed partial class MainWindow : Window
         var help = L.T("llmtray status, models, start, stop, pull, chat: LLMTray from a terminal or a script. llmtray help lists them.");
         if (App.Current.Updater.Kind is InstallKind.Package or InstallKind.Store)
         {
-            return Ui.Row(L.T("Command line"), help, Ui.Value("llmtray", mono: true));
+            // The title says the command's name: no value beside it to say it again.
+            return Ui.Row(L.T("llmtray in the terminal"), help, null);
         }
-        if (!File.Exists(Path.Combine(folder, "llmtray.exe"))) return Ui.Row(L.T("Command line"), help, Ui.Value("—"));
+        if (!File.Exists(Path.Combine(folder, "llmtray.exe"))) return Ui.Row(L.T("llmtray in the terminal"), help, Ui.Value("—"));
         var onPath = CliOnPath(folder);
         var button = Ui.Button(onPath ? L.T("Remove from PATH") : L.T("Add to PATH"), () =>
         {
             SetCliOnPath(folder, !CliOnPath(folder));
             RenderPage();
         });
-        return Ui.Row(L.T("Command line"), help + " " + (onPath ? L.T("It's on your PATH: open a new terminal to use it.") : L.F("Its folder: {0}", folder)), button);
+        return Ui.Row(L.T("llmtray in the terminal"), help + " " + (onPath ? L.T("It's on your PATH: open a new terminal to use it.") : L.F("Its folder: {0}", folder)), button);
     }
 
     static bool CliOnPath(string folder) => UserPath.Contains(RawUserPath().Value, folder);
