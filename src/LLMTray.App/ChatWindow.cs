@@ -169,8 +169,8 @@ sealed partial class ChatWindow : Window
         thinking.Flyout = efforts;
         App.Current.HostChanged += _ => OnHostReport();
         App.Current.ModelsChanged += OnModelsReport;
-        // A list left alone while it was open follows once it closes.
-        model.DropDownClosed += (_, _) => { if (modelsWaiting) OnModelsReport(); };
+        // A list left alone while it was open follows once it closes, and with it all that reads its selection.
+        model.DropDownClosed += (_, _) => { if (modelsWaiting) OnHostReport(); };
         App.Current.ThinkingStylesChanged += RenderThinking;
         // Closing the chat keeps LLMTray in the notification area; with no icon there, nothing
         // would bring it back, so then it quits.
@@ -245,11 +245,13 @@ sealed partial class ChatWindow : Window
         RenderAttachNote();
     }
 
-    /// <summary>The models folder was read and differs.</summary>
+    /// <summary>The models folder was read and differs: the list, and what follows its selection.</summary>
     void OnModelsReport()
     {
         RenderModels();
         RenderThinking();
+        RenderMic();
+        RenderAttachNote();
     }
 
     /// <summary>
@@ -260,16 +262,29 @@ sealed partial class ChatWindow : Window
     /// </summary>
     internal string SteadyCheck()
     {
-        object?[] Parts() => [.. model.Items, startStop.Content, thinking.Content, mic.Content];
-        var before = Parts();
-        for (var i = 0; i < 5; i++)
+        // The picker with its items, and the buttons with all that is in them.
+        List<object> Parts() => [.. Ui.Elements(model), .. Ui.Elements(startStop), .. Ui.Elements(thinking), .. Ui.Elements(mic)];
+        var app = App.Current;
+        for (var attempt = 0; attempt < 3; attempt++)
         {
+            // Whatever really changed since the last drawing is drawn first; then nothing may be made again.
             OnHostReport();
             OnModelsReport();
+            var (host, catalog, effort) = (app.Host.State, app.Library.Current, app.Settings.ThinkingEffort);
+            var before = new HashSet<object>(Parts(), ReferenceEqualityComparer.Instance);
+            for (var i = 0; i < 5; i++)
+            {
+                OnHostReport();
+                OnModelsReport();
+            }
+            var after = Parts();
+            // A real change meanwhile (a model finished loading) is drawing, not flicker: looked at again.
+            if (host != app.Host.State || !ReferenceEquals(catalog, app.Library.Current) || effort != app.Settings.ThinkingEffort) continue;
+            var again = after.Count(part => !before.Contains(part));
+            var ok = again == 0 && after.Count == before.Count;
+            return $"{(ok ? "ok" : "FAIL")}: chat header: {again} of {after.Count} elements made again over 5 reports of the host and the models folder ({model.Items.Count} models listed)";
         }
-        var after = Parts();
-        var again = after.Length != before.Length ? after.Length : after.Where((part, i) => !ReferenceEquals(part, before[i])).Count();
-        return $"{(again == 0 ? "ok" : "FAIL")}: chat header: {again} of {after.Length} parts made again over 5 reports of the host and the models folder ({model.Items.Count} models listed)";
+        return "skipped: chat header: the model host kept changing";
     }
 
     string? renderedThinking;
