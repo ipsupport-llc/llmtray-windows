@@ -118,6 +118,9 @@ public sealed partial class MainWindow : Window
     /// <summary>The tab names, for translation (MainWindow.xaml holds them in English).</summary>
     internal static readonly string[] TabNames = [L.T("General"), L.T("Models"), L.T("Profiles"), L.T("Tools"), L.T("Server"), L.T("Updates")];
 
+    /// <summary>The open tab's whole column, below the fold too: for its photograph (Screenshots.cs).</summary>
+    internal FrameworkElement PageForScreenshot => PageContent;
+
     /// <summary>Opens a tab ("models", "server", "general", "updates").</summary>
     public void ShowPage(string tag)
     {

@@ -400,6 +400,8 @@ public partial class App : Application
 
     internal MainWindow? SettingsWindow => window;
 
+    internal SetupWindow? SetupWizardWindow => setupWindow;
+
     internal AboutWindow? About => about;
 
     public void ShowAbout()

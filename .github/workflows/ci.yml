@@ -356,7 +356,7 @@ jobs:
           if ($LASTEXITCODE -ne 2) { throw "a bad command exited $LASTEXITCODE, not 2" }
           Write-Host "llmtray: $($status.text); $($listed.models.Count) models"
           # The windows' own photographs (the last is About).
-          $until = (Get-Date).AddSeconds(150)
+          $until = (Get-Date).AddSeconds(240)
           while (-not (Test-Path (Join-Path $shots 'about.png')) -and -not (Test-Path (Join-Path $shots 'screenshots-failed.txt')) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
           Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
           if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }

@@ -154,6 +154,32 @@ sealed class SetupWindow : Window
         return root;
     }
 
+    /// <summary>
+    /// Every step photographed (Screenshots.cs): the window as it is, and the
+    /// whole step where it is taller than the window. Back on the step it was on.
+    /// </summary>
+    internal async Task ScreenshotsAsync(string folder, Func<UIElement, string, Task> save)
+    {
+        if (Content is not UIElement content) return;
+        var was = step;
+        foreach (var each in Enum.GetValues<Step>())
+        {
+            Go(each);
+            await Task.Delay(700);
+            var name = $"setup-{(int)each}-{each.ToString().ToLowerInvariant()}";
+            await save(content, Path.Combine(folder, name + ".png"));
+            if (body.ActualHeight > scroller.ViewportHeight + 1) await save(body, Path.Combine(folder, name + "-full.png"));
+        }
+        Go(was);
+    }
+
+    /// <summary>Closed as the title bar's X closes it: after the photographs, when they opened it.</summary>
+    internal void CloseAfterScreenshots()
+    {
+        Close(applyChoices: false);
+        base.Close();
+    }
+
     void Go(Step to)
     {
         step = (Step)Math.Clamp((int)to, 0, (int)Step.Done);
