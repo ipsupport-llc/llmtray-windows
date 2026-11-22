@@ -47,7 +47,12 @@ sealed class Notices
         this.updates = updates;
         var app = App.Current;
         install.Content = L.T("Install and restart");
-        install.Click += (_, _) => _ = app.Updater.InstallAsync();
+        // While the update downloads, the same button cancels it.
+        install.Click += (_, _) =>
+        {
+            if (app.Updater.Downloading) app.Updater.CancelInstall();
+            else _ = app.Updater.InstallAsync();
+        };
         update.ActionButton = install;
         // Closed by the user: stays closed until something new happens.
         update.Closed += (_, _) => dismissed = app.Updater.Available?.Tag.DisplayVersion;
@@ -158,7 +163,9 @@ sealed class Notices
             update.Title = L.F("LLMTray {0} is available", found.Tag.DisplayVersion);
             update.Message = updater.Status ?? L.F("{0}. LLMTray closes, updates and opens again.", Ui.Size(found.Package.Size));
             install.Visibility = updater.ScoopManaged ? Visibility.Collapsed : Visibility.Visible;
-            install.IsEnabled = !updater.Busy;
+            var label = updater.Downloading ? L.T("Cancel") : L.T("Install and restart");
+            if (install.Content as string != label) install.Content = label;
+            install.IsEnabled = !updater.Busy || updater.Downloading;
             if (updater.ScoopManaged && updater.Status is null) update.Message = L.T("Installed with Scoop: quit LLMTray, then run \"scoop update llmtray\".");
             if (!update.IsOpen) update.IsOpen = true;
         }

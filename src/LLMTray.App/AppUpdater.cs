@@ -207,6 +207,14 @@ sealed class AppUpdater
         }
     }
 
+    /// <summary>The update's download is under way: it can be cancelled (its partial file stays for next time).</summary>
+    public bool Downloading { get; private set; }
+
+    CancellationTokenSource? downloadCancel;
+
+    /// <summary>Stops the update's download; Install starts it again where it stopped.</summary>
+    public void CancelInstall() => downloadCancel?.Cancel();
+
     public async Task InstallAsync()
     {
         // A Store copy (adr/0025) is updated by the Store only, whatever set Available.
@@ -222,6 +230,10 @@ sealed class AppUpdater
         Status = L.F("Downloading LLMTray {0}…", update.Tag.DisplayVersion);
         Raise();
         var file = Path.Combine(folder, update.Package.Name);
+        using var cancel = new CancellationTokenSource();
+        downloadCancel = cancel;
+        Downloading = true;
+        Raise();
         try
         {
             var progress = new Progress<DownloadProgress>(p =>
@@ -230,7 +242,16 @@ sealed class AppUpdater
                 Raise();
             });
             await downloader.DownloadAsync(new DownloadItem(update.Package.Url, file, update.Package.Size, update.Package.Sha256,
-                $"{update.Tag.DisplayVersion}/{update.Package.Name}"), progress, CancellationToken.None);
+                $"{update.Tag.DisplayVersion}/{update.Package.Name}"), progress, cancel.Token);
+            // Cancel pressed as the download ended: it's cancelled all the same, nothing installs.
+            cancel.Token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            Status = L.T("The update's download was cancelled. Install goes on from where it stopped.");
+            Busy = false;
+            Raise();
+            return;
         }
         catch (Exception e)
         {
@@ -238,6 +259,13 @@ sealed class AppUpdater
             Busy = false;
             Raise();
             return;
+        }
+        finally
+        {
+            Downloading = false;
+            downloadCancel = null;
+            // The buttons stop saying Cancel now, not at the next report.
+            Raise();
         }
 
         if (Kind == InstallKind.Portable)

@@ -22,6 +22,8 @@
     <!-- Copied to the output too: the portable ZIP is the output folder (adr/0004). -->
     <Content Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The tray icon with the model's state on it: running, loading, stopped by an error. -->
+    <Content Include="Assets\Tray-*.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\NOTICE.md" Link="NOTICE.md" CopyToOutputDirectory="PreserveNewest" />
     <!-- llama.cpp, put here by scripts/fetch-llama.ps1 (CPU and Vulkan, adr/0001). -->
     <Content Include="runtime\**\*" CopyToOutputDirectory="PreserveNewest" />

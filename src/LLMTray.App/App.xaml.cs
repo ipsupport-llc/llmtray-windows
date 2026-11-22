@@ -17,6 +17,8 @@ public partial class App : Application
     AboutWindow? about;
     LogWindow? log;
     TrayIcon? tray;
+    /// <summary>The icon the tray shows now (a file in Assets).</summary>
+    string trayMark = "AppIcon.ico";
     JobObjectLauncher? launcher;
     ProxyServer? proxy;
     LLMTray.Core.Control.ControlServer? control;
@@ -646,6 +648,20 @@ public partial class App : Application
         if (state.Status == HostStatus.Running && state.Model is { } model && Settings.LastModel != model.RelativePath)
         {
             UpdateSettings(Settings with { LastModel = model.RelativePath });
+        }
+        // The icon says it too (Mac: the menu bar icon's colour): green running, orange loading, red stopped by
+        // an error; the plain icon when nothing is loaded.
+        var mark = state.Status switch
+        {
+            HostStatus.Running => "Tray-running.ico",
+            HostStatus.Loading => "Tray-loading.ico",
+            HostStatus.Failed => "Tray-failed.ico",
+            _ => "AppIcon.ico",
+        };
+        if (mark != trayMark)
+        {
+            trayMark = mark;
+            tray?.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", mark));
         }
         tray?.SetTooltip(state.Status switch
         {

@@ -425,18 +425,30 @@ public sealed partial class MainWindow : Window
         };
         var check = Ui.Button(L.T("Check Now"), () => _ = updater.CheckAsync(manual: true));
         check.IsEnabled = !updater.Busy;
-        Button? install = updater.Available is not null ? Ui.Button(L.T("Install and restart"), () => _ = updater.InstallAsync(), accent: true) : null;
+        // While the update downloads, the same button cancels it.
+        Button? install = updater.Available is not null ? Ui.Button(L.T("Install and restart"), () =>
+        {
+            if (updater.Downloading) updater.CancelInstall();
+            else _ = updater.InstallAsync();
+        }, accent: true) : null;
         var status = Ui.Caption(updater.Status ?? "");
         status.Visibility = updater.Status is null ? Visibility.Collapsed : Visibility.Visible;
         liveUpdates = () =>
         {
             check.IsEnabled = !updater.Busy;
             channel.IsEnabled = !updater.Busy;
-            if (install is not null) install.IsEnabled = !updater.Busy;
+            if (install is not null)
+            {
+                install.IsEnabled = !updater.Busy || updater.Downloading;
+                var label = updater.Downloading ? L.T("Cancel") : L.T("Install and restart");
+                if (install.Content as string != label) install.Content = label;
+            }
             if (auto.IsOn != app.Settings.CheckForUpdates) auto.IsOn = app.Settings.CheckForUpdates;
             status.Text = updater.Status ?? "";
             status.Visibility = updater.Status is null ? Visibility.Collapsed : Visibility.Visible;
         };
+        // As things are now (a download may be under way as the page opens).
+        liveUpdates();
         var copy = updater.ScoopManaged ? L.F("Installed with Scoop, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Portable ? L.F("The portable copy, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Installer ? L.F("Installed with the LLMTray installer, for {0}.", updater.Architecture)
