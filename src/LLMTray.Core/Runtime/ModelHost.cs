@@ -701,13 +701,17 @@ public sealed class ModelHost : IAsyncDisposable
 
     void RotateLog()
     {
-        Interlocked.Increment(ref logGeneration);
         try
         {
             if (File.Exists(LogFile)) File.Move(LogFile, Path.Combine(logDirectory, "llama-server.previous.log"), overwrite: true);
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+        finally
+        {
+            // After the move: a Clear Log taken meanwhile belongs to the old file, and this tells it apart.
+            Interlocked.Increment(ref logGeneration);
+        }
     }
 
     Lease Take(Running r)
