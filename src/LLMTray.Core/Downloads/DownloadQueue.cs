@@ -43,18 +43,26 @@ public sealed class DownloadQueue(ModelDownloader downloader)
 
     public void Enqueue(DownloadJob job)
     {
-        lock (sync)
-        {
-            pending.Enqueue(job);
-            lastError = null;
-            lastFailed = null;
-            if (!running)
-            {
-                running = true;
-                _ = Task.Run(RunAsync);
-            }
-        }
+        lock (sync) EnqueueLocked(job);
         Raise();
+    }
+
+    void EnqueueLocked(DownloadJob job)
+    {
+        pending.Enqueue(job);
+        lastError = null;
+        lastFailed = null;
+        if (!running)
+        {
+            running = true;
+            _ = Task.Run(RunAsync);
+        }
+    }
+
+    /// <summary>Whether a job of this title runs or waits (another of the same model is no use).</summary>
+    public bool Has(string title)
+    {
+        lock (sync) return current?.Title == title || pending.Any(j => j.Title == title);
     }
 
     /// <summary>Forgets the last result (the user closed its notice).</summary>
@@ -75,14 +83,13 @@ public sealed class DownloadQueue(ModelDownloader downloader)
     /// </summary>
     public bool Retry()
     {
-        DownloadJob? job;
         lock (sync)
         {
-            job = lastFailed;
-            lastFailed = null;
+            // In one step: a Cancel or another failure can't slip in between taking it and queueing it.
+            if (lastFailed is not { } job) return false;
+            EnqueueLocked(job);
         }
-        if (job is null) return false;
-        Enqueue(job);
+        Raise();
         return true;
     }
 
