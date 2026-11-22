@@ -31,6 +31,10 @@ sealed partial class DownloadDialog : ContentDialog
     /// <summary>What the featured list's marks were drawn from.</summary>
     string? followed;
 
+    /// <summary>Which featured models run or wait, and the last result: a queue changed twice between two looks still differs.</summary>
+    static string FollowKey(DownloadState d) =>
+        string.Concat(FeaturedModels.All.Select(m => App.Current.Downloads.Has(m.Title) ? '1' : '0')) + $"|{d.LastDone}|{d.LastError}";
+
     /// <summary>A repository's files, pinned to the version they were listed at.</summary>
     sealed record Listing(DownloadSource Source, string Pinned, IReadOnlyList<RemoteFile> Files);
 
@@ -116,7 +120,7 @@ sealed partial class DownloadDialog : ContentDialog
         // The marks follow the downloads while it's open: one that ends, fails or starts changes its row.
         void Follow(DownloadState d)
         {
-            var key = $"{d.Current?.Title}|{d.Queued}|{d.LastDone}|{d.LastError}";
+            var key = FollowKey(d);
             if (key == followed) return;
             followed = key;
             var selected = (featured.SelectedItem as ListViewItem)?.Tag as FeaturedModel;
@@ -126,7 +130,7 @@ sealed partial class DownloadDialog : ContentDialog
                 featured.SelectedItem = featured.Items.OfType<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, selected) && i.IsEnabled);
             }
         }
-        followed = $"{App.Current.Downloads.State.Current?.Title}|{App.Current.Downloads.State.Queued}|{App.Current.Downloads.State.LastDone}|{App.Current.Downloads.State.LastError}";
+        followed = FollowKey(App.Current.Downloads.State);
         App.Current.DownloadsChanged += Follow;
         Closed += (_, _) => App.Current.DownloadsChanged -= Follow;
         RenderFeatured();
