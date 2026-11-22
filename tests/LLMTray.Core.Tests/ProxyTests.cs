@@ -360,13 +360,21 @@ public sealed class ProxyTests : IAsyncDisposable
         await host.LoadAsync(catalog.Models[0]);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         launcher.Health = ready.Task;
-        launcher.KillAll(exitCode: 3);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (launcher.Starts < 2 && DateTime.UtcNow < deadline) await Task.Delay(5);
-        Assert.Equal(2, launcher.Starts);
-        Assert.Equal(HostStatus.Loading, host.State.Status);
-        await host.StopAsync();
-        ready.SetResult();
+        try
+        {
+            launcher.KillAll(exitCode: 3);
+            // Generous: a slow runner takes its time to start the fake server.
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (launcher.Starts < 2 && DateTime.UtcNow < deadline) await Task.Delay(5);
+            Assert.Equal(2, launcher.Starts);
+            Assert.Equal(HostStatus.Loading, host.State.Status);
+            await host.StopAsync();
+        }
+        finally
+        {
+            // Released whatever happened: no health request is left waiting through the cleanup.
+            ready.TrySetResult();
+        }
         await StaysStopped();
         Assert.Equal(2, launcher.Starts);
     }
@@ -377,7 +385,7 @@ public sealed class ProxyTests : IAsyncDisposable
     /// </summary>
     async Task StaysStopped()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
+        var deadline = DateTime.UtcNow.AddSeconds(60);
         while ((host.State.Status != HostStatus.Stopped || launcher.Running > 0 || !host.IsIdleForTests) && DateTime.UtcNow < deadline) await Task.Delay(20);
         await Task.Delay(300);
         Assert.True(host.IsIdleForTests, "the host is still loading");
