@@ -292,7 +292,8 @@ static class Ui
         var areas = Microsoft.UI.Windowing.DisplayArea.FindAll()
             .Select(d => new LLMTray.Core.Settings.WindowPlace.Area(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height)).ToList();
         var presenter = window.AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter;
-        if (saved.On(areas, presenter?.PreferredMinimumWidth ?? 0, presenter?.PreferredMinimumHeight ?? 0) is not { } place) return;
+        // A small floor, not the window's minimum: that is in this screen's pixels, and the place may be on another scale.
+        if (saved.On(areas, 320, 240) is not { } place) return;
         window.AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(place.X, place.Y, place.Width, place.Height));
         if (place.Maximized) presenter?.Maximize();
     }
@@ -320,10 +321,13 @@ static class Ui
     public static void RememberPlace(Window window, string name)
     {
         var app = App.Current;
-        var maximized = window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Maximized };
+        var state = (window.AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+        // Minimized, its bounds are nowhere on the screen: the place it had before is kept.
+        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && !NormalBounds.TryGetValue(window, out _)) return;
+        var maximized = state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized;
         var places = new Dictionary<string, LLMTray.Core.Settings.WindowPlace>(app.Settings.WindowPlaces ?? new Dictionary<string, LLMTray.Core.Settings.WindowPlace>());
         // Maximized, its bounds are the screen's: the size it had before it was maximized is what's kept.
-        var bounds = maximized && NormalBounds.TryGetValue(window, out var normal) ? normal
+        var bounds = (maximized || state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized) && NormalBounds.TryGetValue(window, out var normal) ? normal
             : new Windows.Graphics.RectInt32(window.AppWindow.Position.X, window.AppWindow.Position.Y, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
         var place = new LLMTray.Core.Settings.WindowPlace(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized);
         if (places.GetValueOrDefault(name) == place) return;

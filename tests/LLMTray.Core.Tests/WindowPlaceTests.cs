@@ -33,6 +33,14 @@ public sealed class WindowPlaceTests
     }
 
     [Fact]
+    public void OnTwoScreensItGoesToTheOneHoldingMostOfIt()
+    {
+        // 200 pixels on the main screen, the rest on the right one: placed on the right one.
+        var place = new WindowPlace(1720, 100, 1200, 800, false).On([Main, Right], 640, 480)!;
+        Assert.True(place.X >= Right.X - 8);
+    }
+
+    [Fact]
     public void SmallerThanTheMinimumIsntUsed()
     {
         Assert.Null(new WindowPlace(100, 100, 300, 200, false).On([Main], 640, 480));

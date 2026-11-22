@@ -104,7 +104,7 @@ public sealed class ChatStore(string folder)
                 var info = new FileInfo(path);
                 (written, length) = (info.LastWriteTimeUtc, info.Length);
             }
-            catch (IOException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 continue;
             }
@@ -118,8 +118,12 @@ public sealed class ChatStore(string folder)
                 }
             }
             summary = Load(id) is { } file ? Summarize(file) : null;
-            lock (summaries) summaries[path] = (written, length, summary);
-            if (summary is not null) list.Add(summary);
+            // Only what read is kept: a file that didn't (being written, locked a moment) is tried again next time.
+            if (summary is not null)
+            {
+                lock (summaries) summaries[path] = (written, length, summary);
+                list.Add(summary);
+            }
         }
         lock (summaries)
         {

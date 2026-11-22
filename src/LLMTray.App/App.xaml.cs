@@ -462,6 +462,7 @@ public partial class App : Application
     {
         if (chatWindow is { } open && open.AppWindow.IsVisible && open.IsForeground)
         {
+            Ui.RememberPlace(open, "chat");
             open.AppWindow.Hide();
             return;
         }

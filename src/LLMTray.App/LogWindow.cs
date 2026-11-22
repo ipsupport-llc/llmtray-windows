@@ -241,8 +241,12 @@ sealed class LogWindow : Window
     }
 
     /// <summary>Save Log… (Mac): the whole log, into a file the user picks.</summary>
+    /// <summary>Why the last Save Log… failed, shown in the status bar until the next one.</summary>
+    string? saveError;
+
     async Task SaveAsync()
     {
+        saveError = null;
         try
         {
             var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = $"LLMTray-server-{DateTime.Now:yyyy-MM-ddTHH-mm-ss}" };
@@ -255,7 +259,8 @@ sealed class LogWindow : Window
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
         {
-            shown.Text = L.T("The log couldn't be saved");
+            saveError = L.T("The log couldn't be saved");
+            shown.Text = saveError;
             shown.Foreground = Ui.Red;
         }
     }
@@ -283,7 +288,14 @@ sealed class LogWindow : Window
         var problemCount = entries.Count(e => e.IsProblem);
         var problemsText = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
         if (problems.Text != problemsText) problems.Text = problemsText;
-        var keys = visible.Select(RowKey).ToList();
+        // Two entries alike (the same line twice) are told apart by their turn among their kind.
+        var seenKeys = new Dictionary<string, int>();
+        var keys = visible.Select(e =>
+        {
+            var key = RowKey(e);
+            var n = seenKeys[key] = seenKeys.GetValueOrDefault(key) + 1;
+            return $"{key}#{n}";
+        }).ToList();
         if (keys.Count == 0)
         {
             keys.Add(entries.Count == 0 ? "empty" : "no match");
@@ -323,8 +335,9 @@ sealed class LogWindow : Window
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = L.F("Requests: {0}", requestCount) + "   ", Foreground = Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"✕ {errors}   ", Foreground = errors > 0 ? Ui.Red : Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"⚠ {warnings}", Foreground = warnings > 0 ? Ui.Orange : Ui.Secondary });
-        shown.Text = visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "";
-        shown.Foreground = Ui.Secondary;
+        // A failed save stays said until the next try; then what's shown.
+        shown.Text = saveError ?? (visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "");
+        shown.Foreground = saveError is null ? Ui.Secondary : Ui.Red;
         if (added && follow.IsChecked == true) ScrollToEnd();
     }
 
@@ -335,7 +348,7 @@ sealed class LogWindow : Window
         var first = entry.Lines.Count > 0 ? entry.Lines[0] : entry.Head;
         var last = entry.Lines.Count > 0 ? entry.Lines[^1] : entry.Head;
         var id = entry.Kind == LogKind.Request ? first.Time + "|" + first.Message : "";
-        return $"{entry.Kind}|{entry.Head.Time}|{entry.Head.Message}|{entry.Lines.Count}|{last.Time}|{last.Message}|{entry.Metrics}|{entry.IsProblem}|{(id.Length > 0 && expanded.Contains(id))}";
+        return $"{entry.Kind}|{entry.Head.Level}|{entry.Head.Time}|{entry.Head.Message}|{entry.Lines.Count}|{last.Time}|{last.Message}|{entry.Metrics}|{entry.IsProblem}|{(id.Length > 0 && expanded.Contains(id))}";
     }
 
     void RenderStatus()

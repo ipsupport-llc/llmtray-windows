@@ -61,6 +61,8 @@ sealed partial class ChatWindow
         // What the list shows, as of its last drawing: each file read, each request of a model, reported
         // here, and the list (pictures read from disk again) was made again for every one of them.
         string? rendered = null;
+        var asking = 0;
+        var waiting = false;
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
         var pinNote = Ui.Caption("");
@@ -110,9 +112,16 @@ sealed partial class ChatWindow
             var key = string.Join("\n", [
                 $"{limit}|{string.Join(",", pins)}|{string.Join(",", tokens.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}",
                 .. docs.Select(d => $"{d.Doc}|{d.Name}|{d.Status}|{d.Pages}|{d.Bytes}|{d.Reindex}|{d.Error}"),
-                .. app.ProjectFiles.Pictures(project.Id).Select(p => $"{p.Id}|{p.Name}|{p.Width}|{p.Height}|{p.Bytes}"),
-                $"{app.ProjectFiles.Summary(project.Id)}|{index?.DiskBytes()}"]);
+                .. app.ProjectFiles.Pictures(project.Id).Select(p => $"{p.Id}|{p.Name}|{p.Width}|{p.Height}|{p.Bytes}|{app.ProjectFiles.PictureThumbnail(project.Id, p) is { } t && File.Exists(t)}"),
+                // A file's status line says "words only" until the embedder is here.
+                $"{app.ProjectFiles.Summary(project.Id)}|{index?.DiskBytes()}|{app.Embedder.IsInstalled}"]);
             if (key == rendered) return;
+            // A removal being asked about: the list waits until it's answered (its button would go from under it).
+            if (asking > 0)
+            {
+                waiting = true;
+                return;
+            }
             rendered = key;
             pinNote.Visibility = pins.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             pinNote.Text = L.F("Pinned: {0} files, ≈{1} of {2} tokens. Their whole text goes with every message of this project's chats, and those chats don't use web tools, MCP servers or folder changes while any file is pinned.",
@@ -171,6 +180,16 @@ sealed partial class ChatWindow
                 {
                     ask.Hide();
                     app.ProjectFiles.Remove(project.Id, doc);
+                };
+                ask.Opened += (_, _) => asking++;
+                ask.Closed += (_, _) =>
+                {
+                    asking--;
+                    if (asking == 0 && waiting)
+                    {
+                        waiting = false;
+                        DispatcherQueue.TryEnqueue(Render);
+                    }
                 };
                 remove.Flyout = ask;
                 var row = new Grid { ColumnSpacing = 8 };

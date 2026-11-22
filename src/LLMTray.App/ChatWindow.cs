@@ -1643,7 +1643,8 @@ sealed partial class ChatWindow : Window
             // An answer saved in the chat already on top, a search that matches the same: nothing to draw again
             // (the list was emptied and filled after every answer and every key typed).
             var key = string.Join("\n", [
-                query, $"{library.Unreadable}|{library.SaveFailed}",
+                // What the rows' menus and marks depend on besides the chats: Memory on (Remember This Chat), project files on.
+                query, $"{library.Unreadable}|{library.SaveFailed}|{App.Current.Memory.Settings.Enabled}|{App.Current.Settings.ProjectFiles}",
                 // Instructions too: a project's menu holds the project as it was drawn.
                 string.Join(",", projects.Select(p => $"{p.Id}:{p.Name}:{collapsed.Contains(p.Id)}:{p.Instructions.GetHashCode()}")),
                 string.Join(",", pinned), string.Join(",", map.Select(kv => $"{kv.Key}>{kv.Value}")),
