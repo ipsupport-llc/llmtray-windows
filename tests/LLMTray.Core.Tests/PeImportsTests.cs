@@ -55,6 +55,21 @@ public sealed class PeImportsTests : IDisposable
     }
 
     [Fact]
+    public void AListsEndInTheZeroFilledPartIsRead()
+    {
+        // The section's file bytes end right after its one import descriptor: the zero one that ends
+        // the list is in the part Windows fills with zeros, which the file doesn't hold.
+        var pe = Pe(["VCRUNTIME140.dll"], []);
+        const int optional = 0x80 + 24, section = optional + 240;
+        Array.Clear(pe, 0x400, 0x400);
+        System.Text.Encoding.ASCII.GetBytes("VCRUNTIME140.dll\0").CopyTo(pe, 0x400);
+        BitConverter.GetBytes(0x1000).CopyTo(pe, 0x400 + 0x20 + 12);
+        BitConverter.GetBytes(0x1020).CopyTo(pe, optional + 112 + 8);
+        BitConverter.GetBytes(0x34).CopyTo(pe, section + 16);
+        Assert.Equal(["VCRUNTIME140.dll"], PeImports.Of(pe));
+    }
+
+    [Fact]
     public void ANonPeFileIsRefused()
     {
         Assert.Throws<InvalidDataException>(() => PeImports.Of(Encoding.ASCII.GetBytes("not a program at all, just some text to read")));

@@ -59,21 +59,26 @@ public static class PeImports
                 var s = optional + optionalSize + i * 40;
                 table.Add((I32(b, s + 12), Math.Max(I32(b, s + 8), I32(b, s + 16)), I32(b, s + 20), I32(b, s + 16)));
             }
-            // A file offset for an RVA, inside the bytes its section has in the file.
+            // A file offset for an RVA, inside the bytes its section has in the file; -1 past them but
+            // inside the section in memory, which Windows fills with zeros.
             int Offset(int rva, int length)
             {
                 foreach (var (va, size, raw, rawSize) in table)
                 {
                     if (rva < va || rva >= va + size) continue;
                     var at = rva - va;
-                    if (at + length > rawSize || raw + at + length > b.Length) throw new InvalidDataException($"RVA {rva:x} runs past its section");
-                    return raw + at;
+                    if (at + length <= rawSize && raw + at + length <= b.Length) return raw + at;
+                    if (at + length <= size) return -1;
+                    throw new InvalidDataException($"RVA {rva:x} runs past its section");
                 }
                 throw new InvalidDataException($"RVA {rva:x} is in no section");
             }
+            // A descriptor's field: zero in the zero-filled part (a list's terminator may sit there).
+            int Field(int rva) => Offset(rva, 4) is var at and >= 0 ? I32(b, at) : 0;
             string Name(int rva)
             {
                 var start = Offset(rva, 1);
+                if (start < 0) throw new InvalidDataException("a DLL name in no file bytes");
                 var end = Array.IndexOf(b, (byte)0, start);
                 if (end < 0 || end - start > 260) throw new InvalidDataException("a DLL name without its end");
                 return System.Text.Encoding.ASCII.GetString(b, start, end - start);
@@ -82,12 +87,12 @@ public static class PeImports
             // The import directory (2nd): 20-byte descriptors, the name's RVA at +12, ended by a zero one.
             if (count > 1 && I32(b, directories + 8) is var imports and > 0)
             {
-                for (var o = Offset(imports, 20); I32(b, o + 12) is var name and > 0; o = Offset(imports += 20, 20)) names.Add(Name(name));
+                for (var d = imports; Field(d + 12) is var name and > 0; d += 20) names.Add(Name(name));
             }
             // The delay-load directory (14th): 32-byte descriptors, the name's RVA at +4.
             if (count > 13 && I32(b, directories + 13 * 8) is var delayed and > 0)
             {
-                for (var o = Offset(delayed, 32); I32(b, o + 4) is var name and > 0; o = Offset(delayed += 32, 32)) names.Add(Name(name));
+                for (var d = delayed; Field(d + 4) is var name and > 0; d += 32) names.Add(Name(name));
             }
             return names;
         }
