@@ -694,6 +694,11 @@ public sealed class ModelHost : IAsyncDisposable
         Changed();
     }
 
+    int logGeneration;
+
+    /// <summary>Counts the server log's files: a new one each time a server starts (the log window's Clear Log belongs to one).</summary>
+    public int LogGeneration => Volatile.Read(ref logGeneration);
+
     void RotateLog()
     {
         try
@@ -702,6 +707,11 @@ public sealed class ModelHost : IAsyncDisposable
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+        finally
+        {
+            // After the move: a Clear Log taken meanwhile belongs to the old file, and this tells it apart.
+            Interlocked.Increment(ref logGeneration);
+        }
     }
 
     Lease Take(Running r)

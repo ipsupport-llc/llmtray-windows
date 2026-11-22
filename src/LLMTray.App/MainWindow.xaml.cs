@@ -52,12 +52,13 @@ public sealed partial class MainWindow : Window
         foreach (var item in Tabs.MenuItems.OfType<NavigationViewItem>()) item.Content = L.T((string)item.Content);
         Title = L.T("LLMTray Settings");
         NoticeHost.Content = new Notices(updates: false).Panel;
-        FitToScreen();
+        Ui.Place(this, "settings", FitToScreen);
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
+            Ui.RememberPlace(this, "settings");
             // Settings closes to the chat (or the tray), where the app is; with no tray icon
             // and no chat on screen, the chat comes back rather than leave nothing.
             args.Cancel = true;
@@ -74,15 +75,24 @@ public sealed partial class MainWindow : Window
         };
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
-        App.Current.MemoryChanged += () => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
-        // A request counted: the Server tab's numbers follow (from the proxy's thread).
-        App.Current.RequestStatistics.Changed += () => DispatcherQueue.TryEnqueue(() =>
+        App.Current.MemoryChanged += () =>
         {
-            if (page == "server" && App.Current.Settings.KeepRequestStatistics) RenderPageSoon();
-        });
+            if (page != "memory") return;
+            if (MemoryKey() != renderedMemoryKey) RenderPageSoon();
+            else FollowLearning();
+        };
+        // A request counted: the Server tab's numbers follow (from the proxy's thread).
+        // Only the Usage card's numbers, at most twice a second: the whole tab was made again for every request.
+        App.Current.RequestStatistics.Changed += () => DispatcherQueue.TryEnqueue(OnRequestCounted);
         // The embedder's row (Memory, and Files in projects on Tools) goes once it's downloaded.
         App.Current.DownloadsChanged += _ =>
         {
+            // Not computed for every progress report: the keys read files. Only a download that starts or
+            // ends, or the embedder arriving, can change these pages.
+            if (page is not ("memory" or "tools")) return;
+            var seen = $"{App.Current.Downloads.State.Current?.Title}|{App.Current.Embedder.IsInstalled}";
+            if (seen == downloadSeen) return;
+            downloadSeen = seen;
             if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon();
             if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon();
         };
@@ -173,6 +183,8 @@ public sealed partial class MainWindow : Window
     }
 
     string? renderedHostKey, renderedToolsKey, renderedUpdatesKey;
+    /// <summary>The download and the embedder as the Memory and Tools pages last looked at them.</summary>
+    string? downloadSeen;
     Action? liveUpdates;
 
     static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Note}|{s.RunOn}|{s.Message}";
@@ -198,6 +210,8 @@ public sealed partial class MainWindow : Window
     void RenderPage()
     {
         pendingRender = false;
+        // The page is drawn from the downloads as they are now: the next report compares its keys again.
+        downloadSeen = null;
         renderedHostKey = HostKey(state);
         renderedToolsKey = page == "tools" ? ToolsKey() : null;
         renderedUpdatesKey = UpdatesKey();

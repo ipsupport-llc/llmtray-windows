@@ -25,6 +25,24 @@ public abstract record Block
 /// </summary>
 public static partial class Markdown
 {
+    /// <summary>
+    /// Whether two blocks show the same: what an answer being written keeps
+    /// from one drawing to the next (records compare their lists by reference).
+    /// </summary>
+    public static bool Same(Block a, Block b) => (a, b) switch
+    {
+        (Block.Paragraph x, Block.Paragraph y) => x.Runs.SequenceEqual(y.Runs),
+        (Block.Heading x, Block.Heading y) => x.Level == y.Level && x.Runs.SequenceEqual(y.Runs),
+        (Block.Code x, Block.Code y) => x == y,
+        (Block.List x, Block.List y) => x.Ordered == y.Ordered && x.Start == y.Start && x.Items.Count == y.Items.Count
+            && x.Items.Zip(y.Items).All(p => p.First.SequenceEqual(p.Second)),
+        (Block.Quote x, Block.Quote y) => x.Runs.SequenceEqual(y.Runs),
+        (Block.Table x, Block.Table y) => x.Header.SequenceEqual(y.Header) && x.Rows.Count == y.Rows.Count
+            && x.Rows.Zip(y.Rows).All(p => p.First.SequenceEqual(p.Second)),
+        (Block.Rule, Block.Rule) => true,
+        _ => false,
+    };
+
     public static IReadOnlyList<Block> Parse(string text)
     {
         var blocks = new List<Block>();

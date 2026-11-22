@@ -62,6 +62,31 @@ public sealed class ChatFileTests : IDisposable
         """;
 
     [Fact]
+    public void TheListFollowsEachChangedFile()
+    {
+        var store = new ChatStore(root);
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "9F1C2B3A-1111-4222-8333-444455556666.json");
+        File.WriteAllText(path, MacFile);
+        Assert.Equal("Greeting", Assert.Single(store.List()).Title);
+        // Listed again unchanged: the same summary, from what's known.
+        Assert.Same(store.List()[0], store.List()[0]);
+
+        var file = store.Load(Assert.Single(store.List()).Id)!;
+        store.Save(file with { Title = "Renamed" });
+        Assert.Equal("Renamed", Assert.Single(store.List()).Title);
+
+        // Changed by something else (another copy, a sync), even to the same length: read again.
+        var text = File.ReadAllText(path).Replace("Renamed", "Reworded");
+        File.WriteAllText(path, text);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));
+        Assert.Equal("Reworded", Assert.Single(store.List()).Title);
+
+        File.Delete(path);
+        Assert.Empty(store.List());
+    }
+
+    [Fact]
     public void ReadsAndKeepsAMacChat()
     {
         var store = new ChatStore(root);

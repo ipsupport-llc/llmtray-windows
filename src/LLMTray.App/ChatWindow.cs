@@ -62,6 +62,7 @@ sealed partial class ChatWindow : Window
     /// <summary>Thinking effort (adr/0011): shown for a model whose template thinks.</summary>
     readonly DropDownButton thinking = new();
     readonly Button send = new();
+    readonly FontIcon sendIcon = new() { FontSize = 14 };
     bool rendering;
     /// <summary>Keep the newest in view: on after sending, off when the user scrolls up.</summary>
     bool follow = true;
@@ -84,13 +85,18 @@ sealed partial class ChatWindow : Window
         store.Changed += _ => DispatcherQueue.TryEnqueue(RenderChats);
         App.Current.ChatLibrary.Changed += () => DispatcherQueue.TryEnqueue(RenderChats);
         App.Current.ProjectFilesChanged += UpdateProjectMark;
+        // The rows' menus (Remember This Chat) and marks follow Memory and project files turned on or off:
+        // drawn again only if what they show changed.
+        App.Current.MemoryChanged += () => DispatcherQueue.TryEnqueue(RenderChats);
+        App.Current.FoldersChanged += () => DispatcherQueue.TryEnqueue(RenderChats);
 
         Content = Layout();
         SetUpPictures((UIElement)Content);
         SetUpVoice();
         // Attach Current Tab (adr/0022): the window the user was in before LLMTray, noted as it happens.
         Interop.BrowserTab.TrackForeground();
-        Size(1100, 760);
+        // Where it was last, or 1100 × 760 in the middle of the screen.
+        Ui.Place(this, "chat", () => Size(1100, 760));
 
         search.TextChanged += (_, _) => RenderChats();
         chats.SelectionChanged += (_, _) =>
@@ -180,6 +186,7 @@ sealed partial class ChatWindow : Window
         {
             if (App.Current.Quitting) return;
             args.Cancel = true;
+            Ui.RememberPlace(this, "chat");
             if (App.Current.HasTrayIcon) sender.Hide();
             else _ = App.Current.QuitAsync();
         };
@@ -208,6 +215,7 @@ sealed partial class ChatWindow : Window
             root.ActualThemeChanged += (_, _) =>
             {
                 renderedEpoch = -1;
+                renderedChats = null;
                 Render();
                 RenderChats();
             };
@@ -907,10 +915,14 @@ sealed partial class ChatWindow : Window
         compactCaption.Text = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
         // The numbers are under the answer itself; the bar keeps only a compaction's problem.
         if (!chat.Compacting && last is { Role: "assistant" }) stats.Text = "";
-        send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
+        // One icon, its glyph changed in place: this runs for every piece of an answer.
+        var sendGlyph = chat.Busy ? "" : "";
+        if (sendIcon.Glyph != sendGlyph) sendIcon.Glyph = sendGlyph;
+        if (!ReferenceEquals(send.Content, sendIcon)) send.Content = sendIcon;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? L.T("Stop") : L.T("Send"));
         ToolTipService.SetToolTip(send, chat.Busy ? L.T("Stop") : L.T("Send (Enter)"));
-        if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true));
+        // Asked again when it runs: the user may have started scrolling up meanwhile.
+        if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (follow) scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true); });
         RenderChatsSelection();
     }
 
@@ -1144,7 +1156,8 @@ sealed partial class ChatWindow : Window
         readonly ProgressRing waiting = new() { IsActive = true, Width = 16, Height = 16, HorizontalAlignment = HorizontalAlignment.Left };
         TextBlock? doingText;
         UIElement? doing;
-        int blocks;
+        /// <summary>The blocks drawn, one view each in <c>body</c>.</summary>
+        IReadOnlyList<MdBlock> shown = [];
 
         /// <summary>False when the answer now needs drawing whole.</summary>
         public bool Update()
@@ -1191,18 +1204,38 @@ sealed partial class ChatWindow : Window
                     {
                         body.Children.Clear();
                         body.Children.Add(waiting);
-                        blocks = 0;
+                        shown = [];
                     }
                 }
                 else
                 {
-                    if (body.Children.Count > 0 && body.Children[0] == waiting) body.Children.Clear();
-                    // Paragraphs before the last two don't change as the text grows.
+                    if (body.Children.Count > 0 && body.Children[0] == waiting)
+                    {
+                        body.Children.Clear();
+                        shown = [];
+                    }
+                    // Each block keeps its view: one that's the same stays, one that grew (the last
+                    // paragraph, a code block being written) is changed in place, and only one of
+                    // another kind is made again. Made again every 50 ms, the end of an answer blinked.
                     var parsed = Markdown.Parse(m.Content);
-                    var keep = Math.Min(Math.Max(0, blocks - 2), parsed.Count);
-                    while (body.Children.Count > keep) body.Children.RemoveAt(body.Children.Count - 1);
-                    for (var i = keep; i < parsed.Count; i++) body.Children.Add(BlockView(parsed[i]));
-                    blocks = parsed.Count;
+                    while (body.Children.Count > parsed.Count) body.Children.RemoveAt(body.Children.Count - 1);
+                    for (var i = 0; i < parsed.Count; i++)
+                    {
+                        if (i < shown.Count && i < body.Children.Count)
+                        {
+                            if (Markdown.Same(shown[i], parsed[i]) || UpdateBlockView(body.Children[i], parsed[i])) continue;
+                            body.Children[i] = BlockView(parsed[i]);
+                        }
+                        else if (i < body.Children.Count)
+                        {
+                            body.Children[i] = BlockView(parsed[i]);
+                        }
+                        else
+                        {
+                            body.Children.Add(BlockView(parsed[i]));
+                        }
+                    }
+                    shown = parsed;
                 }
                 parts.Add(card);
             }
@@ -1260,9 +1293,17 @@ sealed partial class ChatWindow : Window
         switch (block)
         {
             case MdBlock.Heading h:
-                return Text(h.Runs, size: h.Level switch { 1 => 22, 2 => 19, 3 => 16, _ => 14 }, bold: true);
+            {
+                var heading = Text(h.Runs, size: h.Level switch { 1 => 22, 2 => 19, 3 => 16, _ => 14 }, bold: true);
+                heading.Tag = $"heading{h.Level}";
+                return heading;
+            }
             case MdBlock.Paragraph p:
-                return Text(p.Runs);
+            {
+                var paragraph = Text(p.Runs);
+                paragraph.Tag = "paragraph";
+                return paragraph;
+            }
             case MdBlock.Quote q:
                 return new Border
                 {
@@ -1270,6 +1311,7 @@ sealed partial class ChatWindow : Window
                     BorderThickness = new Thickness(3, 0, 0, 0),
                     Padding = new Thickness(10, 0, 0, 0),
                     Child = Text(q.Runs, secondary: true),
+                    Tag = "quote",
                 };
             case MdBlock.List l:
             {
@@ -1294,7 +1336,8 @@ sealed partial class ChatWindow : Window
                 copy.Style = Ui.Resource<Style>("SubtleButtonStyle", copy.Style);
                 ToolTipService.SetToolTip(copy, L.T("Copy the code"));
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(copy, L.T("Copy the code"));
-                copy.Click += (_, _) => Copy(c.Text);
+                // What's shown when clicked: the block may have grown since it was made.
+                copy.Click += (_, _) => Copy(code.Text);
                 var grid = new Grid();
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -1317,6 +1360,8 @@ sealed partial class ChatWindow : Window
                     Background = Ui.Resource<Brush>("SubtleFillColorSecondaryBrush", Ui.CardBackground),
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(10, 6, 10, 8),
+                    // What changes as it's written (UpdateBlockView).
+                    Tag = new CodeView(c.Language, code),
                 };
             }
             case MdBlock.Table t:
@@ -1344,11 +1389,48 @@ sealed partial class ChatWindow : Window
         }
     }
 
+    /// <summary>A code block's view: its language and the text that grows.</summary>
+    sealed record CodeView(string Language, TextBlock Code);
+
+    /// <summary>
+    /// The view of a block changed in place to show <paramref name="next"/>, when
+    /// it's of the same kind: text of a paragraph, heading or quote, a code
+    /// block's code. False when it has to be made again.
+    /// </summary>
+    static bool UpdateBlockView(UIElement view, MdBlock next)
+    {
+        switch (next)
+        {
+            case MdBlock.Paragraph p when view is TextBlock { Tag: "paragraph" } text:
+                Fill(text, p.Runs);
+                return true;
+            case MdBlock.Heading h when view is TextBlock { Tag: string tag } text && tag == $"heading{h.Level}":
+                Fill(text, h.Runs);
+                return true;
+            case MdBlock.Quote q when view is Border { Tag: "quote", Child: TextBlock text }:
+                Fill(text, q.Runs);
+                return true;
+            case MdBlock.Code c when view is Border { Tag: CodeView code } && code.Language == c.Language:
+                if (code.Code.Text != c.Text) code.Code.Text = c.Text;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     static TextBlock Text(IReadOnlyList<MdRun> runs, double size = 14, bool bold = false, bool secondary = false)
     {
         var block = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = size };
         if (bold) block.FontWeight = FontWeights.SemiBold;
         if (secondary) block.Foreground = Ui.Secondary;
+        Fill(block, runs);
+        return block;
+    }
+
+    /// <summary>The block's text, as runs: what was there before goes.</summary>
+    static void Fill(TextBlock block, IReadOnlyList<MdRun> runs)
+    {
+        block.Inlines.Clear();
         foreach (var run in runs)
         {
             Inline inline;
@@ -1373,7 +1455,6 @@ sealed partial class ChatWindow : Window
             }
             block.Inlines.Add(inline);
         }
-        return block;
     }
 
     string? renderedStatus;
@@ -1548,6 +1629,9 @@ sealed partial class ChatWindow : Window
     /// The sidebar (Mac adr/0006): pinned chats, then projects with their
     /// chats, then the rest by date. A search lists every match by date.
     /// </summary>
+    /// <summary>What the sidebar shows, as of its last drawing: drawn again only when it differs.</summary>
+    string? renderedChats;
+
     void RenderChats()
     {
         rendering = true;
@@ -1560,6 +1644,22 @@ sealed partial class ChatWindow : Window
             var all = every.Where(c => query.Length == 0
                 || c.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase)
                 || c.Preview.Contains(query, StringComparison.CurrentCultureIgnoreCase)).ToList();
+            // An answer saved in the chat already on top, a search that matches the same: nothing to draw again
+            // (the list was emptied and filled after every answer and every key typed).
+            var key = string.Join("\n", [
+                // What the rows' menus and marks depend on besides the chats: Memory on (Remember This Chat), project files on.
+                query, $"{library.Unreadable}|{library.SaveFailed}|{App.Current.Memory.Settings.Enabled}|{App.Current.Settings.ProjectFiles}",
+                // Instructions too: a project's menu holds the project as it was drawn.
+                string.Join(",", projects.Select(p => $"{p.Id}:{p.Name}:{collapsed.Contains(p.Id)}:{p.Instructions.GetHashCode()}")),
+                string.Join(",", pinned), string.Join(",", map.Select(kv => $"{kv.Key}>{kv.Value}")),
+                .. all.Select(c => $"{c.Id}|{c.Title}|{c.Preview}|{Group(c.UpdatedAt)}"), every.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+            if (key == renderedChats)
+            {
+                rendering = false;
+                RenderChatsSelection();
+                return;
+            }
+            renderedChats = key;
             chats.Items.Clear();
             projectMarks.Clear();
             if (query.Length == 0)

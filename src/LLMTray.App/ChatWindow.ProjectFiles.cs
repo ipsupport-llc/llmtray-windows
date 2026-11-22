@@ -58,6 +58,11 @@ sealed partial class ChatWindow
             return;
         }
         var list = new StackPanel { Spacing = 6 };
+        // What the list shows, as of its last drawing: each file read, each request of a model, reported
+        // here, and the list (pictures read from disk again) was made again for every one of them.
+        string? rendered = null;
+        var asking = 0;
+        var waiting = false;
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
         var pinNote = Ui.Caption("");
@@ -104,6 +109,20 @@ sealed partial class ChatWindow
             var pins = index?.Pins() ?? [];
             var tokens = (index?.PinBytes() ?? []).ToDictionary(kv => kv.Key, kv => PinnedFiles.Tokens(kv.Value, ratio));
             var used = pins.Sum(p => tokens.GetValueOrDefault(p));
+            var key = string.Join("\n", [
+                $"{limit}|{string.Join(",", pins)}|{string.Join(",", tokens.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}",
+                .. docs.Select(d => $"{d.Doc}|{d.Name}|{d.Status}|{d.Pages}|{d.Bytes}|{d.Reindex}|{d.Error}"),
+                .. app.ProjectFiles.Pictures(project.Id).Select(p => $"{p.Id}|{p.Name}|{p.Width}|{p.Height}|{p.Bytes}|{app.ProjectFiles.PictureThumbnail(project.Id, p) is { } t && File.Exists(t)}"),
+                // A file's status line says "words only" until the embedder is here.
+                $"{app.ProjectFiles.Summary(project.Id)}|{index?.DiskBytes()}|{app.Embedder.IsInstalled}"]);
+            if (key == rendered) return;
+            // A removal being asked about: the list waits until it's answered (its button would go from under it).
+            if (asking > 0)
+            {
+                waiting = true;
+                return;
+            }
+            rendered = key;
             pinNote.Visibility = pins.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             pinNote.Text = L.F("Pinned: {0} files, ≈{1} of {2} tokens. Their whole text goes with every message of this project's chats, and those chats don't use web tools, MCP servers or folder changes while any file is pinned.",
                 pins.Count, used, limit) + (used > limit ? " " + L.T("They don't all fit this model now: the ones past the limit are read with search instead.") : "");
@@ -140,7 +159,39 @@ sealed partial class ChatWindow
                 });
                 var again = IconButton("\uE72C", L.T("Read Again"), d.Name, () => app.ProjectFiles.Reindex(project.Id, doc));
                 again.IsEnabled = d.Status is not (DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
-                var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => app.ProjectFiles.Remove(project.Id, doc));
+                // Asked first (Mac: the same): one click on a small icon deleted a file and its index.
+                var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => { });
+                var confirm = new Button { Content = L.T("Remove"), Style = Ui.Resource<Style>("AccentButtonStyle", null!) };
+                var ask = new Flyout
+                {
+                    Content = new StackPanel
+                    {
+                        Spacing = 8,
+                        MaxWidth = 320,
+                        Children =
+                        {
+                            new TextBlock { Text = L.T("Remove this file from the project?"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap },
+                            Ui.Caption(L.F("“{0}” and its index are deleted from the project. The file you added it from isn't touched.", d.Name)),
+                            confirm,
+                        },
+                    },
+                };
+                confirm.Click += (_, _) =>
+                {
+                    ask.Hide();
+                    app.ProjectFiles.Remove(project.Id, doc);
+                };
+                ask.Opened += (_, _) => asking++;
+                ask.Closed += (_, _) =>
+                {
+                    asking--;
+                    if (asking == 0 && waiting)
+                    {
+                        waiting = false;
+                        DispatcherQueue.TryEnqueue(Render);
+                    }
+                };
+                remove.Flyout = ask;
                 var row = new Grid { ColumnSpacing = 8 };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

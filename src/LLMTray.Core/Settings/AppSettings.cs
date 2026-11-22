@@ -14,6 +14,9 @@ public sealed record AppSettings
 
     public bool LoadLastModelOnStart { get; init; } = true;
 
+    /// <summary>Where each window was ("chat", "settings"): it opens there again.</summary>
+    public IReadOnlyDictionary<string, WindowPlace>? WindowPlaces { get; init; }
+
     /// <summary>Where the download window gets models: some networks reach only one source.</summary>
     public Downloads.DownloadSource DownloadSource { get; init; } = Downloads.DownloadSource.HuggingFace;
 

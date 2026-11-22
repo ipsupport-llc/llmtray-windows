@@ -18,8 +18,26 @@ public sealed partial class MainWindow
     {
         var app = App.Current;
         var m = app.Memory;
-        var notes = m.Read(f => $"{f.Generation}|{f.Queue.Count}|{f.Mood?.Date}");
-        return $"{m.Settings.Fingerprint}|{m.Settings.Enabled}|{m.Status}|{app.Embedder.IsInstalled}|{notes}|{app.Downloads.State.Current?.Title}";
+        // Not the reading's progress (its status and queue): that changes the "Learning" line in place.
+        var notes = m.Read(f => $"{f.Generation}|{f.Mood?.Date}");
+        var embedderComing = app.Downloads.State.Current?.Items.Any(i => i.Destination == app.EmbedderFile) == true;
+        return $"{m.Settings.Fingerprint}|{m.Settings.Enabled}|{app.Embedder.IsInstalled}|{notes}|{embedderComing}";
+    }
+
+    /// <summary>The "Learning" line: how far the reading of chats is, changed in place as it goes.</summary>
+    TextBlock? learningStatus;
+
+    static string LearningStatus()
+    {
+        var memory = App.Current.Memory;
+        var queued = memory.Read(f => f.Queue.Count);
+        return memory.Status.Length > 0 ? L.T(memory.Status) : queued > 0 ? L.F("{0} parts of chats to read.", queued) : L.T("Up to date.");
+    }
+
+    /// <summary>The reading went on a step: its line follows, the page stays.</summary>
+    void FollowLearning()
+    {
+        if (learningStatus is not null && LearningStatus() is var text && learningStatus.Text != text) learningStatus.Text = text;
     }
 
     string? renderedMemoryKey;
@@ -30,6 +48,7 @@ public sealed partial class MainWindow
         var memory = app.Memory;
         var settings = memory.Settings;
         renderedMemoryKey = MemoryKey();
+        learningStatus = null;
 
         yield return Ui.Section(L.T("Memory"));
         var rows = new List<UIElement?>
@@ -53,10 +72,10 @@ public sealed partial class MainWindow
                         : L.T("Learning needs bge-m3 (605 MB, MIT license), to tell which notes mean the same. It runs on the CPU."),
                     downloading ? null : Ui.Button(L.T("Download"), app.DownloadEmbedder, accent: true)));
             }
-            var queued = memory.Read(f => f.Queue.Count);
-            var status = memory.Status.Length > 0 ? L.T(memory.Status) : queued > 0 ? L.F("{0} parts of chats to read.", queued) : L.T("Up to date.");
             // "Learning" (the Mac's title for it): beside "Read chats" below, "Reading chats" read as the same row twice.
-            rows.Add(Ui.Row(L.T("Learning"), status, Ui.Button(L.T("Learn from Past Chats Now"), () => _ = LearnFromPastAsync())));
+            var learning = Ui.Row(L.T("Learning"), LearningStatus(), Ui.Button(L.T("Learn from Past Chats Now"), () => _ = LearnFromPastAsync()));
+            learningStatus = ((StackPanel)learning.Children[0]).Children.OfType<TextBlock>().Skip(1).FirstOrDefault();
+            rows.Add(learning);
             // When a chat is read (Mac "Read chats"): seconds after each answer, or once it has been quiet a while.
             var when = new ComboBox { MinWidth = 220 };
             when.Items.Add(L.T("Right after each answer"));

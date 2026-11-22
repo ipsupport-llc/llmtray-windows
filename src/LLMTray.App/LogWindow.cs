@@ -35,8 +35,16 @@ sealed class LogWindow : Window
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly HashSet<string> expanded = [];
     IReadOnlyList<LogEntry> entries = [];
+    /// <summary>The rows shown, kept: a refresh adds the new ones and changes the last, and the rest stay where they are.</summary>
+    readonly System.Collections.ObjectModel.ObservableCollection<UIElement> rows = [];
+    /// <summary>What each shown row was drawn from (its key), in the same order.</summary>
+    readonly List<string> rowKeys = [];
     long lastLength = -1;
     DateTime lastWrite;
+    /// <summary>Clear Log: what the file held then isn't shown (the file itself is the server's, still being written).</summary>
+    long clearedAt;
+    /// <summary>The log file Clear Log was for (the host counts them): a new run's file starts over, whatever its length.</summary>
+    int clearedFile;
 
     public LogWindow()
     {
@@ -48,6 +56,7 @@ sealed class LogWindow : Window
         scopes.Items.Add(requests);
         scopes.Items.Add(problems);
         scopes.SelectedItem = all;
+        list.ItemsSource = rows;
         scopes.SelectionChanged += (_, _) => Render();
         search.TextChanged += (_, _) => Render();
         ToolTipService.SetToolTip(follow, L.T("Follow: keep the newest in view"));
@@ -55,9 +64,15 @@ sealed class LogWindow : Window
 
         var more = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 } };
         ToolTipService.SetToolTip(more, L.T("Copy, save or open"));
+        // Glyphs say nothing to a screen reader: their tooltips are their names.
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(more, L.T("Copy, save or open"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(follow, L.T("Follow: keep the newest in view"));
         var menu = new MenuFlyout();
         menu.Items.Add(Item(L.T("Copy shown"), () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
-        menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll())));
+        menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll() ?? "")));
+        menu.Items.Add(Item(L.T("Save Log…"), () => _ = SaveAsync()));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(Item(L.T("Clear Log"), ClearLog));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item(L.T("Open logs folder"), () => Ui.OpenFolder(Path.Combine(App.Current.DataFolder, "logs"))));
         menu.Items.Add(Item(L.T("Open the previous run's log"), () => Ui.Open(Path.Combine(App.Current.DataFolder, "logs", "llama-server.previous.log"))));
@@ -142,24 +157,44 @@ sealed class LogWindow : Window
         var info = new FileInfo(file);
         if (!info.Exists)
         {
+            clearedAt = 0;
             entries = [];
             lastLength = -1;
             Render();
             return;
         }
         if (info.Length == lastLength && info.LastWriteTimeUtc == lastWrite) return;
+        // A new run's file starts over: what was cleared was the old one's.
+        if (clearedAt > 0 && (info.Length < clearedAt || App.Current.Host.LogGeneration != clearedFile)) clearedAt = 0;
         lastLength = info.Length;
         lastWrite = info.LastWriteTimeUtc;
-        var parsed = LlamaLog.Parse(ReadTail().Split('\n'));
+        var parsed = LlamaLog.Parse(ReadTail(clearedAt).Split('\n'));
         entries = parsed.Count > MaxEntries ? parsed.Skip(parsed.Count - MaxEntries).ToList() : parsed;
         Render();
     }
 
-    static string ReadAll()
+    /// <summary>The whole log; null when it can't be read (not the same as an empty one).</summary>
+    static string? ReadAll()
     {
         try
         {
             using var stream = new FileStream(App.Current.Host.LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The log's last few megabytes, from <paramref name="from"/> on at the earliest.</summary>
+    static string ReadTail(long from)
+    {
+        try
+        {
+            using var stream = new FileStream(App.Current.Host.LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            stream.Seek(Math.Min(stream.Length, Math.Max(from, stream.Length - TailBytes)), SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
             return reader.ReadToEnd();
         }
@@ -169,18 +204,49 @@ sealed class LogWindow : Window
         }
     }
 
-    static string ReadTail()
+    /// <summary>Clear Log (Mac): the list starts empty from here; the file, which the server writes, is left alone.</summary>
+    void ClearLog()
     {
         try
         {
-            using var stream = new FileStream(App.Current.Host.LogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > TailBytes) stream.Seek(-TailBytes, SeekOrigin.End);
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+            var info = new FileInfo(App.Current.Host.LogFile);
+            clearedFile = App.Current.Host.LogGeneration;
+            clearedAt = info.Length;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return "";
+            return;
+        }
+        expanded.Clear();
+        lastLength = -1;
+        Refresh();
+    }
+
+    /// <summary>Save Log… (Mac): the whole log, into a file the user picks.</summary>
+    /// <summary>Why the last Save Log… failed, shown in the status bar until the next one.</summary>
+    string? saveError;
+
+    async Task SaveAsync()
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = $"LLMTray-server-{DateTime.Now:yyyy-MM-ddTHH-mm-ss}" };
+            picker.FileTypeChoices.Add(L.T("Log"), [".log"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            if (await picker.PickSaveFileAsync() is not { } file) return;
+            // Trying again: a failure said before goes (not when the picker is only cancelled).
+            saveError = null;
+            // A log that can't be read isn't saved as an empty file over what's there.
+            if (ReadAll() is not { } text) throw new IOException("the server log can't be read");
+            await File.WriteAllTextAsync(file.Path, text);
+            // A failure said before goes.
+            Render();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+        {
+            saveError = L.T("The log couldn't be saved");
+            shown.Text = saveError;
+            shown.Foreground = Ui.Red;
         }
     }
 
@@ -194,23 +260,69 @@ sealed class LogWindow : Window
             && e.Matches(query));
     }
 
+    /// <summary>
+    /// The rows brought in line with the entries shown, changing as little as
+    /// it can: rows that scrolled out of the log's tail go from the top, the
+    /// ones that are the same stay, the rest are made from where they differ.
+    /// The whole list was made again every second the log grew, so rows
+    /// blinked and a place scrolled back to was lost.
+    /// </summary>
     void Render()
     {
         var visible = ShownEntries().ToList();
         var problemCount = entries.Count(e => e.IsProblem);
-        problems.Text = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
-        var rows = new List<UIElement>(visible.Count);
-        foreach (var entry in visible) rows.Add(Row(entry));
-        if (rows.Count == 0)
+        var problemsText = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
+        if (problems.Text != problemsText) problems.Text = problemsText;
+        var keys = visible.Select(RowKey).ToList();
+        if (keys.Count == 0)
         {
-            rows.Add(new TextBlock
-            {
-                Text = entries.Count == 0 ? L.T("No server log yet. It starts when a model loads.") : L.T("Nothing matches."),
-                Foreground = Ui.Secondary,
-                Margin = new Thickness(12),
-            });
+            keys.Add(entries.Count == 0 ? "empty" : "no match");
         }
-        list.ItemsSource = rows;
+        // The tail of the log moved on: what's gone from its top goes from the list's top. Where the
+        // new list starts among the rows is where the most of it lines up (two alike entries can't fool it).
+        var start = -1;
+        var longest = 0;
+        // Bounded: a log of one line repeated would otherwise be compared with itself over and over.
+        var tries = 0;
+        for (var s = 0; s < rowKeys.Count && keys.Count > 0 && tries < 32; s++)
+        {
+            if (rowKeys[s] != keys[0]) continue;
+            tries++;
+            var n = 0;
+            while (s + n < rowKeys.Count && n < keys.Count && rowKeys[s + n] == keys[n]) n++;
+            if (n > longest)
+            {
+                longest = n;
+                start = s;
+            }
+            // Lined up to the end of the rows, or the whole new list: nothing can line up better.
+            if (s + n == rowKeys.Count || n == keys.Count) break;
+        }
+        if (start > 0)
+        {
+            for (var i = 0; i < start; i++) rows.RemoveAt(0);
+            rowKeys.RemoveRange(0, start);
+        }
+        var same = 0;
+        while (same < keys.Count && same < rowKeys.Count && keys[same] == rowKeys[same]) same++;
+        while (rows.Count > same)
+        {
+            rows.RemoveAt(rows.Count - 1);
+            rowKeys.RemoveAt(rowKeys.Count - 1);
+        }
+        var added = keys.Count > same;
+        for (var i = same; i < keys.Count; i++)
+        {
+            rows.Add(visible.Count == 0
+                ? new TextBlock
+                {
+                    Text = entries.Count == 0 ? L.T("No server log yet. It starts when a model loads.") : L.T("Nothing matches."),
+                    Foreground = Ui.Secondary,
+                    Margin = new Thickness(12),
+                }
+                : Row(visible[i]));
+            rowKeys.Add(keys[i]);
+        }
 
         var errors = entries.Count(e => e.IsError);
         var warnings = problemCount - errors;
@@ -219,9 +331,20 @@ sealed class LogWindow : Window
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = L.F("Requests: {0}", requestCount) + "   ", Foreground = Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"✕ {errors}   ", Foreground = errors > 0 ? Ui.Red : Ui.Secondary });
         counts.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"⚠ {warnings}", Foreground = warnings > 0 ? Ui.Orange : Ui.Secondary });
-        shown.Text = visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "";
-        shown.Foreground = Ui.Secondary;
-        if (follow.IsChecked == true) ScrollToEnd();
+        // A failed save stays said until the next try; then what's shown.
+        shown.Text = saveError ?? (visible.Count != entries.Count ? L.F("{0} of {1} shown", visible.Count, entries.Count) : "");
+        shown.Foreground = saveError is null ? Ui.Secondary : Ui.Red;
+        if (added && follow.IsChecked == true) ScrollToEnd();
+    }
+
+    /// <summary>What a row shows of its entry: a request's summary grows as it runs; an opened one shows its lines.</summary>
+    string RowKey(LogEntry entry)
+    {
+        // A standalone line has no lines of its own: its head is all of it.
+        var first = entry.Lines.Count > 0 ? entry.Lines[0] : entry.Head;
+        var last = entry.Lines.Count > 0 ? entry.Lines[^1] : entry.Head;
+        var id = entry.Kind == LogKind.Request ? first.Time + "|" + first.Message : "";
+        return $"{entry.Kind}|{entry.Head.Level}|{entry.Head.Time}|{entry.Head.Message}|{entry.Lines.Count}|{last.Time}|{last.Message}|{entry.Metrics}|{entry.IsProblem}|{(id.Length > 0 && expanded.Contains(id))}";
     }
 
     void RenderStatus()
@@ -233,7 +356,7 @@ sealed class LogWindow : Window
 
     void ScrollToEnd()
     {
-        if (list.ItemsSource is List<UIElement> { Count: > 0 } rows) list.ScrollIntoView(rows[^1]);
+        if (rows.Count > 0) list.ScrollIntoView(rows[^1]);
     }
 
     /// <summary>One entry: time, a level mark, the message, a request's numbers; its lines when opened.</summary>

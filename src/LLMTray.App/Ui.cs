@@ -272,6 +272,75 @@ static class Ui
         }
     }
 
+    /// <summary>
+    /// Opens a window where it was last (Mac: windows keep their frame): its
+    /// default size and place first (<paramref name="defaults"/>, which also
+    /// sets its minimum), then the saved place if it's on a screen there is now.
+    /// </summary>
+    public static void Place(Window window, string name, Action defaults)
+    {
+        defaults();
+        var shape = Shapes.GetOrCreateValue(window);
+        void Note(Microsoft.UI.Windowing.AppWindow w)
+        {
+            var state = (w.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+            // Its size and place while restored (what a maximized window goes back to), and whether it was
+            // maximized before a minimize.
+            if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Restored)
+            {
+                shape.Normal = new Windows.Graphics.RectInt32(w.Position.X, w.Position.Y, w.Size.Width, w.Size.Height);
+                shape.Maximized = false;
+            }
+            else if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized)
+            {
+                shape.Maximized = true;
+            }
+        }
+        Note(window.AppWindow);
+        window.AppWindow.Changed += (sender, e) =>
+        {
+            if (e.DidSizeChange || e.DidPositionChange || e.DidPresenterChange) Note(sender);
+        };
+        if (App.Current.Settings.WindowPlaces?.GetValueOrDefault(name) is not { } saved) return;
+        var areas = Microsoft.UI.Windowing.DisplayArea.FindAll()
+            .Select(d => new LLMTray.Core.Settings.WindowPlace.Area(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height)).ToList();
+        var presenter = window.AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter;
+        // A small floor, not the window's minimum: that is in this screen's pixels, and the place may be on another scale.
+        if (saved.On(areas, 320, 240) is not { } place) return;
+        window.AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(place.X, place.Y, place.Width, place.Height));
+        Note(window.AppWindow);
+        if (place.Maximized) presenter?.Maximize();
+    }
+
+    /// <summary>A placed window's bounds while restored, and whether it was maximized (before a minimize too).</summary>
+    sealed class Shape
+    {
+        public Windows.Graphics.RectInt32? Normal;
+        public bool Maximized;
+    }
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, Shape> Shapes = [];
+
+    /// <summary>Notes where a window is, for <see cref="Place"/> next time (as it closes, or as the app quits).</summary>
+    public static void RememberPlace(Window window, string name)
+    {
+        var app = App.Current;
+        var state = (window.AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+        Shapes.TryGetValue(window, out var shape);
+        // Minimized, its bounds are nowhere on the screen: what it was before is kept.
+        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && shape?.Normal is null) return;
+        var maximized = state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized
+            || (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && shape?.Maximized == true);
+        var places = new Dictionary<string, LLMTray.Core.Settings.WindowPlace>(app.Settings.WindowPlaces ?? new Dictionary<string, LLMTray.Core.Settings.WindowPlace>());
+        // Maximized, its bounds are the screen's: the size it had before it was maximized is what's kept.
+        var bounds = (maximized || state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized) && shape?.Normal is { } normal ? normal
+            : new Windows.Graphics.RectInt32(window.AppWindow.Position.X, window.AppWindow.Position.Y, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
+        var place = new LLMTray.Core.Settings.WindowPlace(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized);
+        if (places.GetValueOrDefault(name) == place) return;
+        places[name] = place;
+        app.UpdateSettings(app.Settings with { WindowPlaces = places });
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern uint GetDpiForWindow(IntPtr hwnd);
 }

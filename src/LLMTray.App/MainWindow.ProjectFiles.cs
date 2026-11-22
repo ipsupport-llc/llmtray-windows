@@ -26,8 +26,8 @@ public sealed partial class MainWindow
             L.T("The attach button can capture a window or a screen you pick in Windows' own picker: one picture, taken when you click, never again later. A model that doesn't see pictures gets the text read from it on this PC. It can also attach the browser tab you were on: its title, address and text, read through Windows' accessibility interface. A chat that showed something doesn't use web tools, MCP servers or folder changes from then on."),
             Ui.Toggle(app.Settings.ShowWindows, on =>
             {
+                // The switch already shows it, and no row comes or goes: nothing to draw again.
                 app.UpdateSettings(app.Settings with { ShowWindows = on });
-                RenderPage();
             }, L.T("Show the model a window, the screen or a browser tab"))));
     }
 
@@ -41,7 +41,6 @@ public sealed partial class MainWindow
             Ui.Toggle(app.Settings.Documents, on =>
             {
                 app.UpdateSettings(app.Settings with { Documents = on });
-                RenderPage();
             }, L.T("Make documents"))));
     }
 

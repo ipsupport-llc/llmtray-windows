@@ -16,20 +16,66 @@ public sealed partial class MainWindow
 {
     UsagePeriod usagePeriod = UsagePeriod.Today;
     UsageGrouping usageGrouping = UsageGrouping.Client;
+    /// <summary>The Usage card's numbers (tiles and table): filled again on their own, not with the whole page.</summary>
+    StackPanel? usageBody;
+    /// <summary>Counted requests come in bursts (an agent's calls): the numbers follow at most twice a second.</summary>
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? usageTimer;
+
+    /// <summary>A request was counted: the Usage card's numbers follow, nothing else on the page.</summary>
+    void OnRequestCounted()
+    {
+        if (page != "server" || !App.Current.Settings.KeepRequestStatistics || usageBody is null) return;
+        if (usageTimer is null)
+        {
+            usageTimer = DispatcherQueue.CreateTimer();
+            usageTimer.Interval = TimeSpan.FromMilliseconds(500);
+            usageTimer.IsRepeating = false;
+            usageTimer.Tick += (_, _) => FillUsage();
+        }
+        if (!usageTimer.IsRunning) usageTimer.Start();
+    }
+
+    /// <summary>The tiles and the table for the period and grouping picked, in the card made once.</summary>
+    void FillUsage()
+    {
+        if (usageBody is null) return;
+        var lines = App.Current.RequestStatistics.Read(l => l.Lines(usagePeriod, usageGrouping, DateTime.Now));
+        usageBody.Children.Clear();
+        if (lines.Count == 0)
+        {
+            usageBody.Children.Add(Ui.Row(usagePeriod == UsagePeriod.Today ? L.T("No requests yet today.") : L.T("No requests yet in this period."), null, null));
+            return;
+        }
+        usageBody.Children.Add(Tiles(UsageLedger.Total(lines)));
+        usageBody.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle { Height = 1, Fill = Ui.Stroke, Margin = new Thickness(16, 0, 16, 0) });
+        // A narrow window scrolls the table sideways rather than cut its last columns.
+        usageBody.Children.Add(new ScrollViewer
+        {
+            Content = Table(lines),
+            HorizontalScrollMode = ScrollMode.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollMode = ScrollMode.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        });
+    }
 
     IEnumerable<UIElement> StatisticsPart()
     {
         var app = App.Current;
+        usageBody = null;
         yield return Ui.Section(L.T("Usage"));
         if (!app.Settings.KeepRequestStatistics)
         {
+            var turnOn = Ui.Button(L.T("Turn On"), () =>
+            {
+                app.UpdateSettings(app.Settings with { KeepRequestStatistics = true });
+                RenderPage();
+            });
+            // What was kept before they were turned off can still be cleared (Mac: the same).
+            var kept = app.RequestStatistics.Read(l => l.Rows.Count) > 0;
             yield return Ui.Card(Ui.Row(L.T("Usage statistics are off"),
                 L.T("Count requests and tokens per model, client and day, and how fast they ran. Kept only on this PC, never sent anywhere."),
-                Ui.Button(L.T("Turn On"), () =>
-                {
-                    app.UpdateSettings(app.Settings with { KeepRequestStatistics = true });
-                    RenderPage();
-                })));
+                kept ? Ui.Horizontal(Ui.Button(L.T("Clear Statistics…"), () => _ = ClearStatisticsAsync()), turnOn) : turnOn));
             yield break;
         }
 
@@ -37,9 +83,6 @@ public sealed partial class MainWindow
         var grouping = Picker([(L.T("Model"), UsageGrouping.Model), (L.T("Client"), UsageGrouping.Client), (L.T("Day"), UsageGrouping.Day)], usageGrouping, v => usageGrouping = v);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(period, L.T("Period"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(grouping, L.T("By"));
-        var lines = app.RequestStatistics.Read(l => l.Lines(usagePeriod, usageGrouping, DateTime.Now));
-        var total = UsageLedger.Total(lines);
-
         var rows = new List<UIElement?>
         {
             Ui.ButtonRow([period, Centered(Ui.Caption(L.T("By"))), grouping],
@@ -50,23 +93,9 @@ public sealed partial class MainWindow
                      RenderPage();
                  })]),
         };
-        if (lines.Count == 0)
-        {
-            rows.Add(Ui.Row(usagePeriod == UsagePeriod.Today ? L.T("No requests yet today.") : L.T("No requests yet in this period."), null, null));
-        }
-        else
-        {
-            rows.Add(Tiles(total));
-            // A narrow window scrolls the table sideways rather than cut its last columns.
-            rows.Add(new ScrollViewer
-            {
-                Content = Table(lines),
-                HorizontalScrollMode = ScrollMode.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollMode = ScrollMode.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            });
-        }
+        usageBody = new StackPanel();
+        FillUsage();
+        rows.Add(usageBody);
         yield return Ui.Card(rows.ToArray());
         yield return Ui.Caption(L.T("Kept only on this PC. Clients are named by LLMTray's proxy from their User-Agent; a program that doesn't name itself shows as the API it calls, with its language, like OpenAI API (Go)."));
     }
@@ -80,8 +109,8 @@ public sealed partial class MainWindow
         {
             if (box.SelectedIndex < 0) return;
             picked(items[box.SelectedIndex].Value);
-            // Not inside the box's own event: the page is drawn anew.
-            DispatcherQueue.TryEnqueue(RenderPage);
+            // Only the numbers change: the lists, and the focus in them, stay.
+            FillUsage();
         };
         return box;
     }
