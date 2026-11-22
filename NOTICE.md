@@ -41,7 +41,7 @@ is in the About window and beside the runtime (`LICENSE-LLVM-OpenMP`).
 
 ## Microsoft Visual C++ runtime
 
-`vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll`, beside
+`vcruntime140.dll`, `msvcp140.dll` and, on x64, `vcruntime140_1.dll`, beside
 `llama-server` so it starts on a PC without the Visual C++ Redistributable.
 Copyright (c) Microsoft Corporation. Redistributed as Distributable Code
 under the Microsoft Visual Studio license terms

@@ -492,8 +492,9 @@ public sealed class ModelHost : IAsyncDisposable
         {
             missing = PeImports.Missing(Path.GetDirectoryName(backend.ServerPath)!, Environment.SystemDirectory is { Length: > 0 } system ? system : null, vulkanIsThere: false);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
         {
+            // Nothing more can be said: the message stays general, and the next attempt still runs.
             missing = [];
         }
         var which = missing.Count > 0 ? string.Join(", ", missing) : "a DLL it needs";

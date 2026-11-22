@@ -34,7 +34,7 @@ var groups = new List<LicenseGroup>
             Need(Path.Combine(llamaLicenses, "LICENSE-LLVM-OpenMP"))),
         new LicenseEntry("Microsoft Visual C++ runtime", null, "Microsoft Visual Studio license (distributable code)",
             "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files",
-            "vcruntime140.dll, vcruntime140_1.dll and msvcp140.dll, beside llama-server so it starts without the Visual C++ "
+            "vcruntime140.dll, msvcp140.dll and, on x64, vcruntime140_1.dll, beside llama-server so it starts without the Visual C++ "
             + "Redistributable installed. Copyright (c) Microsoft Corporation. Redistributed as Distributable Code under the "
             + "Microsoft Visual Studio license terms (https://visualstudio.microsoft.com/license-terms/), as app-local deployment allows."),
     ]),

@@ -45,7 +45,9 @@ foreach ($backend in $pins.assets.$Rid.PSObject.Properties) {
 $arch = @{ 'win-x64' = 'x64'; 'win-arm64' = 'arm64' }[$Rid]
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found: Visual Studio is needed for its Visual C++ runtime" }
-$vs = & $vswhere -latest -products * -property installationPath
+# The newest installation that has the C++ redistributable, not merely the newest one.
+$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest -property installationPath
+if (-not $vs) { throw "no Visual Studio installation with the Visual C++ redistributable (vswhere found none)" }
 $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
     Sort-Object { [version]$_.Name } -Descending |
@@ -54,9 +56,11 @@ $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory -ErrorAction Si
 if (-not $crt) { throw "no Visual C++ runtime for $arch under $vs" }
 Write-Host "Visual C++ runtime: $($crt.FullName)"
 foreach ($dir in Get-ChildItem $target -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'llama-server.exe') }) {
+    # vcruntime140_1.dll exists for x64 only (the ARM64 builds don't import it); the other two always.
     foreach ($dll in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
         $file = Join-Path $crt.FullName $dll
         if (Test-Path $file) { Copy-Item $file $dir.FullName }
+        elseif ($dll -ne 'vcruntime140_1.dll') { throw "$dll is not in $($crt.FullName)" }
     }
 }
 
