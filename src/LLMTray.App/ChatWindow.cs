@@ -91,7 +91,8 @@ sealed partial class ChatWindow : Window
         SetUpVoice();
         // Attach Current Tab (adr/0022): the window the user was in before LLMTray, noted as it happens.
         Interop.BrowserTab.TrackForeground();
-        Size(1100, 760);
+        // Where it was last, or 1100 × 760 in the middle of the screen.
+        Ui.Place(this, "chat", () => Size(1100, 760));
 
         search.TextChanged += (_, _) => RenderChats();
         chats.SelectionChanged += (_, _) =>
@@ -181,6 +182,7 @@ sealed partial class ChatWindow : Window
         {
             if (App.Current.Quitting) return;
             args.Cancel = true;
+            Ui.RememberPlace(this, "chat");
             if (App.Current.HasTrayIcon) sender.Hide();
             else _ = App.Current.QuitAsync();
         };

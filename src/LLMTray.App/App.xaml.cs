@@ -792,7 +792,7 @@ public partial class App : Application
         }
         help.Add(new(L.T("Set Up LLMTray…"), ShowSetup));
         help.Add(TrayMenuItem.Separator);
-        help.Add(new(L.T("Report a Bug…"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/issues/new")));
+        help.Add(new(L.T("Report a Bug…"), ReportBug));
         help.Add(new(L.T("LLMTray on GitHub"), () => Ui.Open("https://github.com/ipsupport-llc/llmtray-windows")));
         items.Add(new(L.T("Help"), Items: help));
         items.Add(new(L.T("About LLMTray"), ShowAbout));
@@ -801,9 +801,31 @@ public partial class App : Application
         return items;
     }
 
+    /// <summary>
+    /// A new issue on GitHub with what a bug report needs about this copy
+    /// (Mac: the same): the version, how it's installed, Windows, the
+    /// processor, the model running. Nothing about the user or their chats.
+    /// </summary>
+    void ReportBug()
+    {
+        var os = Environment.OSVersion.Version;
+        var host = Host.State;
+        var body = string.Join("\n", [
+            "**What happened**", "", "", "**What you expected**", "", "",
+            "---",
+            $"LLMTray {Updater.Current?.DisplayVersion ?? "dev"} ({Updater.Kind}, {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})",
+            $"Windows {os.Major}.{os.Minor}.{os.Build}",
+            $"Model: {(host.Model is { } m ? $"{m.Name} ({host.Status}, {host.Backend ?? "-"})" : "none loaded")}",
+        ]);
+        Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/issues/new?body=" + Uri.EscapeDataString(body));
+    }
+
     public async Task QuitAsync()
     {
         if (Quitting) return;
+        // The windows open where they are now next time (those already closed noted it then).
+        if (chatWindow is { } chat && chat.AppWindow.IsVisible) Ui.RememberPlace(chat, "chat");
+        if (window is { } settings && settings.AppWindow.IsVisible) Ui.RememberPlace(settings, "settings");
         Quitting = true;
         try
         {

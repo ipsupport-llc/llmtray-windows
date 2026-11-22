@@ -150,7 +150,29 @@ sealed partial class ChatWindow
                 });
                 var again = IconButton("\uE72C", L.T("Read Again"), d.Name, () => app.ProjectFiles.Reindex(project.Id, doc));
                 again.IsEnabled = d.Status is not (DocumentStatus.Copying or DocumentStatus.Staged or DocumentStatus.Extracting) && !d.Reindex;
-                var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => app.ProjectFiles.Remove(project.Id, doc));
+                // Asked first (Mac: the same): one click on a small icon deleted a file and its index.
+                var remove = IconButton("\uE74D", L.T("Remove"), d.Name, () => { });
+                var confirm = new Button { Content = L.T("Remove"), Style = Ui.Resource<Style>("AccentButtonStyle", null!) };
+                var ask = new Flyout
+                {
+                    Content = new StackPanel
+                    {
+                        Spacing = 8,
+                        MaxWidth = 320,
+                        Children =
+                        {
+                            new TextBlock { Text = L.T("Remove this file from the project?"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap },
+                            Ui.Caption(L.F("“{0}” and its index are deleted from the project. The file you added it from isn't touched.", d.Name)),
+                            confirm,
+                        },
+                    },
+                };
+                confirm.Click += (_, _) =>
+                {
+                    ask.Hide();
+                    app.ProjectFiles.Remove(project.Id, doc);
+                };
+                remove.Flyout = ask;
                 var row = new Grid { ColumnSpacing = 8 };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

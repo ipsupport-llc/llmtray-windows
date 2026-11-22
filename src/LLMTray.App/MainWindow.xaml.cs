@@ -52,12 +52,13 @@ public sealed partial class MainWindow : Window
         foreach (var item in Tabs.MenuItems.OfType<NavigationViewItem>()) item.Content = L.T((string)item.Content);
         Title = L.T("LLMTray Settings");
         NoticeHost.Content = new Notices(updates: false).Panel;
-        FitToScreen();
+        Ui.Place(this, "settings", FitToScreen);
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         // Closing the window keeps LLMTray running in the notification area.
         AppWindow.Closing += (sender, args) =>
         {
             if (App.Current.Quitting) return;
+            Ui.RememberPlace(this, "settings");
             // Settings closes to the chat (or the tray), where the app is; with no tray icon
             // and no chat on screen, the chat comes back rather than leave nothing.
             args.Cancel = true;
