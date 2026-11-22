@@ -43,26 +43,8 @@ sealed class LogWindow : Window
     DateTime lastWrite;
     /// <summary>Clear Log: what the file held then isn't shown (the file itself is the server's, still being written).</summary>
     long clearedAt;
-    /// <summary>
-    /// The file Clear Log was for, by its first bytes: a new run's file starts over, whatever its length
-    /// (not by its creation time, which Windows may carry over to a file made again under the same name).
-    /// </summary>
-    string? clearedFile;
-
-    static string? Start(string path)
-    {
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var head = new byte[256];
-            var read = stream.Read(head, 0, head.Length);
-            return Convert.ToHexString(head, 0, read);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
+    /// <summary>The log file Clear Log was for (the host counts them): a new run's file starts over, whatever its length.</summary>
+    int clearedFile;
 
     public LogWindow()
     {
@@ -183,7 +165,7 @@ sealed class LogWindow : Window
         }
         if (info.Length == lastLength && info.LastWriteTimeUtc == lastWrite) return;
         // A new run's file starts over: what was cleared was the old one's.
-        if (clearedAt > 0 && (info.Length < clearedAt || Start(file) != clearedFile)) clearedAt = 0;
+        if (clearedAt > 0 && (info.Length < clearedAt || App.Current.Host.LogGeneration != clearedFile)) clearedAt = 0;
         lastLength = info.Length;
         lastWrite = info.LastWriteTimeUtc;
         var parsed = LlamaLog.Parse(ReadTail(clearedAt).Split('\n'));
@@ -228,8 +210,8 @@ sealed class LogWindow : Window
         try
         {
             var info = new FileInfo(App.Current.Host.LogFile);
+            clearedFile = App.Current.Host.LogGeneration;
             clearedAt = info.Length;
-            clearedFile = Start(info.FullName);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -247,6 +229,7 @@ sealed class LogWindow : Window
     async Task SaveAsync()
     {
         saveError = null;
+        Render();
         try
         {
             var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = $"LLMTray-server-{DateTime.Now:yyyy-MM-ddTHH-mm-ss}" };
@@ -256,6 +239,8 @@ sealed class LogWindow : Window
             // A log that can't be read isn't saved as an empty file over what's there.
             if (ReadAll() is not { } text) throw new IOException("the server log can't be read");
             await File.WriteAllTextAsync(file.Path, text);
+            // A failure said before goes.
+            Render();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
         {
@@ -288,20 +273,27 @@ sealed class LogWindow : Window
         var problemCount = entries.Count(e => e.IsProblem);
         var problemsText = problemCount > 0 ? L.F("Problems: {0}", problemCount) : L.T("Problems");
         if (problems.Text != problemsText) problems.Text = problemsText;
-        // Two entries alike (the same line twice) are told apart by their turn among their kind.
-        var seenKeys = new Dictionary<string, int>();
-        var keys = visible.Select(e =>
-        {
-            var key = RowKey(e);
-            var n = seenKeys[key] = seenKeys.GetValueOrDefault(key) + 1;
-            return $"{key}#{n}";
-        }).ToList();
+        var keys = visible.Select(RowKey).ToList();
         if (keys.Count == 0)
         {
             keys.Add(entries.Count == 0 ? "empty" : "no match");
         }
-        // The tail of the log moved on: what's gone from its top goes from the list's top.
-        var start = keys.Count > 0 && rowKeys.Count > 0 ? rowKeys.IndexOf(keys[0]) : -1;
+        // The tail of the log moved on: what's gone from its top goes from the list's top. Where the
+        // new list starts among the rows is where the most of it lines up (two alike entries can't fool it).
+        var start = -1;
+        var longest = 0;
+        for (var s = 0; s < rowKeys.Count && keys.Count > 0; s++)
+        {
+            if (rowKeys[s] != keys[0]) continue;
+            var n = 0;
+            while (s + n < rowKeys.Count && n < keys.Count && rowKeys[s + n] == keys[n]) n++;
+            if (n > longest)
+            {
+                longest = n;
+                start = s;
+            }
+            if (s + n == rowKeys.Count) break;
+        }
         if (start > 0)
         {
             for (var i = 0; i < start; i++) rows.RemoveAt(0);

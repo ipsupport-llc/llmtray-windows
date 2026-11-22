@@ -280,13 +280,26 @@ static class Ui
     public static void Place(Window window, string name, Action defaults)
     {
         defaults();
-        // Its size and place while it isn't maximized, as they change: what a maximized window goes back to.
+        var shape = Shapes.GetOrCreateValue(window);
+        void Note(Microsoft.UI.Windowing.AppWindow w)
+        {
+            var state = (w.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+            // Its size and place while restored (what a maximized window goes back to), and whether it was
+            // maximized before a minimize.
+            if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Restored)
+            {
+                shape.Normal = new Windows.Graphics.RectInt32(w.Position.X, w.Position.Y, w.Size.Width, w.Size.Height);
+                shape.Maximized = false;
+            }
+            else if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized)
+            {
+                shape.Maximized = true;
+            }
+        }
+        Note(window.AppWindow);
         window.AppWindow.Changed += (sender, e) =>
         {
-            if ((e.DidSizeChange || e.DidPositionChange) && sender.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Restored })
-            {
-                NormalBounds.AddOrUpdate(window, new Windows.Graphics.RectInt32(sender.Position.X, sender.Position.Y, sender.Size.Width, sender.Size.Height));
-            }
+            if (e.DidSizeChange || e.DidPositionChange || e.DidPresenterChange) Note(sender);
         };
         if (App.Current.Settings.WindowPlaces?.GetValueOrDefault(name) is not { } saved) return;
         var areas = Microsoft.UI.Windowing.DisplayArea.FindAll()
@@ -295,39 +308,32 @@ static class Ui
         // A small floor, not the window's minimum: that is in this screen's pixels, and the place may be on another scale.
         if (saved.On(areas, 320, 240) is not { } place) return;
         window.AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(place.X, place.Y, place.Width, place.Height));
+        Note(window.AppWindow);
         if (place.Maximized) presenter?.Maximize();
     }
 
-    /// <summary>Each placed window's bounds while not maximized.</summary>
-    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, object> NormalBoundsBox = [];
-
-    static class NormalBounds
+    /// <summary>A placed window's bounds while restored, and whether it was maximized (before a minimize too).</summary>
+    sealed class Shape
     {
-        public static void AddOrUpdate(Window window, Windows.Graphics.RectInt32 bounds) => NormalBoundsBox.AddOrUpdate(window, bounds);
-
-        public static bool TryGetValue(Window window, out Windows.Graphics.RectInt32 bounds)
-        {
-            if (NormalBoundsBox.TryGetValue(window, out var box) && box is Windows.Graphics.RectInt32 b)
-            {
-                bounds = b;
-                return true;
-            }
-            bounds = default;
-            return false;
-        }
+        public Windows.Graphics.RectInt32? Normal;
+        public bool Maximized;
     }
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, Shape> Shapes = [];
 
     /// <summary>Notes where a window is, for <see cref="Place"/> next time (as it closes, or as the app quits).</summary>
     public static void RememberPlace(Window window, string name)
     {
         var app = App.Current;
         var state = (window.AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
-        // Minimized, its bounds are nowhere on the screen: the place it had before is kept.
-        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && !NormalBounds.TryGetValue(window, out _)) return;
-        var maximized = state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized;
+        Shapes.TryGetValue(window, out var shape);
+        // Minimized, its bounds are nowhere on the screen: what it was before is kept.
+        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && shape?.Normal is null) return;
+        var maximized = state == Microsoft.UI.Windowing.OverlappedPresenterState.Maximized
+            || (state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized && shape?.Maximized == true);
         var places = new Dictionary<string, LLMTray.Core.Settings.WindowPlace>(app.Settings.WindowPlaces ?? new Dictionary<string, LLMTray.Core.Settings.WindowPlace>());
         // Maximized, its bounds are the screen's: the size it had before it was maximized is what's kept.
-        var bounds = (maximized || state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized) && NormalBounds.TryGetValue(window, out var normal) ? normal
+        var bounds = (maximized || state == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized) && shape?.Normal is { } normal ? normal
             : new Windows.Graphics.RectInt32(window.AppWindow.Position.X, window.AppWindow.Position.Y, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
         var place = new LLMTray.Core.Settings.WindowPlace(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized);
         if (places.GetValueOrDefault(name) == place) return;

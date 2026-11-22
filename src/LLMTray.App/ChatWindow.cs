@@ -85,6 +85,10 @@ sealed partial class ChatWindow : Window
         store.Changed += _ => DispatcherQueue.TryEnqueue(RenderChats);
         App.Current.ChatLibrary.Changed += () => DispatcherQueue.TryEnqueue(RenderChats);
         App.Current.ProjectFilesChanged += UpdateProjectMark;
+        // The rows' menus (Remember This Chat) and marks follow Memory and project files turned on or off:
+        // drawn again only if what they show changed.
+        App.Current.MemoryChanged += () => DispatcherQueue.TryEnqueue(RenderChats);
+        App.Current.FoldersChanged += () => DispatcherQueue.TryEnqueue(RenderChats);
 
         Content = Layout();
         SetUpPictures((UIElement)Content);

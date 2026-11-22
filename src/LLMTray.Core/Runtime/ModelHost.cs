@@ -694,8 +694,14 @@ public sealed class ModelHost : IAsyncDisposable
         Changed();
     }
 
+    int logGeneration;
+
+    /// <summary>Counts the server log's files: a new one each time a server starts (the log window's Clear Log belongs to one).</summary>
+    public int LogGeneration => Volatile.Read(ref logGeneration);
+
     void RotateLog()
     {
+        Interlocked.Increment(ref logGeneration);
         try
         {
             if (File.Exists(LogFile)) File.Move(LogFile, Path.Combine(logDirectory, "llama-server.previous.log"), overwrite: true);
