@@ -266,9 +266,18 @@ sealed class SetupWindow : Window
         else if (percent is not null) percent.Text = Percent(reported);
     }
 
-    /// <summary>What the steps show of the downloads, but for how far the running one is.</summary>
-    static string DownloadsKey(DownloadState d) =>
-        $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(d.Current)}|{d.Current?.Title}|{d.Total is > 0}|{d.Queued}|{d.LastError}|{d.LastDone}";
+    /// <summary>
+    /// What the steps show, but for how far the running download is: the
+    /// downloads, and the models here and the last one loaded, which may change
+    /// meanwhile from the window or the tray (the catalog is a new object only
+    /// when the folder's content changed).
+    /// </summary>
+    static string DownloadsKey(DownloadState d)
+    {
+        var app = App.Current;
+        return $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(d.Current)}|{d.Current?.Title}|{d.Total is > 0}|{d.Queued}|{d.LastError}|{d.LastDone}"
+            + $"|{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(app.Library.Current)}|{app.Settings.LastModel}|{app.ModelsFolder}";
+    }
 
     static string Percent(DownloadState d) => d.Total is long total && total > 0 ? $"{100 * d.Received / total}%" : "";
 
