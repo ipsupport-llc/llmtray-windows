@@ -43,6 +43,26 @@ sealed class LogWindow : Window
     DateTime lastWrite;
     /// <summary>Clear Log: what the file held then isn't shown (the file itself is the server's, still being written).</summary>
     long clearedAt;
+    /// <summary>
+    /// The file Clear Log was for, by its first bytes: a new run's file starts over, whatever its length
+    /// (not by its creation time, which Windows may carry over to a file made again under the same name).
+    /// </summary>
+    string? clearedFile;
+
+    static string? Start(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var head = new byte[256];
+            var read = stream.Read(head, 0, head.Length);
+            return Convert.ToHexString(head, 0, read);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     public LogWindow()
     {
@@ -67,7 +87,7 @@ sealed class LogWindow : Window
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(follow, L.T("Follow: keep the newest in view"));
         var menu = new MenuFlyout();
         menu.Items.Add(Item(L.T("Copy shown"), () => Copy(string.Join(Environment.NewLine, ShownEntries().SelectMany(Text)))));
-        menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll())));
+        menu.Items.Add(Item(L.T("Copy the whole log"), () => Copy(ReadAll() ?? "")));
         menu.Items.Add(Item(L.T("Save Log…"), () => _ = SaveAsync()));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(Item(L.T("Clear Log"), ClearLog));
@@ -155,6 +175,7 @@ sealed class LogWindow : Window
         var info = new FileInfo(file);
         if (!info.Exists)
         {
+            clearedAt = 0;
             entries = [];
             lastLength = -1;
             Render();
@@ -162,7 +183,7 @@ sealed class LogWindow : Window
         }
         if (info.Length == lastLength && info.LastWriteTimeUtc == lastWrite) return;
         // A new run's file starts over: what was cleared was the old one's.
-        if (info.Length < clearedAt) clearedAt = 0;
+        if (clearedAt > 0 && (info.Length < clearedAt || Start(file) != clearedFile)) clearedAt = 0;
         lastLength = info.Length;
         lastWrite = info.LastWriteTimeUtc;
         var parsed = LlamaLog.Parse(ReadTail(clearedAt).Split('\n'));
@@ -170,7 +191,8 @@ sealed class LogWindow : Window
         Render();
     }
 
-    static string ReadAll()
+    /// <summary>The whole log; null when it can't be read (not the same as an empty one).</summary>
+    static string? ReadAll()
     {
         try
         {
@@ -180,7 +202,7 @@ sealed class LogWindow : Window
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return "";
+            return null;
         }
     }
 
@@ -205,7 +227,9 @@ sealed class LogWindow : Window
     {
         try
         {
-            clearedAt = new FileInfo(App.Current.Host.LogFile).Length;
+            var info = new FileInfo(App.Current.Host.LogFile);
+            clearedAt = info.Length;
+            clearedFile = Start(info.FullName);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -225,7 +249,9 @@ sealed class LogWindow : Window
             picker.FileTypeChoices.Add(L.T("Log"), [".log"]);
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
             if (await picker.PickSaveFileAsync() is not { } file) return;
-            await File.WriteAllTextAsync(file.Path, ReadAll());
+            // A log that can't be read isn't saved as an empty file over what's there.
+            if (ReadAll() is not { } text) throw new IOException("the server log can't be read");
+            await File.WriteAllTextAsync(file.Path, text);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
         {
@@ -305,8 +331,10 @@ sealed class LogWindow : Window
     /// <summary>What a row shows of its entry: a request's summary grows as it runs; an opened one shows its lines.</summary>
     string RowKey(LogEntry entry)
     {
-        var id = entry.Kind == LogKind.Request ? entry.Lines[0].Time + "|" + entry.Lines[0].Message : "";
-        var last = entry.Lines[^1];
+        // A standalone line has no lines of its own: its head is all of it.
+        var first = entry.Lines.Count > 0 ? entry.Lines[0] : entry.Head;
+        var last = entry.Lines.Count > 0 ? entry.Lines[^1] : entry.Head;
+        var id = entry.Kind == LogKind.Request ? first.Time + "|" + first.Message : "";
         return $"{entry.Kind}|{entry.Head.Time}|{entry.Head.Message}|{entry.Lines.Count}|{last.Time}|{last.Message}|{entry.Metrics}|{entry.IsProblem}|{(id.Length > 0 && expanded.Contains(id))}";
     }
 

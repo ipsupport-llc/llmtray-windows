@@ -815,7 +815,8 @@ public partial class App : Application
             "---",
             $"LLMTray {Updater.Current?.DisplayVersion ?? "dev"} ({Updater.Kind}, {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})",
             $"Windows {os.Major}.{os.Minor}.{os.Build}",
-            $"Model: {(host.Model is { } m ? $"{m.Name} ({host.Status}, {host.Backend ?? "-"})" : "none loaded")}",
+            // The model's state and where it runs, not its name: a file's name can be private.
+            $"Model: {(host.Model is not null ? $"{host.Status}, {host.Backend ?? "-"}" : "none loaded")}",
         ]);
         Ui.Open("https://github.com/ipsupport-llc/llmtray-windows/issues/new?body=" + Uri.EscapeDataString(body));
     }

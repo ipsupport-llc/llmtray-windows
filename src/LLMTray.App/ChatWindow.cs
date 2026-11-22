@@ -1644,7 +1644,8 @@ sealed partial class ChatWindow : Window
             // (the list was emptied and filled after every answer and every key typed).
             var key = string.Join("\n", [
                 query, $"{library.Unreadable}|{library.SaveFailed}",
-                string.Join(",", projects.Select(p => $"{p.Id}:{p.Name}:{collapsed.Contains(p.Id)}")),
+                // Instructions too: a project's menu holds the project as it was drawn.
+                string.Join(",", projects.Select(p => $"{p.Id}:{p.Name}:{collapsed.Contains(p.Id)}:{p.Instructions.GetHashCode()}")),
                 string.Join(",", pinned), string.Join(",", map.Select(kv => $"{kv.Key}>{kv.Value}")),
                 .. all.Select(c => $"{c.Id}|{c.Title}|{c.Preview}|{Group(c.UpdatedAt)}"), every.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
             if (key == renderedChats)

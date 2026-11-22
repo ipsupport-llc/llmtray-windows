@@ -210,6 +210,8 @@ public sealed partial class MainWindow : Window
     void RenderPage()
     {
         pendingRender = false;
+        // The page is drawn from the downloads as they are now: the next report compares its keys again.
+        downloadSeen = null;
         renderedHostKey = HostKey(state);
         renderedToolsKey = page == "tools" ? ToolsKey() : null;
         renderedUpdatesKey = UpdatesKey();

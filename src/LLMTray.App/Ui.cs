@@ -280,6 +280,14 @@ static class Ui
     public static void Place(Window window, string name, Action defaults)
     {
         defaults();
+        // Its size and place while it isn't maximized, as they change: what a maximized window goes back to.
+        window.AppWindow.Changed += (sender, e) =>
+        {
+            if ((e.DidSizeChange || e.DidPositionChange) && sender.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Restored })
+            {
+                NormalBounds.AddOrUpdate(window, new Windows.Graphics.RectInt32(sender.Position.X, sender.Position.Y, sender.Size.Width, sender.Size.Height));
+            }
+        };
         if (App.Current.Settings.WindowPlaces?.GetValueOrDefault(name) is not { } saved) return;
         var areas = Microsoft.UI.Windowing.DisplayArea.FindAll()
             .Select(d => new LLMTray.Core.Settings.WindowPlace.Area(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height)).ToList();
@@ -289,16 +297,35 @@ static class Ui
         if (place.Maximized) presenter?.Maximize();
     }
 
+    /// <summary>Each placed window's bounds while not maximized.</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Window, object> NormalBoundsBox = [];
+
+    static class NormalBounds
+    {
+        public static void AddOrUpdate(Window window, Windows.Graphics.RectInt32 bounds) => NormalBoundsBox.AddOrUpdate(window, bounds);
+
+        public static bool TryGetValue(Window window, out Windows.Graphics.RectInt32 bounds)
+        {
+            if (NormalBoundsBox.TryGetValue(window, out var box) && box is Windows.Graphics.RectInt32 b)
+            {
+                bounds = b;
+                return true;
+            }
+            bounds = default;
+            return false;
+        }
+    }
+
     /// <summary>Notes where a window is, for <see cref="Place"/> next time (as it closes, or as the app quits).</summary>
     public static void RememberPlace(Window window, string name)
     {
         var app = App.Current;
         var maximized = window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Maximized };
         var places = new Dictionary<string, LLMTray.Core.Settings.WindowPlace>(app.Settings.WindowPlaces ?? new Dictionary<string, LLMTray.Core.Settings.WindowPlace>());
-        // Maximized, its bounds are the screen's: the size it had before is kept for when it's restored.
-        var place = maximized && places.TryGetValue(name, out var before)
-            ? before with { Maximized = true }
-            : new LLMTray.Core.Settings.WindowPlace(window.AppWindow.Position.X, window.AppWindow.Position.Y, window.AppWindow.Size.Width, window.AppWindow.Size.Height, maximized);
+        // Maximized, its bounds are the screen's: the size it had before it was maximized is what's kept.
+        var bounds = maximized && NormalBounds.TryGetValue(window, out var normal) ? normal
+            : new Windows.Graphics.RectInt32(window.AppWindow.Position.X, window.AppWindow.Position.Y, window.AppWindow.Size.Width, window.AppWindow.Size.Height);
+        var place = new LLMTray.Core.Settings.WindowPlace(bounds.X, bounds.Y, bounds.Width, bounds.Height, maximized);
         if (places.GetValueOrDefault(name) == place) return;
         places[name] = place;
         app.UpdateSettings(app.Settings with { WindowPlaces = places });

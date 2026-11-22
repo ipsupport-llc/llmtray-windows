@@ -154,6 +154,8 @@ public sealed class ChatStore(string folder)
             {
                 if (File.Exists(temp)) File.Delete(temp);
             }
+            // Its summary is read again: a save within one tick of the clock at the same length would look unchanged.
+            lock (summaries) summaries.Remove(path);
         }
         Changed?.Invoke(file.Id);
     }
@@ -287,6 +289,7 @@ public sealed class ChatStore(string folder)
         try
         {
             File.Delete(PathOf(id));
+            lock (summaries) summaries.Remove(PathOf(id));
             var images = ImagesFolder(id);
             if (Directory.Exists(images)) Directory.Delete(images, recursive: true);
         }
