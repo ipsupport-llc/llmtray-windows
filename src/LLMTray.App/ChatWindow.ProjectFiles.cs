@@ -58,6 +58,9 @@ sealed partial class ChatWindow
             return;
         }
         var list = new StackPanel { Spacing = 6 };
+        // What the list shows, as of its last drawing: each file read, each request of a model, reported
+        // here, and the list (pictures read from disk again) was made again for every one of them.
+        string? rendered = null;
         var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
         var summary = Ui.Caption("");
         var pinNote = Ui.Caption("");
@@ -104,6 +107,13 @@ sealed partial class ChatWindow
             var pins = index?.Pins() ?? [];
             var tokens = (index?.PinBytes() ?? []).ToDictionary(kv => kv.Key, kv => PinnedFiles.Tokens(kv.Value, ratio));
             var used = pins.Sum(p => tokens.GetValueOrDefault(p));
+            var key = string.Join("\n", [
+                $"{limit}|{string.Join(",", pins)}|{string.Join(",", tokens.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"))}",
+                .. docs.Select(d => $"{d.Doc}|{d.Name}|{d.Status}|{d.Pages}|{d.Bytes}|{d.Reindex}|{d.Error}"),
+                .. app.ProjectFiles.Pictures(project.Id).Select(p => $"{p.Id}|{p.Name}|{p.Width}|{p.Height}|{p.Bytes}"),
+                $"{app.ProjectFiles.Summary(project.Id)}|{index?.DiskBytes()}"]);
+            if (key == rendered) return;
+            rendered = key;
             pinNote.Visibility = pins.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             pinNote.Text = L.F("Pinned: {0} files, ≈{1} of {2} tokens. Their whole text goes with every message of this project's chats, and those chats don't use web tools, MCP servers or folder changes while any file is pinned.",
                 pins.Count, used, limit) + (used > limit ? " " + L.T("They don't all fit this model now: the ones past the limit are read with search instead.") : "");
