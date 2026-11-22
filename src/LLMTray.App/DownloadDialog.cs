@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using LLMTray.Core.Downloads;
+using LLMTray.Core.Setup;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -26,6 +27,13 @@ sealed partial class DownloadDialog : ContentDialog
     int generation;
     bool userPickedSource;
     Listing? listing;
+
+    /// <summary>What the featured list's marks were drawn from.</summary>
+    string? followed;
+
+    /// <summary>Which featured models run or wait, and the last result: a queue changed twice between two looks still differs.</summary>
+    static string FollowKey(DownloadState d) =>
+        string.Concat(FeaturedModels.All.Select(m => App.Current.Downloads.Has(m.Title) ? '1' : '0')) + $"|{d.LastDone}|{d.LastError}";
 
     /// <summary>A repository's files, pinned to the version they were listed at.</summary>
     sealed record Listing(DownloadSource Source, string Pinned, IReadOnlyList<RemoteFile> Files);
@@ -60,6 +68,13 @@ sealed partial class DownloadDialog : ContentDialog
 
         repository.TextChanged += (_, _) => ResetCustom();
         list.Click += async (_, _) => await Guard(ListFilesAsync);
+        // Enter in the repository's field lists its files, as the button beside it does (it went to Download).
+        repository.KeyDown += async (_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter) return;
+            e.Handled = true;
+            if (list.IsEnabled) await Guard(ListFilesAsync);
+        };
         var repoRow = new Grid { ColumnSpacing = 8 };
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         repoRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -102,6 +117,22 @@ sealed partial class DownloadDialog : ContentDialog
 
         PrimaryButtonClick += OnDownload;
         Closed += (_, _) => closed.Cancel();
+        // The marks follow the downloads while it's open: one that ends, fails or starts changes its row.
+        void Follow(DownloadState d)
+        {
+            var key = FollowKey(d);
+            if (key == followed) return;
+            followed = key;
+            var selected = (featured.SelectedItem as ListViewItem)?.Tag as FeaturedModel;
+            RenderFeatured();
+            if (selected is not null)
+            {
+                featured.SelectedItem = featured.Items.OfType<ListViewItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, selected) && i.IsEnabled);
+            }
+        }
+        followed = FollowKey(App.Current.Downloads.State);
+        App.Current.DownloadsChanged += Follow;
+        Closed += (_, _) => App.Current.DownloadsChanged -= Follow;
         RenderFeatured();
         RenderReach();
         Opened += async (_, _) => await Guard(CheckReachAsync);
@@ -163,16 +194,56 @@ sealed partial class DownloadDialog : ContentDialog
     void RenderFeatured()
     {
         featured.Items.Clear();
+        var app = App.Current;
+        var root = app.ModelsFolder;
+        var free = FreeAt(root);
         foreach (var model in FeaturedModels.All)
         {
             var on = model.IsOn(Source);
+            // What's already here or on its way says so before Download is pressed (Mac: the same marks).
+            var here = SetupWizard.IsDownloaded(model, root);
+            var coming = app.Downloads.Has(model.Title);
             var text = new StackPanel { Padding = new Thickness(0, 6, 0, 6) };
-            text.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
+            var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            title.Children.Add(new TextBlock { Text = $"{model.Title}   {MainWindow.FormatSize(model.TotalSize)}" });
+            if (here || coming)
+            {
+                title.Children.Add(new TextBlock { Text = here ? L.T("Downloaded") : L.T("Downloading"), FontSize = 12, Foreground = Ui.Green, VerticalAlignment = VerticalAlignment.Center });
+            }
+            text.Children.Add(title);
             var note = on ? L.F("{0} License: {1}.", L.T(model.Note), model.License) : L.F("Not on {0} yet.", Source == DownloadSource.Kaggle ? "Kaggle" : "Hugging Face");
             text.Children.Add(new TextBlock { Text = note, FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
-            featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = on, Opacity = on ? 1 : 0.5 });
+            // Too big for the disk: said in the list, not only after Download. What's still needed counts,
+            // not the whole size: a download that stopped halfway resumes.
+            var fits = here || free is not long f || StillNeeded(model, root) <= f;
+            if (on && !fits) text.Children.Add(Ui.Caption(L.T("Not enough free disk space for this model."), Ui.Red));
+            var usable = on && !here && !coming && fits;
+            featured.Items.Add(new ListViewItem { Content = text, Tag = model, IsEnabled = usable, Opacity = on ? 1 : 0.5 });
         }
         UpdatePrimary();
+    }
+
+    /// <summary>What a featured model still needs on the disk: its files' sizes, less what's here of them.</summary>
+    static long StillNeeded(FeaturedModel model, string root) =>
+        (model.Projector is { } p ? new[] { model.File, p } : [model.File]).Sum(f =>
+        {
+            var path = FeaturedModel.Inside(root, Path.Combine(model.Folder, f.Name));
+            if (File.Exists(path) && new FileInfo(path).Length == f.Size) return 0L;
+            var part = path + ".part";
+            return File.Exists(part) ? Math.Max(0, f.Size - new FileInfo(part).Length) : f.Size;
+        });
+
+    static long? FreeAt(string folder)
+    {
+        try
+        {
+            var path = Path.GetPathRoot(Path.GetFullPath(folder));
+            return path is null ? null : new DriveInfo(path).AvailableFreeSpace;
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     void ResetCustom()

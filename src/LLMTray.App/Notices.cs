@@ -2,6 +2,7 @@ using LLMTray.Core.Downloads;
 using LLMTray.Core.Runtime;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace LLMTray.App;
 
@@ -28,6 +29,10 @@ sealed class Notices
     readonly TextBlock downloadText = new() { TextWrapping = TextWrapping.Wrap };
     readonly ProgressBar downloadProgress = new() { Maximum = 1000 };
     readonly Button downloadButton = new();
+    /// <summary>A failed or cancelled download starts again from here (Mac: Retry); its partial files resume.</summary>
+    readonly Button retryButton = new() { Visibility = Visibility.Collapsed };
+    /// <summary>A failure is marked as one: before, it looked like a finished download.</summary>
+    readonly FontIcon downloadIcon = new() { FontSize = 16, Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
     /// <summary>The chat's last folder change (adr/0016), with Undo.</summary>
     readonly InfoBar folders = new() { IsClosable = true, IsOpen = false, Severity = InfoBarSeverity.Success };
     readonly Button undo = new();
@@ -54,20 +59,26 @@ sealed class Notices
         download.Background = Ui.CardBackground;
         download.BorderBrush = Ui.Stroke;
         var grid = new Grid { ColumnSpacing = 8 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(downloadIcon);
         var lines = new StackPanel { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         lines.Children.Add(downloadText);
         lines.Children.Add(downloadProgress);
+        Grid.SetColumn(lines, 1);
         grid.Children.Add(lines);
+        retryButton.Content = L.T("Retry");
+        retryButton.Click += (_, _) => app.Downloads.Retry();
         downloadButton.VerticalAlignment = VerticalAlignment.Center;
         downloadButton.Click += (_, _) =>
         {
             if (app.Downloads.State.IsActive) app.Downloads.CancelCurrent();
             else app.Downloads.Dismiss();
         };
-        Grid.SetColumn(downloadButton, 1);
-        grid.Children.Add(downloadButton);
+        var buttons = Ui.Horizontal(retryButton, downloadButton);
+        Grid.SetColumn(buttons, 2);
+        grid.Children.Add(buttons);
         download.Child = grid;
 
         undo.Content = L.T("Undo");
@@ -186,19 +197,23 @@ sealed class Notices
             downloadProgress.IsIndeterminate = d.Total is null;
             downloadProgress.Value = d.Total is long all && all > 0 ? 1000.0 * d.Received / all : 0;
             downloadProgress.Visibility = Visibility.Visible;
-            downloadButton.Content = L.T("Cancel");
+            SetIfChanged(downloadButton, L.T("Cancel"));
+            ShowState(null, false);
         }
         else if (d.LastError is { } error)
         {
             downloadText.Text = error;
             downloadProgress.Visibility = Visibility.Collapsed;
-            downloadButton.Content = L.T("Close");
+            SetIfChanged(downloadButton, L.T("Close"));
+            // Red, with the error mark: it read like a finished download.
+            ShowState("\uEA39", d.LastFailed is not null, Ui.Red);
         }
         else if (d.LastDone is { } done)
         {
             downloadText.Text = L.F("{0} is downloaded. Choose Load, or name it in a request.", done);
             downloadProgress.Visibility = Visibility.Collapsed;
-            downloadButton.Content = L.T("Close");
+            SetIfChanged(downloadButton, L.T("Close"));
+            ShowState("\uE930", false, Ui.Green);
         }
         else
         {
@@ -206,5 +221,27 @@ sealed class Notices
             return;
         }
         download.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>The notice's mark, colour and Retry for a state; set only when they change (this runs four times a second).</summary>
+    void ShowState(string? glyph, bool retry, Brush? color = null)
+    {
+        var state = $"{glyph}|{retry}";
+        if (state == shownState) return;
+        shownState = state;
+        downloadIcon.Visibility = glyph is null ? Visibility.Collapsed : Visibility.Visible;
+        if (glyph is not null) downloadIcon.Glyph = glyph;
+        if (color is not null) downloadIcon.Foreground = color;
+        // The error's text in red too; anything else in the normal colour.
+        if (glyph == "\uEA39") downloadText.Foreground = Ui.Red;
+        else downloadText.ClearValue(TextBlock.ForegroundProperty);
+        retryButton.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    string? shownState;
+
+    static void SetIfChanged(Button button, string text)
+    {
+        if (button.Content as string != text) button.Content = text;
     }
 }

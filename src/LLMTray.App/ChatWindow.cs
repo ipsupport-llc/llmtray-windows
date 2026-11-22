@@ -37,6 +37,8 @@ sealed partial class ChatWindow : Window
     /// <summary>Under the model picker: its size and where it runs, or why it isn't running.</summary>
     readonly TextBlock facts = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     readonly Button startStop = new();
+    /// <summary>Above the composer while there's no model to talk to (Mac: the same): what to do, not an error after Send.</summary>
+    readonly StackPanel noModel = new() { Orientation = Orientation.Horizontal, Spacing = 8, Visibility = Visibility.Collapsed, Margin = new Thickness(4, 0, 0, 4) };
     readonly ColumnDefinition sideColumn = new() { Width = new GridLength(260) };
     UIElement? sideFrame;
     /// <summary>When it last lost the front: a click on the tray icon takes it first.</summary>
@@ -611,6 +613,9 @@ sealed partial class ChatWindow : Window
         // While the chat is being compacted nothing is sent: the draft stays. Nor while a tab is being read:
         // the message would go without the page it's about.
         if (chat.Compacting || attachingTab) return;
+        // No model to talk to: nothing goes (the line above the field says what to do). Sent, it came back
+        // as "No model is loaded" in red, which read as a broken app.
+        if (!CanChat) return;
         var text = input.Text;
         if (string.IsNullOrWhiteSpace(text) && pending.Count == 0 && pendingShared.Count == 0 && pendingAudio.Count == 0 && recorder is null) return;
         // Send stops a recording still going and sends it too.
@@ -779,7 +784,13 @@ sealed partial class ChatWindow : Window
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(10, 6, 8, 6),
         };
-        var composer = new Border { Child = frame, Padding = new Thickness(24, 4, 24, 16) };
+        noModel.Children.Add(new FontIcon { Glyph = "\uE7B8", FontSize = 14, Foreground = Ui.Secondary, VerticalAlignment = VerticalAlignment.Center });
+        noModel.Children.Add(new TextBlock { Text = L.T("No chat model yet."), Foreground = Ui.Secondary, VerticalAlignment = VerticalAlignment.Center });
+        noModel.Children.Add(Ui.Button(L.T("Get a Model…"), () => App.Current.ShowSetup()));
+        var composerColumn = new StackPanel();
+        composerColumn.Children.Add(noModel);
+        composerColumn.Children.Add(frame);
+        var composer = new Border { Child = composerColumn, Padding = new Thickness(24, 4, 24, 16) };
 
         var main = new Grid();
         main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -889,7 +900,7 @@ sealed partial class ChatWindow : Window
         }
 
         var last = chat.Messages.LastOrDefault();
-        regenerate.Visibility = !chat.Busy && !chat.Compacting && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
+        regenerate.Visibility = CanChat && !chat.Busy && !chat.Compacting && last is { Role: "assistant" } ? Visibility.Visible : Visibility.Collapsed;
         compact.Visibility = !chat.Busy && ChatClient.CompactionRange(chat.Messages) is not null ? Visibility.Visible : Visibility.Collapsed;
         compact.IsEnabled = !chat.Compacting;
         // The caption names the button for screen readers too.
@@ -1366,6 +1377,11 @@ sealed partial class ChatWindow : Window
     }
 
     string? renderedStatus;
+    bool? lastCanChat;
+
+    /// <summary>A model a send goes to (Mac canChat): the one in the picker, which a send names, or the one running.</summary>
+    bool CanChat => App.Current.Host.State is { Status: HostStatus.Running or HostStatus.Loading }
+        || (model.SelectedItem as ComboBoxItem)?.Tag is string picked && App.Current.Library.Current.Resolve(picked) is not null;
     readonly FontIcon startStopIcon = new() { FontSize = 14 };
 
     void RenderStatus()
@@ -1387,9 +1403,16 @@ sealed partial class ChatWindow : Window
         var stop = running is not null;
         var enabled = stop || PickedOrLast() is not null;
         // Everything this shows: nothing is set again while it's the same (the host reports each request).
-        var key = $"{host.Status}|{host.ActiveRequests > 0}|{text}|{problem is null}|{shown}|{stop}|{enabled}";
+        var key = $"{host.Status}|{host.ActiveRequests > 0}|{text}|{problem is null}|{shown}|{stop}|{enabled}|{CanChat}";
         if (key == renderedStatus) return;
         renderedStatus = key;
+        // The same test as Send's.
+        var canChat = CanChat;
+        noModel.Visibility = canChat ? Visibility.Collapsed : Visibility.Visible;
+        // Regenerate follows too (not on the first drawing: the window isn't built yet).
+        var changed = lastCanChat is not null && canChat != lastCanChat;
+        lastCanChat = canChat;
+        if (changed) Render();
         status.Text = text;
         dot.Fill = color;
         loading.IsActive = host.Status == HostStatus.Loading;
@@ -1494,7 +1517,11 @@ sealed partial class ChatWindow : Window
                 {
                     model.Items.Add(new ComboBoxItem { Content = entry.Name, Tag = entry.Name });
                 }
-                var want = picked ?? loaded;
+                // What a send goes to, always shown: the picked one, the loaded one, the last one, or the first.
+                // A list with models and nothing in it read as "no model" while the Load button had one.
+                var last = App.Current.Library.Current.Resolve(App.Current.Settings.LastModel)?.Name;
+                // The first that's still in the list: a picked model deleted or in another folder falls through.
+                var want = new[] { picked, loaded, last, models.FirstOrDefault()?.Name }.FirstOrDefault(n => n is not null && models.Any(e => e.Name == n));
                 model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
                 model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
             }
