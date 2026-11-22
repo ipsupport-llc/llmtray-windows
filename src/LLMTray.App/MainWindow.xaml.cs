@@ -74,15 +74,24 @@ public sealed partial class MainWindow : Window
         };
         App.Current.McpChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
         App.Current.FoldersChanged += () => { if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon(); };
-        App.Current.MemoryChanged += () => { if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon(); };
-        // A request counted: the Server tab's numbers follow (from the proxy's thread).
-        App.Current.RequestStatistics.Changed += () => DispatcherQueue.TryEnqueue(() =>
+        App.Current.MemoryChanged += () =>
         {
-            if (page == "server" && App.Current.Settings.KeepRequestStatistics) RenderPageSoon();
-        });
+            if (page != "memory") return;
+            if (MemoryKey() != renderedMemoryKey) RenderPageSoon();
+            else FollowLearning();
+        };
+        // A request counted: the Server tab's numbers follow (from the proxy's thread).
+        // Only the Usage card's numbers, at most twice a second: the whole tab was made again for every request.
+        App.Current.RequestStatistics.Changed += () => DispatcherQueue.TryEnqueue(OnRequestCounted);
         // The embedder's row (Memory, and Files in projects on Tools) goes once it's downloaded.
         App.Current.DownloadsChanged += _ =>
         {
+            // Not computed for every progress report: the keys read files. Only a download that starts or
+            // ends, or the embedder arriving, can change these pages.
+            if (page is not ("memory" or "tools")) return;
+            var seen = $"{App.Current.Downloads.State.Current?.Title}|{App.Current.Embedder.IsInstalled}";
+            if (seen == downloadSeen) return;
+            downloadSeen = seen;
             if (page == "memory" && MemoryKey() != renderedMemoryKey) RenderPageSoon();
             if (page == "tools" && ToolsKey() != renderedToolsKey) RenderPageSoon();
         };
@@ -173,6 +182,8 @@ public sealed partial class MainWindow : Window
     }
 
     string? renderedHostKey, renderedToolsKey, renderedUpdatesKey;
+    /// <summary>The download and the embedder as the Memory and Tools pages last looked at them.</summary>
+    string? downloadSeen;
     Action? liveUpdates;
 
     static string HostKey(HostState s) => $"{s.Status}|{s.Model?.FullPath}|{s.Backend}|{s.Device}|{s.Note}|{s.RunOn}|{s.Message}";
