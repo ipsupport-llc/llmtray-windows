@@ -9,7 +9,8 @@ namespace LLMTray.App;
 /// <summary>
 /// <c>--screenshots &lt;folder&gt;</c>: every window photographed by the app
 /// itself, for a look at the layout in CI (adr/0014): the chat, each tab of
-/// Settings, About. The windows' own pixels, whatever covers them.
+/// Settings (the window, and the whole page as <c>-full</c>), the setup
+/// wizard's steps, About. The windows' own pixels, whatever covers them.
 /// </summary>
 static class Screenshots
 {
@@ -42,7 +43,12 @@ static class Screenshots
             {
                 app.SettingsWindow?.ShowPage(tab);
                 await Task.Delay(1200);
-                if (app.SettingsWindow is { } settings) await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
+                if (app.SettingsWindow is { } settings)
+                {
+                    await SaveAsync(settings, Path.Combine(folder, $"settings-{tab}.png"));
+                    // The whole page, below the fold too: the window shows only its top.
+                    await ExtraAsync(folder, () => SaveElementAsync(settings.PageForScreenshot, Path.Combine(folder, $"settings-{tab}-full.png")));
+                }
             }
             // Memory's settings as they are once it's on (CI's app has it off): turned on for the shot, then back.
             // Only with nothing learned or waiting: on someone's own profile no note shows and no queue is dropped.
@@ -55,6 +61,7 @@ static class Screenshots
                     withMemory.ShowPage("memory");
                     await Task.Delay(1200);
                     await SaveAsync(withMemory, Path.Combine(folder, "settings-memory-on.png"));
+                    await ExtraAsync(folder, () => SaveElementAsync(withMemory.PageForScreenshot, Path.Combine(folder, "settings-memory-on-full.png")));
                 }
                 finally
                 {
@@ -74,6 +81,7 @@ static class Screenshots
                     withUsage.ShowPage("server");
                     await Task.Delay(1200);
                     await SaveAsync(withUsage, Path.Combine(folder, "settings-server-usage.png"));
+                    await ExtraAsync(folder, () => SaveElementAsync(withUsage.PageForScreenshot, Path.Combine(folder, "settings-server-usage-full.png")));
                 }
                 finally
                 {
@@ -91,6 +99,7 @@ static class Screenshots
                     withKey.ShowPage("server");
                     await Task.Delay(1200);
                     await SaveAsync(withKey, Path.Combine(folder, "settings-server-key.png"));
+                    await ExtraAsync(folder, () => SaveElementAsync(withKey.PageForScreenshot, Path.Combine(folder, "settings-server-key-full.png")));
                 }
                 finally
                 {
@@ -98,6 +107,22 @@ static class Screenshots
                     withKey.ShowPage("general");
                 }
             }
+            // The setup wizard (adr/0010), step by step. A first run has it open; otherwise it's opened for the photographs.
+            await ExtraAsync(folder, async () =>
+            {
+                var setupWasOpen = app.SetupWizardWindow is not null;
+                app.ShowSetup();
+                await Task.Delay(1500);
+                if (app.SetupWizardWindow is not { } setup) return;
+                try
+                {
+                    await setup.ScreenshotsAsync(folder, SaveElementAsync);
+                }
+                finally
+                {
+                    if (!setupWasOpen) setup.CloseAfterScreenshots();
+                }
+            });
             // For the Microsoft Store listing (adr/0025): the windows filling a large screen. About comes last: CI waits for it.
             await StoreAsync(app, Path.Combine(folder, "store"));
             app.ShowAbout();
@@ -151,6 +176,22 @@ static class Screenshots
         finally
         {
             Put(settings, settingsWas);
+        }
+    }
+
+    /// <summary>
+    /// A photograph beyond the ones CI requires (a whole page, the wizard's
+    /// steps): its failure is noted and the rest go on, the Store's set above all.
+    /// </summary>
+    static async Task ExtraAsync(string folder, Func<Task> shot)
+    {
+        try
+        {
+            await shot();
+        }
+        catch (Exception e)
+        {
+            File.AppendAllText(Path.Combine(folder, "screenshots-skipped.txt"), e + Environment.NewLine);
         }
     }
 
