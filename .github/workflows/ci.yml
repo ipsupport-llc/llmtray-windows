@@ -361,6 +361,11 @@ jobs:
           Get-ChildItem $shots -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "ui: $($_.Name) $($_.Length) bytes" }
           if (Test-Path (Join-Path $shots 'screenshots-failed.txt')) { Get-Content (Join-Path $shots 'screenshots-failed.txt') }
           if (Test-Path (Join-Path $shots 'screenshots-skipped.txt')) { Write-Host 'extra screenshots skipped:'; Get-Content (Join-Path $shots 'screenshots-skipped.txt') }
+          # Nothing made again while only a value changes (adr/0014): the app checks itself, a FAIL line fails the build.
+          if (Test-Path (Join-Path $shots 'steady.txt')) {
+            Get-Content (Join-Path $shots 'steady.txt') | ForEach-Object { Write-Host "steady: $_" }
+            if (Select-String -Path (Join-Path $shots 'steady.txt') -Pattern '^FAIL' -Quiet) { throw 'the UI makes elements again where only a value changed (steady.txt)' }
+          }
           # Project files (adr/0021): what the reader process made of the demo files.
           if (Test-Path (Join-Path $shots 'project-files.txt')) { Get-Content (Join-Path $shots 'project-files.txt') }
           if (Test-Path (Join-Path $shots 'voice.txt')) { Get-Content (Join-Path $shots 'voice.txt') }

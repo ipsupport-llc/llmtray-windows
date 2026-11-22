@@ -14,7 +14,7 @@ public sealed class ModelLibrary(Func<string> root)
     ModelCatalog current = ModelCatalog.Empty(root());
     DateTime lastMissRescan = DateTime.MinValue;
 
-    /// <summary>Raised on the thread that rescanned.</summary>
+    /// <summary>Raised on the thread that rescanned, when the folder or what's in it changed.</summary>
     public event Action<ModelCatalog>? Changed;
 
     public ModelCatalog Current
@@ -22,13 +22,26 @@ public sealed class ModelLibrary(Func<string> root)
         get { lock (sync) return current; }
     }
 
+    /// <summary>
+    /// Reads the folder again. The same folder with the same models is no
+    /// change: the catalog stays and nothing is raised (the tray menu, the
+    /// command line and a request for an unknown name all rescan, and none of
+    /// them should redraw every list of models for nothing).
+    /// </summary>
     public ModelCatalog Rescan()
     {
         var scanned = ModelCatalog.Scan(root());
-        lock (sync) current = scanned;
+        lock (sync)
+        {
+            if (Same(current, scanned)) return current;
+            current = scanned;
+        }
         Changed?.Invoke(scanned);
         return scanned;
     }
+
+    static bool Same(ModelCatalog a, ModelCatalog b) =>
+        string.Equals(a.Root, b.Root, StringComparison.Ordinal) && a.Models.SequenceEqual(b.Models);
 
     public ModelEntry? Resolve(string name)
     {

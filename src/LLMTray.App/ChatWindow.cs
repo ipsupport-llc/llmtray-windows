@@ -167,9 +167,10 @@ sealed partial class ChatWindow : Window
             efforts.Items.Add(item);
         }
         thinking.Flyout = efforts;
-        App.Current.HostChanged += _ => { RenderModels(); RenderStatus(); RenderThinking(); RenderMic(); RenderAttachNote(); };
-        App.Current.ModelsChanged += RenderStatus;
-        App.Current.ModelsChanged += () => { RenderModels(); RenderThinking(); };
+        App.Current.HostChanged += _ => OnHostReport();
+        App.Current.ModelsChanged += OnModelsReport;
+        // A list left alone while it was open follows once it closes.
+        model.DropDownClosed += (_, _) => { if (modelsWaiting) OnModelsReport(); };
         App.Current.ThinkingStylesChanged += RenderThinking;
         // Closing the chat keeps LLMTray in the notification area; with no icon there, nothing
         // would bring it back, so then it quits.
@@ -229,6 +230,50 @@ sealed partial class ChatWindow : Window
         _ => L.T("High"),
     };
 
+    /// <summary>
+    /// The host's report: it comes for a load and a stop, and also for every
+    /// request's start and end (the chat's own, a title, memory, an agent on
+    /// the API). Each part below sets something only when what it shows changed,
+    /// so the header doesn't blink with every request (adr/0014).
+    /// </summary>
+    void OnHostReport()
+    {
+        RenderModels();
+        RenderStatus();
+        RenderThinking();
+        RenderMic();
+        RenderAttachNote();
+    }
+
+    /// <summary>The models folder was read and differs.</summary>
+    void OnModelsReport()
+    {
+        RenderModels();
+        RenderThinking();
+    }
+
+    /// <summary>
+    /// The check behind "the header doesn't flicker" (Screenshots.cs, CI): the
+    /// host and the library report again with nothing changed, as they do for
+    /// every request; the picker's items and the buttons' icons must stay the
+    /// same objects. A line for steady.txt, starting with FAIL when they don't.
+    /// </summary>
+    internal string SteadyCheck()
+    {
+        object?[] Parts() => [.. model.Items, startStop.Content, thinking.Content, mic.Content];
+        var before = Parts();
+        for (var i = 0; i < 5; i++)
+        {
+            OnHostReport();
+            OnModelsReport();
+        }
+        var after = Parts();
+        var again = after.Length != before.Length ? after.Length : after.Where((part, i) => !ReferenceEquals(part, before[i])).Count();
+        return $"{(again == 0 ? "ok" : "FAIL")}: chat header: {again} of {after.Length} parts made again over 5 reports of the host and the models folder ({model.Items.Count} models listed)";
+    }
+
+    string? renderedThinking;
+
     /// <summary>The effort picker: only for a model that thinks; its label says the current effort.</summary>
     void RenderThinking()
     {
@@ -236,6 +281,9 @@ sealed partial class ChatWindow : Window
         var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
         var entry = picked is null ? app.Host.State.Model : app.Library.Current.Resolve(picked);
         var style = entry is null ? ThinkingStyle.None : app.ThinkingStyleOf(entry);
+        var key = $"{style}|{app.Settings.ThinkingEffort}";
+        if (key == renderedThinking) return;
+        renderedThinking = key;
         thinking.Visibility = style == ThinkingStyle.None ? Visibility.Collapsed : Visibility.Visible;
         // Short on the button (a lightbulb and the level, Mac: the brain and the level); whole for screen readers.
         var label = L.F("Thinking effort: {0}", EffortName(app.Settings.ThinkingEffort));
@@ -1301,15 +1349,14 @@ sealed partial class ChatWindow : Window
         return block;
     }
 
+    string? renderedStatus;
+    readonly FontIcon startStopIcon = new() { FontSize = 14 };
+
     void RenderStatus()
     {
         var app = App.Current;
         var host = app.Host.State;
         var (text, color) = Status.Of(host);
-        status.Text = text;
-        dot.Fill = color;
-        loading.IsActive = host.Status == HostStatus.Loading;
-        loading.Visibility = loading.IsActive ? Visibility.Visible : Visibility.Collapsed;
         // What's running and where, or why not; the API's address when nothing is.
         var problem = host.Status == HostStatus.Failed ? host.Message : app.ProxyError;
         var running = host.Status is HostStatus.Running or HostStatus.Loading ? host.Model : null;
@@ -1319,16 +1366,28 @@ sealed partial class ChatWindow : Window
         if (host.Note is { } note && running is not null) line.Add(note);
         else if (Status.Device(host) is { } device) line.Add(device);
         if (line.Count == 0) line.Add(L.F("API at {0}", Core.AppInfo.ApiBaseUrl));
-        facts.Text = problem ?? string.Join(" · ", line);
-        facts.Foreground = problem is null ? Ui.Secondary : Ui.Red;
-        ToolTipService.SetToolTip(facts, facts.Text);
+        var shown = problem ?? string.Join(" · ", line);
         // Start the picked model, or stop the one running.
         var stop = running is not null;
-        startStop.Content = new FontIcon { Glyph = stop ? "\uE71A" : "\uE768", FontSize = 14 };
+        var enabled = stop || PickedOrLast() is not null;
+        // Everything this shows: nothing is set again while it's the same (the host reports each request).
+        var key = $"{host.Status}|{host.ActiveRequests > 0}|{text}|{problem is null}|{shown}|{stop}|{enabled}";
+        if (key == renderedStatus) return;
+        renderedStatus = key;
+        status.Text = text;
+        dot.Fill = color;
+        loading.IsActive = host.Status == HostStatus.Loading;
+        loading.Visibility = loading.IsActive ? Visibility.Visible : Visibility.Collapsed;
+        facts.Text = shown;
+        facts.Foreground = problem is null ? Ui.Secondary : Ui.Red;
+        ToolTipService.SetToolTip(facts, shown);
+        // One icon, its glyph changed in place.
+        startStopIcon.Glyph = stop ? "\uE71A" : "\uE768";
+        if (!ReferenceEquals(startStop.Content, startStopIcon)) startStop.Content = startStopIcon;
         var tip = stop ? L.T("Unload the model") : L.T("Load the model");
         ToolTipService.SetToolTip(startStop, tip);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(startStop, tip);
-        startStop.IsEnabled = stop || PickedOrLast() is not null;
+        startStop.IsEnabled = enabled;
     }
 
     /// <summary>The model in the picker, or the last one loaded.</summary>
@@ -1389,25 +1448,42 @@ sealed partial class ChatWindow : Window
         }
     }
 
+    string? renderedModels;
+    /// <summary>The list changed while it was open: it's made again when it closes.</summary>
+    bool modelsWaiting;
+
     void RenderModels()
     {
-        rendering = true;
-        try
+        var models = App.Current.Library.Current.Models;
+        var loaded = App.Current.Host.State is { Status: HostStatus.Running or HostStatus.Loading, Model: { } m } ? m.Name : null;
+        // The list is made again only when the models or the loaded one changed, and never under an
+        // open list: the host reports every request's start and end, and a rescan may find the same.
+        var key = string.Join("\n", models.Select(e => e.Name)) + "\n\n" + loaded;
+        if (key != renderedModels && model.IsDropDownOpen)
         {
-            var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
-            var loaded = App.Current.Host.State is { Status: HostStatus.Running or HostStatus.Loading, Model: { } m } ? m.Name : null;
-            model.Items.Clear();
-            foreach (var entry in App.Current.Library.Current.Models)
-            {
-                model.Items.Add(new ComboBoxItem { Content = entry.Name, Tag = entry.Name });
-            }
-            var want = picked ?? loaded;
-            model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
-            model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
+            modelsWaiting = true;
         }
-        finally
+        else if (key != renderedModels)
         {
-            rendering = false;
+            renderedModels = key;
+            modelsWaiting = false;
+            rendering = true;
+            try
+            {
+                var picked = (model.SelectedItem as ComboBoxItem)?.Tag as string;
+                model.Items.Clear();
+                foreach (var entry in models)
+                {
+                    model.Items.Add(new ComboBoxItem { Content = entry.Name, Tag = entry.Name });
+                }
+                var want = picked ?? loaded;
+                model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
+                model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
+            }
+            finally
+            {
+                rendering = false;
+            }
         }
         // Load follows the picker as it is now.
         RenderStatus();

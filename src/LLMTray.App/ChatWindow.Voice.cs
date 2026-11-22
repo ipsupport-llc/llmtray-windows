@@ -55,7 +55,8 @@ sealed partial class ChatWindow
 
     void SetUpVoice()
     {
-        mic.Content = new FontIcon { Glyph = "", FontSize = 14 };
+        micIcon.Glyph = "";
+        mic.Content = micIcon;
         mic.Style = Ui.Resource<Style>("SubtleButtonStyle", mic.Style);
         mic.VerticalAlignment = VerticalAlignment.Center;
         mic.Width = 34;
@@ -145,10 +146,15 @@ sealed partial class ChatWindow
     }
 
     /// <summary>The microphone shows for a model that hears (and while it records, whatever was picked).</summary>
+    readonly FontIcon micIcon = new() { FontSize = 14 };
+
     void RenderMic()
     {
         mic.Visibility = ModelHears() || recorder is not null ? Visibility.Visible : Visibility.Collapsed;
-        mic.Content = new FontIcon { Glyph = recorder is null ? "" : "", FontSize = 14 };
+        // One icon, its glyph changed in place: this runs for every report of the host.
+        var glyph = recorder is null ? "" : "";
+        if (micIcon.Glyph != glyph) micIcon.Glyph = glyph;
+        if (!ReferenceEquals(mic.Content, micIcon)) mic.Content = micIcon;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(mic, recorder is null ? L.T("Record a spoken message") : L.T("Stop recording"));
     }
 
