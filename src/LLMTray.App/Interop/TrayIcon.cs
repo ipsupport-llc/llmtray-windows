@@ -21,8 +21,8 @@ sealed class TrayIcon : IDisposable
 
     readonly Native.WndProc wndProc;
     readonly IntPtr window;
-    readonly IntPtr icon;
-    readonly bool ownsIcon = true;
+    IntPtr icon;
+    bool ownsIcon = true;
     readonly uint taskbarCreated;
     string tooltip;
     bool disposed;
@@ -74,6 +74,22 @@ sealed class TrayIcon : IDisposable
 
     /// <summary>Builds the right-click menu each time it opens.</summary>
     public Func<IReadOnlyList<TrayMenuItem>>? Menu { get; set; }
+
+    /// <summary>Shows another icon (the state's mark); a missing file leaves the one there.</summary>
+    public void SetIcon(string iconPath)
+    {
+        if (disposed) return;
+        var next = Native.LoadImageW(IntPtr.Zero, iconPath, Native.IMAGE_ICON,
+            Native.GetSystemMetrics(Native.SM_CXSMICON), Native.GetSystemMetrics(Native.SM_CYSMICON), Native.LR_LOADFROMFILE);
+        if (next == IntPtr.Zero) return;
+        var old = icon;
+        var owned = ownsIcon;
+        icon = next;
+        ownsIcon = true;
+        var data = Data(Native.NIF_ICON);
+        Native.Shell_NotifyIconW(Native.NIM_MODIFY, ref data);
+        if (owned) Native.DestroyIcon(old);
+    }
 
     public void SetTooltip(string text)
     {
