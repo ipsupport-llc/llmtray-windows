@@ -294,6 +294,9 @@ public sealed class ModelHost : IAsyncDisposable
         Changed();
     }
 
+    /// <summary>For tests: no load, switch or reload holds the host now.</summary>
+    internal bool IsIdleForTests => gate.CurrentCount > 0;
+
     /// <summary>Nothing runs: the state says so. Under the lock.</summary>
     void SetStopped()
     {
