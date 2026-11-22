@@ -64,6 +64,9 @@ public sealed partial class MainWindow
         yield return Ui.Section(L.T("Graphics card"));
         // The list under the help (Mac: the same), wide enough for a card's whole name; the help gets the row's width.
         var rows = new List<UIElement?> { Ui.StackedRow(L.T("Run models on"), help, picker, look) };
+        // Under the help from its left edge: a stretched list narrower than the row sat in its middle.
+        picker.HorizontalAlignment = HorizontalAlignment.Left;
+        picker.MinWidth = 300;
         var host = app.Host.State;
         if (host.Note is { } note && host.Status is HostStatus.Running or HostStatus.Loading)
         {
