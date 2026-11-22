@@ -62,6 +62,7 @@ sealed partial class ChatWindow : Window
     /// <summary>Thinking effort (adr/0011): shown for a model whose template thinks.</summary>
     readonly DropDownButton thinking = new();
     readonly Button send = new();
+    readonly FontIcon sendIcon = new() { FontSize = 14 };
     bool rendering;
     /// <summary>Keep the newest in view: on after sending, off when the user scrolls up.</summary>
     bool follow = true;
@@ -907,10 +908,14 @@ sealed partial class ChatWindow : Window
         compactCaption.Text = chat.Compacting ? L.T("Compacting…") : L.T("Compact");
         // The numbers are under the answer itself; the bar keeps only a compaction's problem.
         if (!chat.Compacting && last is { Role: "assistant" }) stats.Text = "";
-        send.Content = new FontIcon { Glyph = chat.Busy ? "" : "", FontSize = 14 };
+        // One icon, its glyph changed in place: this runs for every piece of an answer.
+        var sendGlyph = chat.Busy ? "" : "";
+        if (sendIcon.Glyph != sendGlyph) sendIcon.Glyph = sendGlyph;
+        if (!ReferenceEquals(send.Content, sendIcon)) send.Content = sendIcon;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(send, chat.Busy ? L.T("Stop") : L.T("Send"));
         ToolTipService.SetToolTip(send, chat.Busy ? L.T("Stop") : L.T("Send (Enter)"));
-        if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true));
+        // Asked again when it runs: the user may have started scrolling up meanwhile.
+        if (follow) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (follow) scroller.ChangeView(null, scroller.ScrollableHeight, null, disableAnimation: true); });
         RenderChatsSelection();
     }
 
@@ -1144,7 +1149,8 @@ sealed partial class ChatWindow : Window
         readonly ProgressRing waiting = new() { IsActive = true, Width = 16, Height = 16, HorizontalAlignment = HorizontalAlignment.Left };
         TextBlock? doingText;
         UIElement? doing;
-        int blocks;
+        /// <summary>The blocks drawn, one view each in <c>body</c>.</summary>
+        IReadOnlyList<MdBlock> shown = [];
 
         /// <summary>False when the answer now needs drawing whole.</summary>
         public bool Update()
@@ -1191,18 +1197,38 @@ sealed partial class ChatWindow : Window
                     {
                         body.Children.Clear();
                         body.Children.Add(waiting);
-                        blocks = 0;
+                        shown = [];
                     }
                 }
                 else
                 {
-                    if (body.Children.Count > 0 && body.Children[0] == waiting) body.Children.Clear();
-                    // Paragraphs before the last two don't change as the text grows.
+                    if (body.Children.Count > 0 && body.Children[0] == waiting)
+                    {
+                        body.Children.Clear();
+                        shown = [];
+                    }
+                    // Each block keeps its view: one that's the same stays, one that grew (the last
+                    // paragraph, a code block being written) is changed in place, and only one of
+                    // another kind is made again. Made again every 50 ms, the end of an answer blinked.
                     var parsed = Markdown.Parse(m.Content);
-                    var keep = Math.Min(Math.Max(0, blocks - 2), parsed.Count);
-                    while (body.Children.Count > keep) body.Children.RemoveAt(body.Children.Count - 1);
-                    for (var i = keep; i < parsed.Count; i++) body.Children.Add(BlockView(parsed[i]));
-                    blocks = parsed.Count;
+                    while (body.Children.Count > parsed.Count) body.Children.RemoveAt(body.Children.Count - 1);
+                    for (var i = 0; i < parsed.Count; i++)
+                    {
+                        if (i < shown.Count && i < body.Children.Count)
+                        {
+                            if (Markdown.Same(shown[i], parsed[i]) || UpdateBlockView(body.Children[i], parsed[i])) continue;
+                            body.Children[i] = BlockView(parsed[i]);
+                        }
+                        else if (i < body.Children.Count)
+                        {
+                            body.Children[i] = BlockView(parsed[i]);
+                        }
+                        else
+                        {
+                            body.Children.Add(BlockView(parsed[i]));
+                        }
+                    }
+                    shown = parsed;
                 }
                 parts.Add(card);
             }
@@ -1260,9 +1286,17 @@ sealed partial class ChatWindow : Window
         switch (block)
         {
             case MdBlock.Heading h:
-                return Text(h.Runs, size: h.Level switch { 1 => 22, 2 => 19, 3 => 16, _ => 14 }, bold: true);
+            {
+                var heading = Text(h.Runs, size: h.Level switch { 1 => 22, 2 => 19, 3 => 16, _ => 14 }, bold: true);
+                heading.Tag = $"heading{h.Level}";
+                return heading;
+            }
             case MdBlock.Paragraph p:
-                return Text(p.Runs);
+            {
+                var paragraph = Text(p.Runs);
+                paragraph.Tag = "paragraph";
+                return paragraph;
+            }
             case MdBlock.Quote q:
                 return new Border
                 {
@@ -1270,6 +1304,7 @@ sealed partial class ChatWindow : Window
                     BorderThickness = new Thickness(3, 0, 0, 0),
                     Padding = new Thickness(10, 0, 0, 0),
                     Child = Text(q.Runs, secondary: true),
+                    Tag = "quote",
                 };
             case MdBlock.List l:
             {
@@ -1294,7 +1329,8 @@ sealed partial class ChatWindow : Window
                 copy.Style = Ui.Resource<Style>("SubtleButtonStyle", copy.Style);
                 ToolTipService.SetToolTip(copy, L.T("Copy the code"));
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(copy, L.T("Copy the code"));
-                copy.Click += (_, _) => Copy(c.Text);
+                // What's shown when clicked: the block may have grown since it was made.
+                copy.Click += (_, _) => Copy(code.Text);
                 var grid = new Grid();
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -1317,6 +1353,8 @@ sealed partial class ChatWindow : Window
                     Background = Ui.Resource<Brush>("SubtleFillColorSecondaryBrush", Ui.CardBackground),
                     CornerRadius = new CornerRadius(6),
                     Padding = new Thickness(10, 6, 10, 8),
+                    // What changes as it's written (UpdateBlockView).
+                    Tag = new CodeView(c.Language, code),
                 };
             }
             case MdBlock.Table t:
@@ -1344,11 +1382,48 @@ sealed partial class ChatWindow : Window
         }
     }
 
+    /// <summary>A code block's view: its language and the text that grows.</summary>
+    sealed record CodeView(string Language, TextBlock Code);
+
+    /// <summary>
+    /// The view of a block changed in place to show <paramref name="next"/>, when
+    /// it's of the same kind: text of a paragraph, heading or quote, a code
+    /// block's code. False when it has to be made again.
+    /// </summary>
+    static bool UpdateBlockView(UIElement view, MdBlock next)
+    {
+        switch (next)
+        {
+            case MdBlock.Paragraph p when view is TextBlock { Tag: "paragraph" } text:
+                Fill(text, p.Runs);
+                return true;
+            case MdBlock.Heading h when view is TextBlock { Tag: string tag } text && tag == $"heading{h.Level}":
+                Fill(text, h.Runs);
+                return true;
+            case MdBlock.Quote q when view is Border { Tag: "quote", Child: TextBlock text }:
+                Fill(text, q.Runs);
+                return true;
+            case MdBlock.Code c when view is Border { Tag: CodeView code } && code.Language == c.Language:
+                if (code.Code.Text != c.Text) code.Code.Text = c.Text;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     static TextBlock Text(IReadOnlyList<MdRun> runs, double size = 14, bool bold = false, bool secondary = false)
     {
         var block = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = size };
         if (bold) block.FontWeight = FontWeights.SemiBold;
         if (secondary) block.Foreground = Ui.Secondary;
+        Fill(block, runs);
+        return block;
+    }
+
+    /// <summary>The block's text, as runs: what was there before goes.</summary>
+    static void Fill(TextBlock block, IReadOnlyList<MdRun> runs)
+    {
+        block.Inlines.Clear();
         foreach (var run in runs)
         {
             Inline inline;
@@ -1373,7 +1448,6 @@ sealed partial class ChatWindow : Window
             }
             block.Inlines.Add(inline);
         }
-        return block;
     }
 
     string? renderedStatus;
