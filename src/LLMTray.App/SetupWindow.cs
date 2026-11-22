@@ -162,21 +162,33 @@ sealed class SetupWindow : Window
     {
         if (Content is not UIElement content) return;
         var was = step;
-        foreach (var each in Enum.GetValues<Step>())
+        try
         {
-            Go(each);
-            await Task.Delay(700);
-            var name = $"setup-{(int)each}-{each.ToString().ToLowerInvariant()}";
-            await save(content, Path.Combine(folder, name + ".png"));
-            if (body.ActualHeight > scroller.ViewportHeight + 1) await save(body, Path.Combine(folder, name + "-full.png"));
+            foreach (var each in Enum.GetValues<Step>())
+            {
+                Go(each);
+                await Task.Delay(700);
+                var name = $"setup-{(int)each}-{each.ToString().ToLowerInvariant()}";
+                await save(content, Path.Combine(folder, name + ".png"));
+                if (body.ActualHeight > scroller.ViewportHeight + 1) await save(body, Path.Combine(folder, name + "-full.png"));
+            }
         }
-        Go(was);
+        finally
+        {
+            Go(was);
+        }
     }
 
-    /// <summary>Closed as the title bar's X closes it: after the photographs, when they opened it.</summary>
+    /// <summary>
+    /// Closed after the photographs that opened it, leaving no trace: setup
+    /// isn't marked as done (the X would mark it) and no window opens after it.
+    /// </summary>
     internal void CloseAfterScreenshots()
     {
-        Close(applyChoices: false);
+        if (finished) return;
+        finished = true;
+        App.Current.DownloadsChanged -= downloadsChanged;
+        App.Current.SetupClosed(this, showWindow: false);
         base.Close();
     }
 
