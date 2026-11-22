@@ -270,7 +270,8 @@ sealed partial class ChatWindow : Window
             // Whatever really changed since the last drawing is drawn first; then nothing may be made again.
             OnHostReport();
             OnModelsReport();
-            var (host, catalog, effort) = (app.Host.State, app.Library.Current, app.Settings.ThinkingEffort);
+            // What the header shows, the effort button's style (read from the model file in the background) included.
+            var (host, catalog, thinkingShown) = (app.Host.State, app.Library.Current, renderedThinking);
             var before = new HashSet<object>(Parts(), ReferenceEqualityComparer.Instance);
             for (var i = 0; i < 5; i++)
             {
@@ -279,7 +280,7 @@ sealed partial class ChatWindow : Window
             }
             var after = Parts();
             // A real change meanwhile (a model finished loading) is drawing, not flicker: looked at again.
-            if (host != app.Host.State || !ReferenceEquals(catalog, app.Library.Current) || effort != app.Settings.ThinkingEffort) continue;
+            if (host != app.Host.State || !ReferenceEquals(catalog, app.Library.Current) || thinkingShown != renderedThinking) continue;
             var again = after.Count(part => !before.Contains(part));
             var ok = again == 0 && after.Count == before.Count;
             return $"{(ok ? "ok" : "FAIL")}: chat header: {again} of {after.Count} elements made again over 5 reports of the host and the models folder ({model.Items.Count} models listed)";

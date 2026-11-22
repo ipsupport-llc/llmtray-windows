@@ -59,6 +59,8 @@ public sealed class ModelHost : IAsyncDisposable
     ModelEntry? reloadAfterLoss;
     /// <summary>Counts Stops: a reload handed back by a request that gave up isn't re-armed after one.</summary>
     int stops;
+    /// <summary>Stops under way: a server that dies meanwhile was being stopped, and isn't loaded again.</summary>
+    int stopping;
     bool disposed;
     /// <summary>The last kill in progress: a new server starts only after it.</summary>
     Task lastKill = Task.CompletedTask;
@@ -275,21 +277,32 @@ public sealed class ModelHost : IAsyncDisposable
         {
             reloadAfterLoss = null;
             stops++;
+            stopping++;
         }
-        await StopRunningAsync().ConfigureAwait(false);
+        try
+        {
+            await StopRunningAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (sync) stopping--;
+        }
         lock (sync)
         {
-            if (running is null && !switching)
-            {
-                status = HostStatus.Stopped;
-                statusModel = null;
-                statusBackend = null;
-                statusDevice = null;
-                statusNote = null;
-                message = null;
-            }
+            if (running is null && !switching) SetStopped();
         }
         Changed();
+    }
+
+    /// <summary>Nothing runs: the state says so. Under the lock.</summary>
+    void SetStopped()
+    {
+        status = HostStatus.Stopped;
+        statusModel = null;
+        statusBackend = null;
+        statusDevice = null;
+        statusNote = null;
+        message = null;
     }
 
     /// <summary>
@@ -506,7 +519,9 @@ public sealed class ModelHost : IAsyncDisposable
             // A card lost (unplugged, a driver reset) or a crash: loaded again once, through the
             // chain with the cards listed anew; dying again stops it, so a broken driver doesn't loop.
             // Not while a switch or restart is under way: it decides what runs next.
-            again = !r.AfterLoss && !disposed && !switching;
+            // Nor while Stop is under way: a server that died just as the user stopped it stays stopped
+            // (its exit could be seen after Stop began but before Stop reached it).
+            again = !r.AfterLoss && !disposed && !switching && stopping == 0;
             status = again ? HostStatus.Loading : HostStatus.Failed;
             statusModel = r.Model;
             message = again ? null
@@ -532,12 +547,14 @@ public sealed class ModelHost : IAsyncDisposable
         }
         try
         {
+            int stopsThen;
             lock (sync)
             {
                 // Stopped, another model loaded, or a request did the reload first: nothing to bring back.
                 if (!ReferenceEquals(reloadAfterLoss, model) || running is not null || disposed) return;
                 reloadAfterLoss = null;
                 switching = true;
+                stopsThen = stops;
             }
             try
             {
@@ -555,7 +572,22 @@ public sealed class ModelHost : IAsyncDisposable
             }
             finally
             {
-                lock (sync) switching = false;
+                bool stoppedMeanwhile;
+                lock (sync)
+                {
+                    switching = false;
+                    stoppedMeanwhile = stops != stopsThen;
+                }
+                // Stop pressed while it was loading again: the user's Stop wins, the model doesn't come back.
+                // Still under the gate, so no other load runs in between.
+                if (stoppedMeanwhile)
+                {
+                    await StopRunningAsync().ConfigureAwait(false);
+                    lock (sync)
+                    {
+                        if (running is null && !switching) SetStopped();
+                    }
+                }
                 Changed();
             }
         }
