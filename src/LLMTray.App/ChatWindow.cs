@@ -1474,6 +1474,8 @@ sealed partial class ChatWindow : Window
         // The list is made again only when the models or the loaded one changed, and never under an
         // open list: the host reports every request's start and end, and a rescan may find the same.
         var key = string.Join("\n", models.Select(e => e.Name)) + "\n\n" + loaded;
+        // Back to what's shown while the list was open: nothing waits any more.
+        if (key == renderedModels) modelsWaiting = false;
         if (key != renderedModels && model.IsDropDownOpen)
         {
             modelsWaiting = true;
