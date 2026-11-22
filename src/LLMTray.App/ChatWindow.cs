@@ -1595,7 +1595,8 @@ sealed partial class ChatWindow : Window
                 // What a send goes to, always shown: the picked one, the loaded one, the last one, or the first.
                 // A list with models and nothing in it read as "no model" while the Load button had one.
                 var last = App.Current.Library.Current.Resolve(App.Current.Settings.LastModel)?.Name;
-                var want = picked ?? loaded ?? last ?? models.FirstOrDefault()?.Name;
+                // The first that's still in the list: a picked model deleted or in another folder falls through.
+                var want = new[] { picked, loaded, last, models.FirstOrDefault()?.Name }.FirstOrDefault(n => n is not null && models.Any(e => e.Name == n));
                 model.SelectedItem = model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == want);
                 model.PlaceholderText = model.Items.Count == 0 ? L.T("No models yet: Get models (↓)") : L.T("Choose a model");
             }
