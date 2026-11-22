@@ -447,6 +447,8 @@ public sealed partial class MainWindow : Window
             status.Text = updater.Status ?? "";
             status.Visibility = updater.Status is null ? Visibility.Collapsed : Visibility.Visible;
         };
+        // As things are now (a download may be under way as the page opens).
+        liveUpdates();
         var copy = updater.ScoopManaged ? L.F("Installed with Scoop, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Portable ? L.F("The portable copy, for {0}.", updater.Architecture)
             : updater.Kind == InstallKind.Installer ? L.F("Installed with the LLMTray installer, for {0}.", updater.Architecture)

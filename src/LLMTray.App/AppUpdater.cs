@@ -243,6 +243,8 @@ sealed class AppUpdater
             });
             await downloader.DownloadAsync(new DownloadItem(update.Package.Url, file, update.Package.Size, update.Package.Sha256,
                 $"{update.Tag.DisplayVersion}/{update.Package.Name}"), progress, cancel.Token);
+            // Cancel pressed as the download ended: it's cancelled all the same, nothing installs.
+            cancel.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
@@ -262,6 +264,8 @@ sealed class AppUpdater
         {
             Downloading = false;
             downloadCancel = null;
+            // The buttons stop saying Cancel now, not at the next report.
+            Raise();
         }
 
         if (Kind == InstallKind.Portable)
