@@ -32,7 +32,9 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
 - **The report** is the server's: `product: llmtray-windows` (its own
   product, counted apart from the Mac app's `llmtray`; until 0.1.10 it was
   sent as `llmtray`, which mixed Windows installs into the Mac's
-  statistics), `install_id`,
+  statistics; the server takes `llmtray-windows` and counts an old
+  build's `llmtray` with `os: windows` as it, so it must be deployed
+  first), `install_id`,
   `day`, `app_version`, `os: windows`, `os_version` (`10.0.26100`),
   `arch`, `chip: other` (no Apple chip here), `memory_gb`, `locale` (the
   language only), `features` and `model_families`. It is validated as the

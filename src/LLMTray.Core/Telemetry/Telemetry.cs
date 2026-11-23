@@ -20,8 +20,8 @@ public static class TelemetryFeature
     public const string ApiServer = "api_server";
     public const string ModelDownload = "model_download";
 
-    /// <summary>Every key the server takes for this product (others are dropped).</summary>
-    public static readonly string[] All = ["chat", "tool_calls", "api_server", "image_generate", "image_edit", "music", "lora", "model_download"];
+    /// <summary>Every key the server takes for this product (others are dropped): ipsupport-api's list for llmtray-windows.</summary>
+    public static readonly string[] All = ["chat", "tool_calls", "api_server", "model_download"];
 }
 
 /// <summary>A model's coarse family, as the server's list; anything else is "other".</summary>
