@@ -37,7 +37,8 @@ public sealed class TelemetryTests : IDisposable
         usage.AddFamily("gemma");
         var report = TelemetryReport.Make(Guid.Parse("11111111-2222-3333-4444-555555555555"), "2026-11-09", "2026-11-10", null, Env, usage);
         var body = JsonNode.Parse(report.Body())!.AsObject();
-        Assert.Equal("llmtray", body["product"]!.GetValue<string>());
+        // Its own product, never the Mac app's.
+        Assert.Equal("llmtray-windows", body["product"]!.GetValue<string>());
         Assert.Equal("windows", body["os"]!.GetValue<string>());
         Assert.Equal("other", body["chip"]!.GetValue<string>());
         Assert.Equal("ru", body["locale"]!.GetValue<string>());
