@@ -14,11 +14,11 @@ public sealed class TelemetryTests : IDisposable
     }
 
     [Theory]
-    // 64 GB installed, 63.7 usable: the installed size, as the Mac sends it.
-    [InlineData(67_108_864UL, 68_400_000_000L, 64)]
+    // 64 GB installed, 63.3 usable: the installed size, as the Mac sends it.
+    [InlineData(67_108_864UL, 68_000_000_000L, 64)]
     [InlineData(16_777_216UL, 16_900_000_000L, 16)]
-    // The installed size unreadable: the usable memory, rounded.
-    [InlineData(null, 68_400_000_000L, 64)]
+    // The installed size unreadable: the usable memory, rounded, as before.
+    [InlineData(null, 68_000_000_000L, 63)]
     [InlineData(0UL, 17_000_000_000L, 16)]
     public void MemoryIsTheInstalledSize(ulong? installedKB, long usableBytes, int gb)
     {

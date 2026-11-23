@@ -171,9 +171,9 @@ public sealed record TelemetryEnvironment(string AppVersion, string OsVersion, i
 
 /// <summary>
 /// The memory a report names, in GB: what's installed, as the Mac names it
-/// (64), not what Windows leaves usable (63.7, sent as 63, which the
-/// server's size list doesn't have). Usable memory only when the installed
-/// size can't be read.
+/// (64), not what Windows leaves usable (63.4 on one 64 GB PC, sent as 63,
+/// which the server's size list doesn't have). The usable memory, rounded,
+/// only when the installed size can't be read.
 /// </summary>
 public static class TelemetryMemory
 {
