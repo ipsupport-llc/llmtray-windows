@@ -12,7 +12,7 @@ namespace LLMTray.Core.Telemetry;
 // passes here passes there. Never prompts, content, file names, paths or
 // model names: only counts and coarse model families.
 
-/// <summary>What the report counts, as the server's feature keys for "llmtray".</summary>
+/// <summary>What the report counts, as the server's feature keys for "llmtray-windows".</summary>
 public static class TelemetryFeature
 {
     public const string Chat = "chat";
@@ -20,8 +20,8 @@ public static class TelemetryFeature
     public const string ApiServer = "api_server";
     public const string ModelDownload = "model_download";
 
-    /// <summary>Every key the server takes for this product (others are dropped).</summary>
-    public static readonly string[] All = ["chat", "tool_calls", "api_server", "image_generate", "image_edit", "music", "lora", "model_download"];
+    /// <summary>Every key the server takes for this product (others are dropped): ipsupport-api's list for llmtray-windows.</summary>
+    public static readonly string[] All = ["chat", "tool_calls", "api_server", "model_download"];
 }
 
 /// <summary>A model's coarse family, as the server's list; anything else is "other".</summary>
@@ -177,7 +177,11 @@ public sealed class TelemetryValidationException(string code) : Exception(code)
 /// <summary>POST /api/telemetry's body, validated and normalized as the server does it: what's sent is what it stores.</summary>
 public sealed partial record TelemetryReport
 {
-    public const string Product = "llmtray";
+    /// <summary>
+    /// The Windows app's own product: its days are counted apart from the Mac app's ("llmtray").
+    /// Sent as "llmtray", Windows installs were mixed into the Mac's statistics.
+    /// </summary>
+    public const string Product = "llmtray-windows";
     public const int MaxFeatureCount = 10_000_000;
     public const int MaxMemoryGB = 4096;
     public const int MaxBodyBytes = 16 * 1024;
