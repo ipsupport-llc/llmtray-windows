@@ -62,5 +62,5 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
 ## Not yet
 
 MCP calls, folder changes and memory have no feature key on the server for
-`llmtray` (it has `mcp` for the iOS app). Counting them needs the server's
+`llmtray-windows` (it has `mcp` for the iOS app). Counting them needs the server's
 list widened first, in ipsupport-api.
