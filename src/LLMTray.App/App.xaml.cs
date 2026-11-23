@@ -159,9 +159,15 @@ public partial class App : Application
             System.Runtime.InteropServices.Architecture.X64 => "amd64",
             _ => "other",
         };
-        var memory = (int)Math.Round(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1_073_741_824.0);
+        var memory = LLMTray.Core.Telemetry.TelemetryMemory.GB(GetPhysicallyInstalledSystemMemory(out var installed) ? installed : null,
+            GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
         return new(Updater.Current?.DisplayVersion ?? "0.0.0-dev", $"{os.Major}.{os.Minor}.{os.Build}", memory, L.Current, arch);
     }
+
+    /// <summary>The memory installed, in KB, as the firmware lists it.</summary>
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    static extern bool GetPhysicallyInstalledSystemMemory(out ulong totalMemoryInKilobytes);
 
     /// <summary>LLMTRAY_TELEMETRY_ENDPOINT, for development: only https, or http to this PC.</summary>
     static Uri? DevelopmentEndpoint() =>

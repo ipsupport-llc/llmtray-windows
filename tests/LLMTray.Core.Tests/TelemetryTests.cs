@@ -13,6 +13,18 @@ public sealed class TelemetryTests : IDisposable
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 
+    [Theory]
+    // 64 GB installed, 63.3 usable: the installed size, as the Mac sends it.
+    [InlineData(67_108_864UL, 68_000_000_000L, 64)]
+    [InlineData(16_777_216UL, 16_900_000_000L, 16)]
+    // The installed size unreadable: the usable memory, rounded, as before.
+    [InlineData(null, 68_000_000_000L, 63)]
+    [InlineData(0UL, 17_000_000_000L, 16)]
+    public void MemoryIsTheInstalledSize(ulong? installedKB, long usableBytes, int gb)
+    {
+        Assert.Equal(gb, TelemetryMemory.GB(installedKB, usableBytes));
+    }
+
     static readonly TelemetryEnvironment Env = new("0.1.0-beta.13", "10.0.26100", 32, "ru-RU", "amd64");
 
     [Fact]

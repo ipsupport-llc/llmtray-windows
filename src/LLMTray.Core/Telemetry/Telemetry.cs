@@ -169,6 +169,18 @@ public sealed class TelemetryCounters
 /// <summary>What the app puts in a report besides the counts.</summary>
 public sealed record TelemetryEnvironment(string AppVersion, string OsVersion, int MemoryGB, string Locale, string Arch);
 
+/// <summary>
+/// The memory a report names, in GB: what's installed, as the Mac names it
+/// (64), not what Windows leaves usable (63.4 on one 64 GB PC, sent as 63,
+/// which the server's size list doesn't have). The usable memory, rounded,
+/// only when the installed size can't be read.
+/// </summary>
+public static class TelemetryMemory
+{
+    public static int GB(ulong? installedKB, long usableBytes) =>
+        installedKB is { } kb and > 0 ? (int)Math.Round(kb / 1_048_576.0) : (int)Math.Round(usableBytes / 1_073_741_824.0);
+}
+
 public sealed class TelemetryValidationException(string code) : Exception(code)
 {
     public string Code { get; } = code;

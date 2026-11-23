@@ -36,7 +36,10 @@ which already takes `os: windows` and `arch: amd64 | arm64`.
   build's `llmtray` with `os: windows` as it, so it must be deployed
   first), `install_id`,
   `day`, `app_version`, `os: windows`, `os_version` (`10.0.26100`),
-  `arch`, `chip: other` (no Apple chip here), `memory_gb`, `locale` (the
+  `arch`, `chip: other` (no Apple chip here), `memory_gb` (the memory
+  installed, as the Mac sends it: 64, not the 63 Windows leaves usable,
+  which the server's size list folds into "other"; the usable memory,
+  rounded, only when the installed size can't be read), `locale` (the
   language only), `features` and `model_families`. It is validated as the
   server validates it.
 - **What counts:**
